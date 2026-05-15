@@ -1,0 +1,30 @@
+{
+  "name": "@released/core",
+  "version": "0.0.0",
+  "description": "Find the first release containing a git commit (algorithm + GitHub client).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "micromark": "^4.0.1"
+  },
+  "engines": { "node": ">=20" },
+  "publishConfig": { "access": "public" }
+}

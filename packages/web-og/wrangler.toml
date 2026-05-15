@@ -1,0 +1,15 @@
+name = "released-og"
+main = "src/index.tsx"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Service Binding to the main web Worker. web-og fetches result data from web
+# via this binding so the heavy WASM rasterizer stays out of web's bundle (D20, D23).
+# Deploy `web` first; this binding requires it to exist.
+[[services]]
+binding = "WEB"
+service = "released-web"
+
+# Shared secret marker so the web Worker can reject direct public hits to
+# /internal/result/* and only accept calls coming through this binding.
+# Set with: wrangler secret put INTERNAL_SECRET (must match the value set on web).

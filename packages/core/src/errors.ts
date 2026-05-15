@@ -1,0 +1,168 @@
+// Typed error classes. Every edge case in the plan's table has its own class so
+// callers can rescue specific failure modes without `catch (e)` catch-alls.
+
+export abstract class ReleasedError extends Error {
+  abstract readonly kind: string;
+}
+
+// --- Input parsing -----------------------------------------------------------
+
+export class NonGithubUrlError extends ReleasedError {
+  readonly kind = 'non_github_url' as const;
+  constructor(public readonly url: string) {
+    super(`Only GitHub repos are supported in v1; got: ${url}`);
+    this.name = 'NonGithubUrlError';
+  }
+}
+
+export class InvalidInputError extends ReleasedError {
+  readonly kind = 'invalid_input' as const;
+  constructor(input: string) {
+    super(`Could not parse "${input}". Expected a GitHub commit URL, SHA, PR number, or owner/repo@sha.`);
+    this.name = 'InvalidInputError';
+  }
+}
+
+/** Thrown when the input IS a valid SHA (7-40 hex) but no repo context was
+ *  provided. The CLI / web UI use this to prompt the user for a repo rather
+ *  than showing a generic "couldn't parse" error. */
+export class BareShaError extends ReleasedError {
+  readonly kind = 'bare_sha' as const;
+  constructor(public readonly sha: string) {
+    super(
+      `${sha} looks like a SHA, but I need a repo too. ` +
+        `Try \`owner/repo ${sha}\` or \`owner/repo@${sha}\`.`,
+    );
+    this.name = 'BareShaError';
+  }
+}
+
+// --- Commit / PR resolution --------------------------------------------------
+
+export class CommitNotFoundError extends ReleasedError {
+  readonly kind = 'commit_not_found' as const;
+  constructor(public readonly sha: string) {
+    super(`Commit ${sha} not found in this repo.`);
+    this.name = 'CommitNotFoundError';
+  }
+}
+
+export class AmbiguousShaError extends ReleasedError {
+  readonly kind = 'ambiguous_sha' as const;
+  constructor(public readonly sha: string) {
+    super(`Short SHA ${sha} is ambiguous — paste the full SHA.`);
+    this.name = 'AmbiguousShaError';
+  }
+}
+
+export class PrNotMergedError extends ReleasedError {
+  readonly kind = 'pr_not_merged' as const;
+  constructor(public readonly prNumber: number) {
+    super(`PR #${prNumber} has not been merged yet.`);
+    this.name = 'PrNotMergedError';
+  }
+}
+
+export class PrNotFoundError extends ReleasedError {
+  readonly kind = 'pr_not_found' as const;
+  constructor(public readonly prNumber: number) {
+    super(`PR #${prNumber} not found.`);
+    this.name = 'PrNotFoundError';
+  }
+}
+
+export class PrMergeCommitUnavailableError extends ReleasedError {
+  readonly kind = 'pr_merge_commit_unavailable' as const;
+  constructor(public readonly prNumber: number) {
+    super(`PR #${prNumber} is marked merged but its merge commit is not available.`);
+    this.name = 'PrMergeCommitUnavailableError';
+  }
+}
+
+// --- Tag listing / algorithm -------------------------------------------------
+
+export class NoReleasesError extends ReleasedError {
+  readonly kind = 'no_releases' as const;
+  constructor() {
+    super('This repo has no releases yet.');
+    this.name = 'NoReleasesError';
+  }
+}
+
+export class NotYetReleasedError extends ReleasedError {
+  readonly kind = 'not_yet_released' as const;
+  constructor(
+    public readonly sha: string,
+    public readonly commitDate: string,
+    /** How many tags were skipped by the date-based cull. When > 0 with a
+     *  not-yet-released answer, callers can hint the user to retry with strict mode. */
+    public readonly culledTagCount: number = 0,
+    /** How many prerelease-pattern tags (alpha/beta/rc/...) were skipped.
+     *  When > 0 with a not-yet-released answer, the UI hints "this might be in
+     *  a prerelease — try Include prereleases." */
+    public readonly prereleasedSkippedCount: number = 0,
+  ) {
+    super(`Commit ${sha} is on the default branch (since ${commitDate}) but not yet released.`);
+    this.name = 'NotYetReleasedError';
+  }
+}
+
+export class LookupTimeoutError extends ReleasedError {
+  readonly kind = 'lookup_timeout' as const;
+  constructor(public readonly candidatesTried: number) {
+    super(
+      `Lookup exceeded the hard deadline after checking ${candidatesTried} tags. ` +
+        'Try again or use the CLI for very large repos.',
+    );
+    this.name = 'LookupTimeoutError';
+  }
+}
+
+// --- HTTP / network ----------------------------------------------------------
+
+export class RateLimitError extends ReleasedError {
+  readonly kind = 'rate_limit' as const;
+  constructor(public readonly resetAt: number) {
+    super(`GitHub API rate limit exhausted. Resets at ${new Date(resetAt * 1000).toISOString()}.`);
+    this.name = 'RateLimitError';
+  }
+}
+
+export class GitHubServerError extends ReleasedError {
+  readonly kind = 'github_server_error' as const;
+  constructor(
+    public readonly status: number,
+    public readonly statusText: string,
+  ) {
+    super(`GitHub API returned ${status} ${statusText}.`);
+    this.name = 'GitHubServerError';
+  }
+}
+
+export class NetworkError extends ReleasedError {
+  readonly kind = 'network_error' as const;
+  constructor(cause: unknown) {
+    super(`Network error reaching GitHub: ${(cause as Error)?.message ?? String(cause)}`);
+    this.name = 'NetworkError';
+    this.cause = cause;
+  }
+}
+
+export class SanitizeError extends ReleasedError {
+  readonly kind = 'sanitize_error' as const;
+  constructor(cause: unknown) {
+    super(`Failed to sanitize release notes markdown: ${(cause as Error)?.message ?? String(cause)}`);
+    this.name = 'SanitizeError';
+    this.cause = cause;
+  }
+}
+
+// --- Bulk --------------------------------------------------------------------
+
+export class BulkLimitError extends ReleasedError {
+  readonly kind = 'bulk_limit' as const;
+  constructor(public readonly given: number, public readonly max: number) {
+    super(`Bulk lookup accepts at most ${max} inputs; got ${given}. Split into multiple requests.`);
+    this.name = 'BulkLimitError';
+  }
+}

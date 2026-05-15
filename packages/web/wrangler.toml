@@ -1,0 +1,17 @@
+name = "released-web"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+# Set with: wrangler secret put GITHUB_TOKEN
+# This is the SHARED server-side token. PAT-paste is per-user via X-User-Github-Token header.
+
+# [[analytics_engine_datasets]]
+# binding = "ANALYTICS"
+# dataset = "released_events"
+
+# Once web-og is deployed, uncomment to give web-og a service binding to this Worker:
+# (configured FROM web-og's wrangler.toml — see packages/web-og/wrangler.toml)
