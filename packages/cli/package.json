@@ -1,6 +1,7 @@
 {
   "name": "released",
   "version": "0.0.0",
+  "private": true,
   "description": "Find the first release containing a git commit — CLI.",
   "type": "module",
   "bin": {
