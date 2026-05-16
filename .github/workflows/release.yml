@@ -39,7 +39,11 @@ jobs:
         run: pnpm -r build
 
       # Changesets: opens / updates a "Version Packages" PR when changesets are
-      # pending; on merge of that PR, publishes the CLI to npm.
+      # pending; on merge of that PR, publishes the CLI to npm via npm Trusted
+      # Publishing (OIDC). No NPM_TOKEN — the `id-token: write` permission above
+      # lets pnpm exchange a GitHub OIDC token for a short-lived npm token at
+      # publish time. NPM_CONFIG_PROVENANCE attaches a signed provenance
+      # attestation linking the package to this exact workflow run + commit.
       - name: Create release PR or publish CLI to npm
         id: changesets
         uses: changesets/action@v1
@@ -50,7 +54,7 @@ jobs:
           title: "chore(release): version packages"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"
 
       # Deploy order matters (D33 + outside-voice #3): deploy `web` first so
       # web-og's Service Binding has a target. Both deploys go in this single
