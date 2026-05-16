@@ -48,7 +48,7 @@ export async function lookupRoute(c: Context): Promise<Response> {
 
   const token = resolveToken(env, req);
   const client = makeGithubClient({ token });
-  const cache = makeWorkerCache();
+  const cache = makeWorkerCache(req);
   // Mode-specific cache key so default / strict / +prereleases don't clobber.
   const k = await cacheKey(
     'res',

@@ -54,7 +54,7 @@ export async function prRoute(c: Context): Promise<Response> {
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
   );
-  const cache = makeWorkerCache();
+  const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
 
   if (!result && isBot) {

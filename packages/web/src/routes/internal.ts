@@ -36,7 +36,7 @@ export async function internalResultRoute(c: Context): Promise<Response> {
   if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
 
   const k = await cacheKey('res', `${owner}/${repo}`, `sha:${sha}`);
-  const cache = makeWorkerCache();
+  const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
   if (result) {
     return new Response(JSON.stringify(result), {

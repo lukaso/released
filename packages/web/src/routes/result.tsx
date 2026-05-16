@@ -61,7 +61,7 @@ export async function resultRoute(c: Context): Promise<Response> {
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
   );
-  const cache = makeWorkerCache();
+  const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
 
   // Slackbot/unfurl handling: if no cache + we'd need to compute, return a
