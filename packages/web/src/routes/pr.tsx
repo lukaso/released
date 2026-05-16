@@ -113,10 +113,15 @@ export async function prRoute(c: Context): Promise<Response> {
     >
       <Nav />
       <div style="padding-top: 22px;">
-        <form method="get" action="/lookup">
+        <form method="get" action="/lookup" data-loading-form>
           <div class="searchbox">
             <input name="q" type="text" value={inputVal} spellcheck={false} />
-            <button type="submit">Is it released? →</button>
+            <button type="submit">
+              <span class="btn-label">Is it released? →</span>
+              <span class="btn-loading" aria-hidden="true">
+                Looking up<span class="dots" />
+              </span>
+            </button>
           </div>
         </form>
       </div>

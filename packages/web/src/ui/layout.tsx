@@ -46,9 +46,29 @@ export function Layout(props: LayoutProps) {
   );
 }
 
-/** Inline client script: copy buttons + tiny no-JS-fallback form handling. */
+/** Inline client script: copy buttons + form loading-state handler. */
 const CLIENT_JS = `
 (function(){
+  // Loading-state on any form opted in via [data-loading-form]. We mark the
+  // form with .loading on submit so the CSS swaps the button label to
+  // "Looking up…" and shows the animated dots. Browser then continues the
+  // full-page navigation; the old page (with the loading state visible)
+  // stays painted until the new page is ready, which is exactly the
+  // "wait scroller" UX we want on cold lookups (4-10s on first hit).
+  document.querySelectorAll('form[data-loading-form]').forEach(function(form){
+    form.addEventListener('submit', function(){
+      form.classList.add('loading');
+      // Prevent double-submit by disabling the button. We disable AFTER the
+      // event has been processed (via setTimeout 0) because disabling it
+      // synchronously in the handler can cancel the form submission in some
+      // browsers (Safari especially).
+      setTimeout(function(){
+        var btn = form.querySelector('button[type="submit"]');
+        if (btn) btn.disabled = true;
+      }, 0);
+    });
+  });
+
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!(t instanceof HTMLElement)) return;

@@ -63,6 +63,29 @@ main { flex: 1; padding: 32px 0 48px; }
   border: none; cursor: pointer; white-space: nowrap;
 }
 .searchbox button:hover { background: #fff; }
+
+/* Loading-state on form submit. JS adds .loading to the form; default
+   state hides .btn-loading; loading state hides .btn-label and shows
+   the "Looking up…" copy with three animated dots. Pure CSS, no SVG. */
+.searchbox button .btn-loading { display: none; }
+form[data-loading-form].loading .searchbox button { cursor: progress; opacity: .85; }
+form[data-loading-form].loading .searchbox button .btn-label { display: none; }
+form[data-loading-form].loading .searchbox button .btn-loading { display: inline; }
+form[data-loading-form].loading .searchbox input { color: var(--text-2); }
+.dots::after {
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  content: '';
+  animation: dots 1.4s steps(4, end) infinite;
+}
+@keyframes dots {
+  0%   { content: ''; }
+  25%  { content: '.'; }
+  50%  { content: '..'; }
+  75%  { content: '...'; }
+  100% { content: ''; }
+}
 .bulk { display: inline-block; margin-top: 14px; font-size: 13.5px; color: var(--text-2); text-decoration: none; }
 .bulk:hover { color: var(--accent); }
 

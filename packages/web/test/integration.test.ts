@@ -43,6 +43,29 @@ describe('web Worker — basic routing', () => {
     expect(await res.text()).toBe('ok');
   });
 
+  // Loading-state contract: on form submit the user must get visible
+  // feedback within ~16ms so they don't think the click was lost. The
+  // homepage form is a full-page-nav (GET /lookup → 302 → /r/...) and the
+  // /r/... compute can take 4-10s on cold cache. We hook submit with a
+  // tiny inline script that:
+  //   (1) marks the form opted-in via `data-loading-form`
+  //   (2) the shared CLIENT_JS in Layout finds those forms and on submit
+  //       adds a `.loading` class + swaps the button label to "Looking up…"
+  // This test asserts the contract: the form is opted in AND the script
+  // that handles it is on the page.
+  it('homepage form is opted into the loading-state handler', async () => {
+    const res = await app.fetch(new Request('https://released.example/'));
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // (1) form has the opt-in attribute (attribute order is renderer-defined)
+    expect(body).toMatch(/<form[^>]*data-loading-form[^>]*>/);
+    expect(body).toMatch(/<form[^>]*action="\/lookup"[^>]*>/);
+    // (2) inline script targets the opted-in attribute
+    expect(body).toContain('data-loading-form');
+    // (3) loading-state copy is present (the script swaps to this)
+    expect(body).toContain('Looking up');
+  });
+
   it('GET /lookup?q=... redirects to the canonical permalink', async () => {
     const res = await app.fetch(
       new Request('https://released.example/lookup?q=github.com/facebook/react/commit/abc1234'),

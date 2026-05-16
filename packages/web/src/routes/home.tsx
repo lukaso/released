@@ -39,7 +39,7 @@ export async function homeRoute(c: Context): Promise<Response> {
 
         {errorMsg && <ErrorBanner message={errorMsg} bad={bad} />}
 
-        <form method="get" action="/lookup">
+        <form method="get" action="/lookup" data-loading-form>
           <label class="field-label" for="q">
             Commit URL, SHA, or pull request
           </label>
@@ -54,7 +54,12 @@ export async function homeRoute(c: Context): Promise<Response> {
               spellcheck={false}
               required
             />
-            <button type="submit">Is it released? →</button>
+            <button type="submit">
+              <span class="btn-label">Is it released? →</span>
+              <span class="btn-loading" aria-hidden="true">
+                Looking up<span class="dots" />
+              </span>
+            </button>
           </div>
         </form>
         <a class="bulk" href="/bulk">
