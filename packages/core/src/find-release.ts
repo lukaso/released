@@ -447,6 +447,13 @@ async function locateFirstHit(opts: LocateOpts): Promise<LocateOutcome> {
   for (const off of probeOffsets) {
     if (start + off < candidates.length) probeSet.add(start + off);
   }
+  // Always probe datePos itself — that's where the answer sits when the commit
+  // and the containing tag share a date (e.g. the commit IS the tag). The
+  // Fibonacci offset pattern (0,1,2,3,5,8,13,21,...) leaves a gap right at
+  // offset 20 = CLOCK_SKEW_SAFETY_BACK, so without this line the answer at
+  // exact datePos is missed. Hit by the angular `2a19754c` (= v22.0.0-next.12
+  // head commit) case during the federation work.
+  if (datePos < candidates.length) probeSet.add(datePos);
   // Always probe the final candidate so we never miss a hit at the very end.
   probeSet.add(candidates.length - 1);
   const probes = [...probeSet].sort((a, b) => a - b);

@@ -580,6 +580,36 @@ describe('findRelease — galloping search (D36: O(log n) compares for the commo
     expect(client.stats.compareCalls).toBeLessThan(50);
   });
 
+  it('REGRESSION: probes datePos itself (not just Fibonacci offsets) — covers commit-IS-the-tag case', async () => {
+    // The Fibonacci probe offsets [0,1,2,3,5,8,13,21,...] from
+    // start = datePos - CLOCK_SKEW_SAFETY_BACK (20) leave a gap at offset 20,
+    // which means a tag at exact datePos was never probed. This bit angular's
+    // commit 2a19754c (= v22.0.0-next.12 HEAD) where the tag and the commit
+    // share an exact date. Fix: always include datePos in the probe set.
+    //
+    // Repro: 46 candidates (matches angular's real cull result), the
+    // containing tag at index 42 (matches angular's real next.12 position),
+    // neighbor tags at 43-45 are from different release branches so they
+    // DON'T contain (just like angular's v20.3.21 / v19.2.22 / v21.2.13).
+    const commitDate = '2026-05-08T15:22:23Z';
+    const tags: TagWithDate[] = Array.from({ length: 46 }, (_, i) => {
+      // Spread the older 42 tags backward from datePos.
+      // Tag at index 42 lands exactly on commitDate; tags 43-45 are later.
+      const offsetDays = i - 42;
+      const tagDate = new Date(Date.parse(commitDate) + offsetDays * 24 * 60 * 60 * 1000).toISOString();
+      return { name: `v${i}`, sha: `s${i}`, date: tagDate };
+    });
+    const client = fakeClient({
+      tags,
+      // Only the tag at exact datePos contains the commit (and not the later ones,
+      // simulating angular's "v20.3.21 is from a different branch" reality).
+      contains: new Set(['v42']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: commitDate } },
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v42');
+  });
+
   it('strict mode does linear scan (more compares but finds clock-skewed answer)', async () => {
     const tags: TagWithDate[] = Array.from({ length: 50 }, (_, i) => ({
       name: `v${i}`,
