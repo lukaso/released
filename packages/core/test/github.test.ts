@@ -351,14 +351,15 @@ describe('rate-limit + network failure modes', () => {
     ).rejects.toBeInstanceOf(NetworkError);
   });
 
-  it('throws ProviderJsonError with anti-bot hint when provider returns HTML (CF interstitial)', async () => {
-    // Reproduces gitlab.freedesktop.org behavior — Cloudflare anti-bot
-    // returns "Making sure you're not a bot!" HTML with status 200. The
-    // Worker must surface this as a typed error suggesting auth, not crash
-    // with an unhandled SyntaxError → 500.
+  it('throws ProviderJsonError with Anubis hint pointing at CLI when body is the Anubis challenge', async () => {
+    // Reproduces gitlab.freedesktop.org behavior. Anubis (techaro.lol) is a
+    // proof-of-work bot challenge that fingerprints HTTP/2 + TLS BENEATH the
+    // UA layer. workerd's fingerprint trips it; Node's (CLI) doesn't.
+    // PRIVATE-TOKEN does NOT bypass — Anubis runs before API auth. So the
+    // error must NOT suggest a token (it won't help); it must point at the CLI.
     const fetch = queuedFetch(
       new Response(
-        '<!doctype html><html lang="en"><head><title>Making sure you\'re not a bot!</title>',
+        '<!doctype html><html lang="en"><head><title>Making sure you\'re not a bot!</title><link rel="stylesheet" href="/.within.website/x/xess/xess.min.css">',
         { status: 200, headers: { 'content-type': 'text/html' } },
       ),
     );
@@ -370,8 +371,32 @@ describe('rate-limit + network failure modes', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ProviderJsonError);
       const msg = (err as Error).message;
-      expect(msg).toMatch(/anti-bot/i);
+      expect(msg).toMatch(/Anubis/i);
+      expect(msg).toMatch(/CLI/i);
+      expect(msg).not.toMatch(/setting.*token/i);
+    }
+  });
+
+  it('throws ProviderJsonError with Cloudflare hint pointing at a token when body is the CF interstitial', async () => {
+    // Cloudflare's "Just a moment..." interstitial DOES exempt authenticated
+    // requests, so the token suggestion is correct here.
+    const fetch = queuedFetch(
+      new Response(
+        '<!doctype html><html><head><title>Just a moment...</title></head><body>Checking your browser before accessing the site. Cloudflare Ray ID: 9d11...',
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      ),
+    );
+    const { ProviderJsonError } = await import('../src/errors.js');
+    const c = makeGithubClient({ fetch });
+    try {
+      await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderJsonError);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/Cloudflare|anti-bot/i);
       expect(msg).toMatch(/token/i);
+      expect(msg).not.toMatch(/Anubis/i);
     }
   });
 

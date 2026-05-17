@@ -184,9 +184,13 @@ export class ProviderServerError extends ReleasedError {
  *  proxy error page) leaking through with a 200. Treated as a transient
  *  upstream-server error from the user's perspective.
  *
- *  The error message detects Cloudflare's "Just a moment / Making sure you're
- *  not a bot" signature and suggests authentication, which usually exempts
- *  the request from the challenge. */
+ *  Detects two distinct anti-bot systems and tailors the hint:
+ *  - **Anubis** (techaro.lol, used by gitlab.freedesktop.org and others):
+ *    proof-of-work challenge that fingerprints HTTP/2 + TLS BELOW the UA layer.
+ *    workerd's fingerprint gets challenged; Node's (CLI) does not. PRIVATE-TOKEN
+ *    does not help — Anubis runs before API auth. Hint points at the CLI.
+ *  - **Cloudflare** ("Just a moment..."): authenticated requests are usually
+ *    exempt, so the hint points at a provider token. */
 export class ProviderJsonError extends ReleasedError {
   readonly kind = 'provider_json_error' as const;
   constructor(
@@ -194,12 +198,19 @@ export class ProviderJsonError extends ReleasedError {
     public readonly snippet: string,
     cause: unknown,
   ) {
-    const looksLikeBotChallenge =
-      /not a bot|just a moment|cloudflare|checking your browser/i.test(snippet);
+    const looksLikeAnubis = /Making sure you|within\.website|techaro\.lol/i.test(snippet);
+    const looksLikeCloudflare = /just a moment|cloudflare|checking your browser/i.test(snippet);
     const base = `Upstream provider returned status ${status} but the body wasn't JSON`;
-    const detail = looksLikeBotChallenge
-      ? ' — it looks like an anti-bot challenge page. Authenticated requests usually skip these; setting a provider token (e.g. GITLAB_TOKEN for the Worker, or `released --token=...`) typically resolves it.'
-      : ` (usually a CDN challenge page or proxy error). First chars: ${snippet}`;
+    let detail: string;
+    if (looksLikeAnubis) {
+      detail =
+        " — this host uses Anubis, a proof-of-work anti-bot challenge that fingerprints the Worker's HTTP stack. A provider token does NOT bypass it (Anubis runs before API auth). The CLI works against these hosts because Node's fetch has a different fingerprint: `npx released <url>` or `pnpm dlx released <url>`.";
+    } else if (looksLikeCloudflare) {
+      detail =
+        ' — it looks like a Cloudflare anti-bot challenge page. Authenticated requests usually skip these; setting a provider token (e.g. GITLAB_TOKEN for the Worker, or `released --token=...`) typically resolves it.';
+    } else {
+      detail = ` (usually a CDN challenge page or proxy error). First chars: ${snippet}`;
+    }
     super(base + detail);
     this.name = 'ProviderJsonError';
     this.cause = cause;
