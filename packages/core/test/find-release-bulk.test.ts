@@ -33,7 +33,7 @@ function bulkFakeClient(
       };
     },
     async getReleaseNotes() {
-      return { body: null, rateLimit };
+      return { body: null, isPrerelease: null, rateLimit };
     },
   };
   return { client, listSpy };
@@ -109,7 +109,7 @@ describe('findReleasesBulk', () => {
         };
       },
       async getReleaseNotes() {
-        return { body: null, rateLimit };
+        return { body: null, isPrerelease: null, rateLimit };
       },
     };
 
@@ -154,7 +154,7 @@ describe('findReleasesBulk', () => {
         return { status: 'ahead' as const, rateLimit };
       },
       async getReleaseNotes() {
-        return { body: null, rateLimit };
+        return { body: null, isPrerelease: null, rateLimit };
       },
     };
     const result = await findReleasesBulk(inputs, { client, concurrency: 1 });

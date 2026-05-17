@@ -110,6 +110,13 @@ export type LookupResult = {
     readonly reason: 'soft_deadline';
     readonly candidatesTried: number;
   };
+  /** True iff the provider explicitly flagged firstRelease as a prerelease
+   *  (and our tag-name heuristic didn't catch it). The UI surfaces this as a
+   *  "heads up" banner so the user knows the answer is what GitHub considers
+   *  a prerelease even though the algorithm picked it as the first hit.
+   *  null/undefined = no signal (provider doesn't expose a flag, or no Release
+   *  object exists for the tag). */
+  readonly firstReleaseIsPrerelease?: boolean;
   /** Pre-built URLs the algorithm populated via the provider. Web/CLI consume
    *  these instead of templating provider-specific URLs themselves. */
   readonly urls: {

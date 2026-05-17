@@ -29,6 +29,9 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
   return (
     <>
       {result.partial && <BestEffortBanner result={result} />}
+      {result.firstReleaseIsPrerelease && (
+        <ProviderPrereleaseBanner tag={r.tag} releaseUrl={r.url} />
+      )}
       <div class={`answer ${asExample ? 'example' : ''}`}>
         <div class="answer-hero">
           <div class="answer-label">
@@ -201,6 +204,36 @@ export function PrereleaseHint({
           .
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Layer-2 banner: GitHub flagged this release as a prerelease but our
+ *  tag-name heuristic missed it. The answer is technically correct (this tag
+ *  IS the first one containing the commit, sorted by date) but the user asked
+ *  for production releases by default and GitHub considers this a prerelease.
+ *  The actual first stable release may not exist yet. */
+function ProviderPrereleaseBanner({ tag, releaseUrl }: { tag: string; releaseUrl: string }) {
+  return (
+    <div
+      style="
+        margin-bottom: 14px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: rgba(210,153,34,0.07);
+        border: 1px solid var(--warn-dim);
+        color: var(--warn);
+        font-size: 13.5px;
+        line-height: 1.5;
+      "
+    >
+      <b style="color: var(--text);">Heads up: prerelease.</b> GitHub flags{' '}
+      <a href={releaseUrl} style="color: inherit; text-decoration: underline;">
+        {tag}
+      </a>{' '}
+      as a prerelease, even though our tag-name heuristic didn't recognize it. The first
+      stable release containing this commit may not exist yet — check the project for an
+      unreleased stable version, or treat this answer with caution.
     </div>
   );
 }

@@ -25,6 +25,9 @@ function fakeClient(spec: {
   prs?: Record<number, { merged: boolean; mergeCommitSha: string | null }>;
   /** Release notes by tag. */
   releaseNotes?: Record<string, string | null>;
+  /** Tags the PROVIDER (e.g. GitHub) flags as prerelease via its API, regardless
+   *  of what our tag-name heuristic thinks. Drives the Layer 2 banner. */
+  providerPrereleaseTags?: Set<string>;
   /** Inject a rate-limit failure when compare is called for this many invocations. */
   rateLimitAfterCompares?: number;
   /** Add an artificial delay (ms) before each compare to test deadlines. */
@@ -76,7 +79,11 @@ function fakeClient(spec: {
       return { status: contains ? 'behind' : 'ahead', rateLimit };
     },
     async getReleaseNotes(_repo, tag) {
-      return { body: spec.releaseNotes?.[tag] ?? null, rateLimit };
+      return {
+        body: spec.releaseNotes?.[tag] ?? null,
+        isPrerelease: spec.providerPrereleaseTags?.has(tag) ?? null,
+        rateLimit,
+      };
     },
   };
 }
@@ -403,6 +410,73 @@ describe('findRelease — prerelease filter (D37: default = production-only)', (
     });
     const result = await findRelease(COMMIT, { client, includePrereleases: true });
     expect(result.firstRelease?.tag).toBe('v1.31.0-alpha.1');
+  });
+
+  it('Layer 2: flags firstReleaseIsPrerelease when the provider says prerelease but our heuristic missed it', async () => {
+    // Scenario: tag name doesn't match our heuristic (e.g. `release-2025-01-15`)
+    // so we ship it as the first release. But GitHub's Release object has
+    // prerelease: true. We should surface that as firstReleaseIsPrerelease.
+    const tags: TagWithDate[] = [
+      // isPrerelease: false (heuristic didn't catch it)
+      { name: 'release-2025-01-15', sha: 's1', date: '2025-01-15T00:00:00Z', isPrerelease: false },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['release-2025-01-15']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2025-01-10T00:00:00Z' } },
+      // Provider (GitHub) flags it true.
+      providerPrereleaseTags: new Set(['release-2025-01-15']),
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('release-2025-01-15');
+    expect(result.firstReleaseIsPrerelease).toBe(true);
+  });
+
+  it('Layer 2: does NOT flag firstReleaseIsPrerelease when user opted into prereleases', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v1.0.0-rc.1', sha: 's1', date: '2025-01-15T00:00:00Z', isPrerelease: true },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0.0-rc.1']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2025-01-10T00:00:00Z' } },
+      providerPrereleaseTags: new Set(['v1.0.0-rc.1']),
+    });
+    const result = await findRelease(COMMIT, { client, includePrereleases: true });
+    // User explicitly asked for prereleases — no banner.
+    expect(result.firstReleaseIsPrerelease).toBeUndefined();
+  });
+
+  it('Layer 2: does NOT flag when heuristic already caught it (no disagreement)', async () => {
+    // Heuristic correctly flagged the prerelease; we skipped it; picked next stable.
+    // No banner needed — nothing went wrong.
+    const tags: TagWithDate[] = [
+      { name: 'v1.0.0-rc.1', sha: 's1', date: '2025-01-10T00:00:00Z', isPrerelease: true },
+      { name: 'v1.0.0', sha: 's2', date: '2025-01-15T00:00:00Z', isPrerelease: false },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0.0-rc.1', 'v1.0.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2025-01-05T00:00:00Z' } },
+      providerPrereleaseTags: new Set(['v1.0.0-rc.1']),
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v1.0.0');
+    expect(result.firstReleaseIsPrerelease).toBeUndefined();
+  });
+
+  it('Layer 2: does NOT flag when provider has no opinion (null isPrerelease, e.g. GitLab or no Release object)', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'release-2025-01-15', sha: 's1', date: '2025-01-15T00:00:00Z', isPrerelease: false },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['release-2025-01-15']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2025-01-10T00:00:00Z' } },
+      // No providerPrereleaseTags set — getReleaseNotes returns isPrerelease: null.
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstReleaseIsPrerelease).toBeUndefined();
   });
 
   it('NotYetReleasedError carries prereleasedSkippedCount when defaults skip a containing prerelease', async () => {

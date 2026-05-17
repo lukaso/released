@@ -221,18 +221,27 @@ export async function findRelease(
     }
   });
 
-  // Step 6: release notes (CP6)
+  // Step 6: release notes (CP6) + Layer 2: catch the case where the provider
+  // flags this release as a prerelease but our tag-name heuristic missed it.
   let releaseNotesHtml: string | null = null;
+  let providerIsPrerelease: boolean | null = null;
   try {
     const notes = await client.getReleaseNotes(repo, firstHit.name);
     if (notes.rateLimit) rateLimit = notes.rateLimit;
     releaseNotesHtml = notes.body ? await renderReleaseNotes(notes.body) : null;
+    providerIsPrerelease = notes.isPrerelease;
   } catch (err) {
     // Release notes are non-essential — if a sanitizer error or network blip
     // occurs, surface the result without notes rather than failing the lookup.
     if (err instanceof RateLimitError) throw err;
     releaseNotesHtml = null;
   }
+
+  // Layer 2 flag: provider says prerelease, heuristic said stable, user didn't
+  // ask for prereleases. That's the "heads up, your answer is actually flagged
+  // as a prerelease" case worth surfacing in the UI.
+  const heuristicMissedPrerelease =
+    !includePrereleases && providerIsPrerelease === true && !firstHit.isPrerelease;
 
   return {
     input,
@@ -242,6 +251,7 @@ export async function findRelease(
     releaseNotesHtml,
     rateLimit,
     urls: buildResultUrls(client, repo, canonicalSha, input),
+    ...(heuristicMissedPrerelease ? { firstReleaseIsPrerelease: true } : {}),
   };
 }
 

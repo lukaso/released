@@ -60,11 +60,18 @@ export interface Provider {
     status: 'behind' | 'identical' | 'ahead' | 'diverged';
     rateLimit: RateLimitInfo | null;
   }>;
-  /** Get the release notes body for a tag, or null if no Release object exists. */
+  /** Get the release notes body for a tag, or null if no Release object exists.
+   *  `isPrerelease` is the provider's authoritative prerelease flag (GitHub
+   *  returns it on the Release object). null = provider has no opinion (no
+   *  Release object exists, or this provider doesn't expose a flag — GitLab). */
   getReleaseNotes(
     repo: RepoRef,
     tag: string,
-  ): Promise<{ body: string | null; rateLimit: RateLimitInfo | null }>;
+  ): Promise<{
+    body: string | null;
+    isPrerelease: boolean | null;
+    rateLimit: RateLimitInfo | null;
+  }>;
   /** URL builders. Algorithm and UI consume these instead of templating strings.
    *  The PR/MR URL uses the provider's own conventions (/pull/N on GitHub,
    *  /-/merge_requests/N on GitLab). */

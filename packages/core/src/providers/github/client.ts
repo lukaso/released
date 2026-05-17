@@ -168,10 +168,16 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
     const url = `${restBase}/repos/${enc(owner)}/${enc(name)}/releases/tags/${enc(tag)}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
-    if (res.status === 404) return { body: null, rateLimit };
+    // 404 = no Release object exists for this tag. We don't know if it's a
+    // prerelease per GitHub since GitHub has no opinion to give.
+    if (res.status === 404) return { body: null, isPrerelease: null, rateLimit };
     if (!res.ok) throw new GitHubServerError(res.status, res.statusText);
-    const body = await readJson<{ body?: string | null }>(res);
-    return { body: body.body ?? null, rateLimit };
+    const body = await readJson<{ body?: string | null; prerelease?: boolean }>(res);
+    return {
+      body: body.body ?? null,
+      isPrerelease: body.prerelease ?? null,
+      rateLimit,
+    };
   }
 
   return {

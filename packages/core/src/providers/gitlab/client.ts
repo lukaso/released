@@ -173,10 +173,13 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     const url = `${restBase}/projects/${projectId(repo)}/releases/${enc(tag)}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
-    if (res.status === 404) return { body: null, rateLimit };
+    // GitLab releases don't have a `prerelease` flag (only `upcoming_release`
+    // for future-dated releases). Return null — UI falls back to the tag-name
+    // heuristic for GitLab.
+    if (res.status === 404) return { body: null, isPrerelease: null, rateLimit };
     if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
     const body = await readJson<{ description?: string | null }>(res);
-    return { body: body.description ?? null, rateLimit };
+    return { body: body.description ?? null, isPrerelease: null, rateLimit };
   }
 
   return {

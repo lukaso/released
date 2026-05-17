@@ -287,6 +287,28 @@ describe('getReleaseNotes', () => {
       'v18.2.0',
     );
     expect(result.body).toBeNull();
+    expect(result.isPrerelease).toBeNull(); // no Release object → no opinion
+  });
+
+  it('plumbs the prerelease boolean through from the GitHub API (Layer 2)', async () => {
+    const fetch = queuedFetch(jsonResp({ body: '## what changed', prerelease: true }));
+    const c = makeGithubClient({ fetch });
+    const result = await c.getReleaseNotes(
+      { host: 'github.com', projectPath: 'facebook/react' },
+      'v18.2.0-experimental',
+    );
+    expect(result.body).toBe('## what changed');
+    expect(result.isPrerelease).toBe(true);
+  });
+
+  it('plumbs prerelease=false from the GitHub API (stable release)', async () => {
+    const fetch = queuedFetch(jsonResp({ body: 'notes', prerelease: false }));
+    const c = makeGithubClient({ fetch });
+    const result = await c.getReleaseNotes(
+      { host: 'github.com', projectPath: 'facebook/react' },
+      'v18.2.0',
+    );
+    expect(result.isPrerelease).toBe(false);
   });
 });
 
