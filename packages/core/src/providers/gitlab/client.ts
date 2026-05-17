@@ -169,6 +169,16 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     return { status: 'ahead' as const, rateLimit };
   }
 
+  async function containingTags(repo: RepoRef, sha: string) {
+    const url = `${restBase}/projects/${projectId(repo)}/repository/commits/${enc(sha)}/refs?type=tag&per_page=100`;
+    const res = await call(url, { headers: baseHeaders() });
+    const rateLimit = parseRateLimit(res);
+    if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
+    const body = await readJson<{ type: string; name: string }[]>(res);
+    const tags = body.filter((r) => r.type === 'tag').map((r) => r.name);
+    return { tags, rateLimit };
+  }
+
   async function getReleaseNotes(repo: RepoRef, tag: string) {
     const url = `${restBase}/projects/${projectId(repo)}/releases/${enc(tag)}`;
     const res = await call(url, { headers: baseHeaders() });
@@ -190,6 +200,7 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     getCommit,
     listTagsWithDates,
     compareCommits,
+    containingTags,
     getReleaseNotes,
     urls,
   };

@@ -202,6 +202,14 @@ describe('web Worker — basic routing', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        if (url.includes('/refs?type=tag')) {
+          // GitlabProvider.containingTags shortcut: tag contains the commit.
+          // Must come BEFORE the /repository/commits/ branch — refs is a subpath.
+          return new Response(JSON.stringify([{ type: 'tag', name: 'GIMP_3_2_0' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         if (url.includes('/repository/commits/ffheadsha')) {
           return new Response(
             JSON.stringify({

@@ -9,8 +9,12 @@ export const OG_TEMPLATE_VERSION = 'og.v1';
 
 /** Cache key namespace prefix. Bumped to v2 when federation landed (RepoRef shape
  *  changed; keys now include host to keep github.com/foo/bar and gitlab.com/foo/bar
- *  in independent cache slots). */
-export const CACHE_NS = 'v2';
+ *  in independent cache slots). Bumped to v3 when the GitLab containingTags
+ *  shortcut landed — galloping was wrong for parallel-release-branch projects
+ *  (it would say "not yet released" for commits backported to maintenance
+ *  branches like GTK's gtk-3-24), so previously-cached "wrong" answers must
+ *  not be served. */
+export const CACHE_NS = 'v3';
 
 /** Default safety margin for date-based tag culling (ms). Tags whose commit-date
  *  is more than this far BEFORE the input commit's date are dropped as candidates.

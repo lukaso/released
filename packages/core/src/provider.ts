@@ -72,6 +72,15 @@ export interface Provider {
     isPrerelease: boolean | null;
     rateLimit: RateLimitInfo | null;
   }>;
+  /** Optional algorithm shortcut: "which tags contain this commit?" in ONE call.
+   *  GitLab exposes `/repository/commits/:sha/refs?type=tag` for this; GitHub
+   *  does not (no equivalent endpoint), so its provider leaves the method
+   *  unset and the algorithm falls back to galloping bisect via compareCommits.
+   *  For huge repos like GNOME/gtk this collapses 25s+ lookups to ~2s. */
+  containingTags?(
+    repo: RepoRef,
+    sha: string,
+  ): Promise<{ tags: readonly string[]; rateLimit: RateLimitInfo | null }>;
   /** URL builders. Algorithm and UI consume these instead of templating strings.
    *  The PR/MR URL uses the provider's own conventions (/pull/N on GitHub,
    *  /-/merge_requests/N on GitLab). */

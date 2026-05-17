@@ -45,10 +45,10 @@ describe('cacheKey — stability + isolation', () => {
   // cache sharing breaks silently. Caught at CI time. CACHE_NS=v2 here (federation bump).
   it('SNAPSHOT — known fixed keys', async () => {
     expect(await cacheKey('res', 'github.com/facebook/react', 'abc')).toMatchInlineSnapshot(
-      `"c7be19622a14d1b0f09b3a61640262142980e867e3e5bb7b9a284359d38430a1"`,
+      `"ddae69cbd72da1df99a5b8e07b10f712e830bba8d0fa48732a1c89453c07e849"`,
     );
     expect(await cacheKey('tags', 'github.com/facebook/react')).toMatchInlineSnapshot(
-      `"603b283af3187f3364b35f79fec28f772c93a7ba9102a4cca55c9bb77ec22f2c"`,
+      `"d0b1e249cf801414663e24da1b87eedc223ec3a5d61fd2db6db6523e27ae4e5e"`,
     );
   });
 });

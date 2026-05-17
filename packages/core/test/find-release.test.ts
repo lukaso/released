@@ -34,8 +34,12 @@ function fakeClient(spec: {
   compareDelayMs?: number;
   /** Override host/kind/terms — defaults to github.com. Allows tests to fake a GitLab provider. */
   base?: Pick<Provider, 'host' | 'kind' | 'terms' | 'urls'>;
-}): Provider & { stats: { compareCalls: number } } {
-  const stats = { compareCalls: 0 };
+  /** When set, exposes the `containingTags` shortcut (mimics GitlabProvider).
+   *  The set passed is treated as the authoritative "which tags contain this commit?".
+   *  Pass `undefined` (default) to NOT expose the method — algorithm falls back to gallop. */
+  exposeContainingTags?: boolean;
+}): Provider & { stats: { compareCalls: number; containingTagsCalls: number } } {
+  const stats = { compareCalls: 0, containingTagsCalls: 0 };
   const rateLimit: RateLimitInfo = {
     remaining: 4999,
     limit: 5000,
@@ -85,6 +89,17 @@ function fakeClient(spec: {
         rateLimit,
       };
     },
+    ...(spec.exposeContainingTags
+      ? {
+          async containingTags(_repo: RepoRef, _sha: string) {
+            stats.containingTagsCalls += 1;
+            const tagNames = (spec.tags ?? [])
+              .filter((t) => spec.contains?.has(t.name))
+              .map((t) => t.name);
+            return { tags: tagNames, rateLimit };
+          },
+        }
+      : {}),
   };
 }
 
@@ -644,5 +659,100 @@ describe('findRelease — also-in list', () => {
     const result = await findRelease(COMMIT, { client });
     expect(result.firstRelease?.tag).toBe('v1.1.0');
     expect(result.alsoIn.map((r) => r.tag)).toEqual(['v1.2.0', 'v2.0.0']);
+  });
+});
+
+describe('findRelease — containingTags shortcut (GitLab-only optimization)', () => {
+  // GitLab's /repository/commits/:sha/refs?type=tag returns the full set of
+  // containing tags in one call. When the provider exposes this method, the
+  // algorithm bypasses gallop + bisect (saves 20s+ on huge repos like GTK).
+  // GitHub does NOT expose this — its provider doesn't set the method, and
+  // the algorithm falls back to the existing path.
+
+  it('takes the shortcut and makes ZERO compareCommits calls when provider exposes containingTags', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v1.0', sha: 's1', date: '2024-01-01T00:00:00Z' },
+      { name: 'v2.0', sha: 's2', date: '2024-02-01T00:00:00Z' },
+      { name: 'v3.0', sha: 's3', date: '2024-03-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v2.0', 'v3.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-01-15T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v2.0');
+    expect(result.alsoIn.map((r) => r.tag)).toEqual(['v3.0']);
+    expect(client.stats.compareCalls).toBe(0);
+    expect(client.stats.containingTagsCalls).toBe(1);
+  });
+
+  it('throws NotYetReleasedError without making any compare calls when shortcut returns empty', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v1.0', sha: 's1', date: '2024-01-01T00:00:00Z' },
+      { name: 'v2.0', sha: 's2', date: '2024-02-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(), // commit is in NO tag
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-03-01T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    await expect(findRelease(COMMIT, { client })).rejects.toBeInstanceOf(NotYetReleasedError);
+    expect(client.stats.compareCalls).toBe(0);
+    expect(client.stats.containingTagsCalls).toBe(1);
+  });
+
+  it('respects the prerelease filter — does NOT pick a containing prerelease tag when user opts out', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v1.0-rc1', sha: 's1', date: '2024-01-01T00:00:00Z', isPrerelease: true },
+      { name: 'v1.0', sha: 's2', date: '2024-02-01T00:00:00Z', isPrerelease: false },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0-rc1', 'v1.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2023-12-01T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    // Default includePrereleases = false: rc1 is excluded even though it contains.
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v1.0');
+  });
+
+  it('respects the date cull — does NOT pick a containing tag from before the commit date', async () => {
+    // A tag dated long before the commit cannot really contain it (dates have
+    // 90 days of clock-skew slack; beyond that the cull discards). The shortcut
+    // must honor the same cull as the gallop path.
+    const tags: TagWithDate[] = [
+      { name: 'ancient', sha: 's0', date: '2001-01-01T00:00:00Z' },
+      { name: 'recent', sha: 's1', date: '2024-04-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      // Provider's refs API claims both contain. The cull should drop 'ancient'.
+      contains: new Set(['ancient', 'recent']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-03-15T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('recent');
+  });
+
+  it('falls back to gallop when provider does NOT expose containingTags (GitHub path)', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v1.0', sha: 's1', date: '2024-01-01T00:00:00Z' },
+      { name: 'v2.0', sha: 's2', date: '2024-02-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0', 'v2.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2023-12-01T00:00:00Z' } },
+      // exposeContainingTags omitted — provider has no shortcut
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v1.0');
+    expect(client.stats.compareCalls).toBeGreaterThan(0);
+    expect(client.stats.containingTagsCalls).toBe(0);
   });
 });

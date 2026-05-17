@@ -133,6 +133,14 @@ export async function findRelease(
 
   // Step 4: locate the earliest containing tag.
   //
+  // Shortcut (CP7): If the provider exposes `containingTags`, one API call
+  // returns every tag that contains this commit (GitLab's /commits/:sha/refs?type=tag).
+  // We skip galloping bisect entirely — for huge repos like GNOME/gtk this
+  // collapses 25s+ lookups to ~2s. The cull and prerelease filters still apply
+  // (we restrict to tags already in `candidates`). Strict mode opts out — the
+  // whole point of strict is to compare every tag rather than trust the
+  // provider's containment answer.
+  //
   // Default mode (D35 → D36): galloping probe + parallel bisect, biased to start
   // near the input commit's date. O(log n) compares in the common case — turns
   // kubernetes-scale repos (~1700 tags) from 25s+ timeouts into ~10s lookups.
@@ -140,22 +148,38 @@ export async function findRelease(
   // Strict mode: linear scan from the oldest candidate, batched. Slower but
   // checks every tag (catches clock-skewed / backdated cases the galloping
   // skips when it date-positions past them).
-  const locateResult = await locateFirstHit({
-    candidates,
-    commitDate: committedDate,
-    compare: async (idx) => {
-      const t = candidates[idx]!;
-      const r = await client.compareCommits(repo, t.sha, canonicalSha);
-      return {
-        contains: r.status === 'behind' || r.status === 'identical',
-        rateLimit: r.rateLimit,
-      };
-    },
-    strict,
-    softDeadline,
-    hardDeadline,
-    batchSize,
-  });
+  let locateResult: Awaited<ReturnType<typeof locateFirstHit>>;
+  let containingSet: Set<string> | null = null;
+  if (!strict && client.containingTags) {
+    const shortcut = await client.containingTags(repo, canonicalSha);
+    if (shortcut.rateLimit) rateLimit = shortcut.rateLimit;
+    containingSet = new Set(shortcut.tags);
+    // candidates is sorted ascending by date; first containing one is firstHit.
+    const idx = candidates.findIndex((t) => containingSet!.has(t.name));
+    locateResult = {
+      hitIdx: idx === -1 ? null : idx,
+      timedOut: null,
+      candidatesTried: 1,
+      rateLimit: shortcut.rateLimit,
+    };
+  } else {
+    locateResult = await locateFirstHit({
+      candidates,
+      commitDate: committedDate,
+      compare: async (idx) => {
+        const t = candidates[idx]!;
+        const r = await client.compareCommits(repo, t.sha, canonicalSha);
+        return {
+          contains: r.status === 'behind' || r.status === 'identical',
+          rateLimit: r.rateLimit,
+        };
+      },
+      strict,
+      softDeadline,
+      hardDeadline,
+      batchSize,
+    });
+  }
   const candidatesTried = locateResult.candidatesTried;
   if (locateResult.rateLimit) rateLimit = locateResult.rateLimit;
 
@@ -203,23 +227,31 @@ export async function findRelease(
   const firstHitIdx = locateResult.hitIdx;
 
   // Step 5: also-in list (next ~N newer tags). Use `candidates` (post-cull) —
-  // culled tags are by definition too old to be "also in" anyway.
+  // culled tags are by definition too old to be "also in" anyway. When the
+  // shortcut populated `containingSet`, we know which tags contain the commit
+  // without any compareCommits calls.
   const alsoCandidates = candidates.slice(firstHitIdx + 1, firstHitIdx + 1 + alsoInLimit);
-  const alsoResults =
-    alsoCandidates.length === 0
-      ? []
-      : await Promise.all(
-          alsoCandidates.map((t) => client.compareCommits(repo, t.sha, canonicalSha)),
-        );
-  const alsoLast = alsoResults[alsoResults.length - 1];
-  if (alsoLast?.rateLimit) rateLimit = alsoLast.rateLimit;
   const alsoIn: ReleaseHit[] = [];
-  alsoCandidates.forEach((t, j) => {
-    const r = alsoResults[j];
-    if (r && (r.status === 'behind' || r.status === 'identical')) {
-      alsoIn.push(toHit(client, repo, t));
+  if (containingSet) {
+    for (const t of alsoCandidates) {
+      if (containingSet.has(t.name)) alsoIn.push(toHit(client, repo, t));
     }
-  });
+  } else {
+    const alsoResults =
+      alsoCandidates.length === 0
+        ? []
+        : await Promise.all(
+            alsoCandidates.map((t) => client.compareCommits(repo, t.sha, canonicalSha)),
+          );
+    const alsoLast = alsoResults[alsoResults.length - 1];
+    if (alsoLast?.rateLimit) rateLimit = alsoLast.rateLimit;
+    alsoCandidates.forEach((t, j) => {
+      const r = alsoResults[j];
+      if (r && (r.status === 'behind' || r.status === 'identical')) {
+        alsoIn.push(toHit(client, repo, t));
+      }
+    });
+  }
 
   // Step 6: release notes (CP6) + Layer 2: catch the case where the provider
   // flags this release as a prerelease but our tag-name heuristic missed it.

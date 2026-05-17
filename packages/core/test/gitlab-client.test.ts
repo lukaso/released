@@ -250,6 +250,61 @@ describe('GitlabProvider.compareCommits', () => {
   });
 });
 
+describe('GitlabProvider.containingTags', () => {
+  // GitLab exposes `GET /projects/:id/repository/commits/:sha/refs?type=tag` which
+  // returns every tag that contains the commit, in one round trip. This collapses
+  // the find-release algorithm from O(log n) compare calls to ONE call — critical
+  // for huge repos like GNOME/gtk where the per-tag compare can take 2-3s each.
+
+  it('returns tag names from the refs response', async () => {
+    const fetch = queuedFetch(
+      jsonResp([
+        { type: 'tag', name: 'v1.0' },
+        { type: 'tag', name: 'v1.1' },
+      ]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.containingTags!(GNOME_GIMP, 'commitSha');
+    expect(result.tags).toEqual(['v1.0', 'v1.1']);
+  });
+
+  it('returns an empty list when the commit is in no tags yet (not yet released)', async () => {
+    const fetch = queuedFetch(jsonResp([]));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.containingTags!(GNOME_GIMP, 'commitSha');
+    expect(result.tags).toEqual([]);
+  });
+
+  it('filters out non-tag refs (branches) even though we ask type=tag (defensive)', async () => {
+    const fetch = queuedFetch(
+      jsonResp([
+        { type: 'tag', name: 'v1.0' },
+        { type: 'branch', name: 'main' },
+      ]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.containingTags!(GNOME_GIMP, 'commitSha');
+    expect(result.tags).toEqual(['v1.0']);
+  });
+
+  it('asks the API with type=tag in the query string', async () => {
+    const mockFetch = vi.fn(async () => jsonResp([]));
+    const c = makeGitlabProvider('gitlab.com', { fetch: mockFetch as unknown as typeof fetch });
+    await c.containingTags!(NESTED, 'commitSha');
+    const url = (mockFetch.mock.calls[0]?.[0] as string) ?? '';
+    expect(url).toContain('/repository/commits/commitSha/refs');
+    expect(url).toContain('type=tag');
+  });
+
+  it('throws ProviderServerError on 5xx (caller falls back to galloping)', async () => {
+    const fetch = queuedFetch(errResp(500));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch, retries: 0 });
+    await expect(c.containingTags!(GNOME_GIMP, 'commitSha')).rejects.toBeInstanceOf(
+      ProviderServerError,
+    );
+  });
+});
+
 describe('GitlabProvider.getReleaseNotes', () => {
   it('returns the release description when one exists', async () => {
     const fetch = queuedFetch(jsonResp({ description: '## Changes\n\n* fix: thing' }));
