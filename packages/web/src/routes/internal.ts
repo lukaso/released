@@ -1,16 +1,20 @@
 // GET /internal/result/:owner/:repo/:sha — Service-Binding-only endpoint (D23).
 // web-og calls this via a Cloudflare Service Binding (env.WEB.fetch(...)) to get
 // the result JSON for rendering the OG PNG. Direct public hits are rejected.
+//
+// Currently GitHub-only — the web-og worker only renders OG images for GitHub
+// permalinks today. Federated OG rendering is a captured TODO; when that lands,
+// add a parallel /internal/h/:host/r/:projectPath/:sha route.
 
-import type { Context } from 'hono';
 import {
+  type LookupResult,
   cacheKey,
   findRelease,
-  makeGithubClient,
   parseInput,
-  type LookupResult,
+  providerFor,
 } from '@released/core';
-import { resolveToken } from '../auth.js';
+import type { Context } from 'hono';
+import { extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
 import { singleFlight } from '../single-flight.js';
@@ -35,7 +39,12 @@ export async function internalResultRoute(c: Context): Promise<Response> {
   const sha = c.req.param('sha');
   if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
 
-  const k = await cacheKey('res', `${owner}/${repo}`, `sha:${sha}`);
+  // This route is GitHub-only. Host-aware cache key so we share cache slots
+  // with the public /r/ and /api/lookup routes (which all use the same
+  // ${host}/${projectPath} prefix).
+  const host = 'github.com';
+  const projectPath = `${owner}/${repo}`;
+  const k = await cacheKey('res', `${host}/${projectPath}`, `sha:${sha}`);
   const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
   if (result) {
@@ -47,7 +56,8 @@ export async function internalResultRoute(c: Context): Promise<Response> {
   // Cache miss: compute. The web-og caller chose to wait for this on its side.
   try {
     const parsed = parseInput(`${owner}/${repo}`, sha);
-    const client = makeGithubClient({ token: resolveToken(env, req) });
+    const token = resolveProviderToken(env, req, host);
+    const client = providerFor(host, { token, extraGitlabHosts: extraGitlabHostsFromEnv(env) });
     result = await singleFlight(k, async () => {
       const re = await cache.get<LookupResult>(k);
       if (re) return re;

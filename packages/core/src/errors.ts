@@ -7,10 +7,29 @@ export abstract class ReleasedError extends Error {
 
 // --- Input parsing -----------------------------------------------------------
 
+/** Thrown when the input is a URL we can't route to any known provider. The error
+ *  message includes the supported host list so users can self-serve (and pass the
+ *  list to their admin if they want to extend it). */
+export class UnsupportedHostError extends ReleasedError {
+  readonly kind = 'unsupported_host' as const;
+  constructor(
+    public readonly host: string,
+    public readonly supportedHosts: readonly string[],
+  ) {
+    super(
+      `I don't recognize "${host}". Supported: ${supportedHosts.join(', ')}. ` +
+        `If your instance is a GitLab self-hosted, your admin can add it via EXTRA_GITLAB_HOSTS.`,
+    );
+    this.name = 'UnsupportedHostError';
+  }
+}
+
+/** Legacy alias kept so existing callers don't break on rename.
+ *  @deprecated use {@link UnsupportedHostError} instead. */
 export class NonGithubUrlError extends ReleasedError {
   readonly kind = 'non_github_url' as const;
   constructor(public readonly url: string) {
-    super(`Only GitHub repos are supported in v1; got: ${url}`);
+    super(`I don't recognize that URL; got: ${url}`);
     this.name = 'NonGithubUrlError';
   }
 }
@@ -18,7 +37,9 @@ export class NonGithubUrlError extends ReleasedError {
 export class InvalidInputError extends ReleasedError {
   readonly kind = 'invalid_input' as const;
   constructor(input: string) {
-    super(`Could not parse "${input}". Expected a GitHub commit URL, SHA, PR number, or owner/repo@sha.`);
+    super(
+      `Could not parse "${input}". Expected a commit URL, SHA, PR/MR number, or owner/repo@sha.`,
+    );
     this.name = 'InvalidInputError';
   }
 }
@@ -122,8 +143,13 @@ export class LookupTimeoutError extends ReleasedError {
 
 export class RateLimitError extends ReleasedError {
   readonly kind = 'rate_limit' as const;
-  constructor(public readonly resetAt: number) {
-    super(`GitHub API rate limit exhausted. Resets at ${new Date(resetAt * 1000).toISOString()}.`);
+  constructor(
+    public readonly resetAt: number,
+    /** Which provider's API limit was hit. Lets the UI tailor the message. */
+    public readonly providerHost?: string,
+  ) {
+    const where = providerHost ? `${providerHost} API` : 'Provider API';
+    super(`${where} rate limit exhausted. Resets at ${new Date(resetAt * 1000).toISOString()}.`);
     this.name = 'RateLimitError';
   }
 }
@@ -139,10 +165,24 @@ export class GitHubServerError extends ReleasedError {
   }
 }
 
+/** Generic provider-server error (5xx, non-rate-limit 4xx the client didn't translate).
+ *  GitlabProvider raises this; GithubProvider keeps the legacy GitHubServerError name. */
+export class ProviderServerError extends ReleasedError {
+  readonly kind = 'provider_server_error' as const;
+  constructor(
+    public readonly providerHost: string,
+    public readonly status: number,
+    public readonly statusText: string,
+  ) {
+    super(`${providerHost} API returned ${status} ${statusText}.`);
+    this.name = 'ProviderServerError';
+  }
+}
+
 export class NetworkError extends ReleasedError {
   readonly kind = 'network_error' as const;
   constructor(cause: unknown) {
-    super(`Network error reaching GitHub: ${(cause as Error)?.message ?? String(cause)}`);
+    super(`Network error reaching the provider: ${(cause as Error)?.message ?? String(cause)}`);
     this.name = 'NetworkError';
     this.cause = cause;
   }
@@ -151,7 +191,9 @@ export class NetworkError extends ReleasedError {
 export class SanitizeError extends ReleasedError {
   readonly kind = 'sanitize_error' as const;
   constructor(cause: unknown) {
-    super(`Failed to sanitize release notes markdown: ${(cause as Error)?.message ?? String(cause)}`);
+    super(
+      `Failed to sanitize release notes markdown: ${(cause as Error)?.message ?? String(cause)}`,
+    );
     this.name = 'SanitizeError';
     this.cause = cause;
   }
@@ -161,7 +203,10 @@ export class SanitizeError extends ReleasedError {
 
 export class BulkLimitError extends ReleasedError {
   readonly kind = 'bulk_limit' as const;
-  constructor(public readonly given: number, public readonly max: number) {
+  constructor(
+    public readonly given: number,
+    public readonly max: number,
+  ) {
     super(`Bulk lookup accepts at most ${max} inputs; got ${given}. Split into multiple requests.`);
     this.name = 'BulkLimitError';
   }

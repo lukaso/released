@@ -27,11 +27,7 @@ function jsonResp(
   });
 }
 
-function errResp(
-  status: number,
-  body: unknown = {},
-  remaining = 4999,
-): Response {
+function errResp(status: number, body: unknown = {}, remaining = 4999): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -60,7 +56,10 @@ describe('getPullRequest', () => {
   it('returns merge commit sha for a merged PR', async () => {
     const fetch = queuedFetch(jsonResp({ merged: true, merge_commit_sha: 'abc123def456' }));
     const c = makeGithubClient({ fetch });
-    const result = await c.getPullRequest('vercel', 'next.js', 56012);
+    const result = await c.getPullRequest(
+      { host: 'github.com', projectPath: 'vercel/next.js' },
+      56012,
+    );
     expect(result.merged).toBe(true);
     expect(result.mergeCommitSha).toBe('abc123def456');
   });
@@ -68,25 +67,25 @@ describe('getPullRequest', () => {
   it('throws PrNotMergedError when not merged', async () => {
     const fetch = queuedFetch(jsonResp({ merged: false, merge_commit_sha: null }));
     const c = makeGithubClient({ fetch });
-    await expect(c.getPullRequest('vercel', 'next.js', 56012)).rejects.toBeInstanceOf(
-      PrNotMergedError,
-    );
+    await expect(
+      c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 56012),
+    ).rejects.toBeInstanceOf(PrNotMergedError);
   });
 
   it('throws PrMergeCommitUnavailableError when merged=true but merge_commit_sha=null', async () => {
     const fetch = queuedFetch(jsonResp({ merged: true, merge_commit_sha: null }));
     const c = makeGithubClient({ fetch });
-    await expect(c.getPullRequest('vercel', 'next.js', 56012)).rejects.toBeInstanceOf(
-      PrMergeCommitUnavailableError,
-    );
+    await expect(
+      c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 56012),
+    ).rejects.toBeInstanceOf(PrMergeCommitUnavailableError);
   });
 
   it('throws PrNotFoundError on 404', async () => {
     const fetch = queuedFetch(errResp(404));
     const c = makeGithubClient({ fetch });
-    await expect(c.getPullRequest('vercel', 'next.js', 99999999)).rejects.toBeInstanceOf(
-      PrNotFoundError,
-    );
+    await expect(
+      c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 99999999),
+    ).rejects.toBeInstanceOf(PrNotFoundError);
   });
 });
 
@@ -99,7 +98,10 @@ describe('getCommit', () => {
       }),
     );
     const c = makeGithubClient({ fetch });
-    const result = await c.getCommit('facebook', 'react', 'abc1234');
+    const result = await c.getCommit(
+      { host: 'github.com', projectPath: 'facebook/react' },
+      'abc1234',
+    );
     expect(result.fullSha).toBe('abc1234567890abcdefabcdefabcdefabcdef1234');
     expect(result.committedDate).toBe('2024-03-01T12:00:00Z');
   });
@@ -107,17 +109,17 @@ describe('getCommit', () => {
   it('throws CommitNotFoundError on 404', async () => {
     const fetch = queuedFetch(errResp(404));
     const c = makeGithubClient({ fetch });
-    await expect(c.getCommit('facebook', 'react', 'deadbee')).rejects.toBeInstanceOf(
-      CommitNotFoundError,
-    );
+    await expect(
+      c.getCommit({ host: 'github.com', projectPath: 'facebook/react' }, 'deadbee'),
+    ).rejects.toBeInstanceOf(CommitNotFoundError);
   });
 
   it('throws AmbiguousShaError on 422', async () => {
     const fetch = queuedFetch(errResp(422, { message: 'ambiguous' }));
     const c = makeGithubClient({ fetch });
-    await expect(c.getCommit('facebook', 'react', 'abc1234')).rejects.toBeInstanceOf(
-      AmbiguousShaError,
-    );
+    await expect(
+      c.getCommit({ host: 'github.com', projectPath: 'facebook/react' }, 'abc1234'),
+    ).rejects.toBeInstanceOf(AmbiguousShaError);
   });
 });
 
@@ -157,7 +159,10 @@ describe('listTagsWithDates (GraphQL paginated)', () => {
       }),
     );
     const c = makeGithubClient({ fetch });
-    const { tags } = await c.listTagsWithDates('facebook', 'react');
+    const { tags } = await c.listTagsWithDates({
+      host: 'github.com',
+      projectPath: 'facebook/react',
+    });
     expect(tags).toHaveLength(2);
     expect(tags[0]).toEqual({
       name: 'v18.2.0',
@@ -182,7 +187,11 @@ describe('listTagsWithDates (GraphQL paginated)', () => {
             refs: {
               nodes: names.map((n) => ({
                 name: n,
-                target: { __typename: 'Commit', oid: `sha_${n}`, committedDate: '2024-01-01T00:00:00Z' },
+                target: {
+                  __typename: 'Commit',
+                  oid: `sha_${n}`,
+                  committedDate: '2024-01-01T00:00:00Z',
+                },
               })),
               pageInfo: { hasNextPage: cursor !== null, endCursor: cursor },
             },
@@ -195,18 +204,20 @@ describe('listTagsWithDates (GraphQL paginated)', () => {
       page(null, ['e']),
     );
     const c = makeGithubClient({ fetch });
-    const { tags } = await c.listTagsWithDates('o', 'r');
+    const { tags } = await c.listTagsWithDates({ host: 'github.com', projectPath: 'o/r' });
     expect(tags.map((t) => t.name)).toEqual(['a', 'b', 'c', 'd', 'e']);
   });
 
   it('returns empty list for repos with no tags', async () => {
     const fetch = queuedFetch(
       jsonResp({
-        data: { repository: { refs: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } },
+        data: {
+          repository: { refs: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        },
       }),
     );
     const c = makeGithubClient({ fetch });
-    const { tags } = await c.listTagsWithDates('o', 'r');
+    const { tags } = await c.listTagsWithDates({ host: 'github.com', projectPath: 'o/r' });
     expect(tags).toEqual([]);
   });
 });
@@ -216,7 +227,11 @@ describe('compareCommits', () => {
     it(`returns "${status}" verbatim`, async () => {
       const fetch = queuedFetch(jsonResp({ status }));
       const c = makeGithubClient({ fetch });
-      const result = await c.compareCommits('o', 'r', 'base', 'head');
+      const result = await c.compareCommits(
+        { host: 'github.com', projectPath: 'o/r' },
+        'base',
+        'head',
+      );
       expect(result.status).toBe(status);
     });
   }
@@ -224,7 +239,11 @@ describe('compareCommits', () => {
   it('treats 422 (diverged) as "diverged"', async () => {
     const fetch = queuedFetch(errResp(422, { message: 'unmergeable' }));
     const c = makeGithubClient({ fetch });
-    const result = await c.compareCommits('o', 'r', 'base', 'head');
+    const result = await c.compareCommits(
+      { host: 'github.com', projectPath: 'o/r' },
+      'base',
+      'head',
+    );
     expect(result.status).toBe('diverged');
   });
 
@@ -240,7 +259,11 @@ describe('compareCommits', () => {
       }),
     );
     const c = makeGithubClient({ fetch });
-    const result = await c.compareCommits('macports', 'macports-ports', 'ancient', 'modern');
+    const result = await c.compareCommits(
+      { host: 'github.com', projectPath: 'macports/macports-ports' },
+      'ancient',
+      'modern',
+    );
     expect(result.status).toBe('diverged');
   });
 });
@@ -249,14 +272,20 @@ describe('getReleaseNotes', () => {
   it('returns the release body when one exists', async () => {
     const fetch = queuedFetch(jsonResp({ body: '## Changes\n\n* fix: hydration' }));
     const c = makeGithubClient({ fetch });
-    const result = await c.getReleaseNotes('facebook', 'react', 'v18.2.0');
+    const result = await c.getReleaseNotes(
+      { host: 'github.com', projectPath: 'facebook/react' },
+      'v18.2.0',
+    );
     expect(result.body).toContain('hydration');
   });
 
   it('returns null when no Release object exists for the tag (404)', async () => {
     const fetch = queuedFetch(errResp(404));
     const c = makeGithubClient({ fetch });
-    const result = await c.getReleaseNotes('facebook', 'react', 'v18.2.0');
+    const result = await c.getReleaseNotes(
+      { host: 'github.com', projectPath: 'facebook/react' },
+      'v18.2.0',
+    );
     expect(result.body).toBeNull();
   });
 });
@@ -266,30 +295,38 @@ describe('rate-limit + network failure modes', () => {
     const reset = Math.floor(Date.now() / 1000) + 600;
     const fetch = queuedFetch(errResp(403, { message: 'rate limit exceeded' }, 0));
     // Manually set reset on the response we just built:
-    const c = makeGithubClient({ fetch: queuedFetch(
-      new Response('{"message":"rate limit exceeded"}', {
-        status: 403,
-        headers: {
-          'content-type': 'application/json',
-          'x-ratelimit-remaining': '0',
-          'x-ratelimit-limit': '60',
-          'x-ratelimit-reset': String(reset),
-        },
-      }),
-    )});
-    await expect(c.getCommit('o', 'r', 'abc1234')).rejects.toBeInstanceOf(RateLimitError);
+    const c = makeGithubClient({
+      fetch: queuedFetch(
+        new Response('{"message":"rate limit exceeded"}', {
+          status: 403,
+          headers: {
+            'content-type': 'application/json',
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-limit': '60',
+            'x-ratelimit-reset': String(reset),
+          },
+        }),
+      ),
+    });
+    await expect(
+      c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234'),
+    ).rejects.toBeInstanceOf(RateLimitError);
   });
 
   it('retries on 5xx then throws GitHubServerError', async () => {
     const fetch = queuedFetch(errResp(503), errResp(503), errResp(503));
     const c = makeGithubClient({ fetch });
-    await expect(c.getCommit('o', 'r', 'abc1234')).rejects.toBeInstanceOf(GitHubServerError);
+    await expect(
+      c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234'),
+    ).rejects.toBeInstanceOf(GitHubServerError);
   });
 
   it('throws NetworkError when fetch itself fails', async () => {
     const fetch = queuedFetch(new TypeError('fetch failed'));
     const c = makeGithubClient({ fetch });
-    await expect(c.getCommit('o', 'r', 'abc1234')).rejects.toBeInstanceOf(NetworkError);
+    await expect(
+      c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234'),
+    ).rejects.toBeInstanceOf(NetworkError);
   });
 });
 
@@ -306,7 +343,7 @@ describe('token + headers', () => {
       });
     }) as unknown as typeof globalThis.fetch;
     const c = makeGithubClient({ fetch: mockFetch, token: 'ghp_test123' });
-    await c.getCommit('o', 'r', 'abcdef1234');
+    await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abcdef1234');
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer ghp_test123');
     expect(calls[0]!.headers.get('accept')).toMatch(/application\/vnd.github/);
   });
@@ -321,7 +358,7 @@ describe('token + headers', () => {
       });
     }) as unknown as typeof globalThis.fetch;
     const c = makeGithubClient({ fetch: mockFetch });
-    await c.getCommit('o', 'r', 'abcdef1234');
+    await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abcdef1234');
     expect(calls[0]!.headers.get('authorization')).toBeNull();
   });
 });

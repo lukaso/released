@@ -1,17 +1,21 @@
 // Hono app entry — Cloudflare Worker.
 //
 // Routes:
-//   GET  /                                  → homepage with embedded EXAMPLE
-//   GET  /lookup?q=...                      → 302 to /r/:o/:r/c/:sha (form submit fallback)
-//   GET  /r/:owner/:repo/c/:sha             → permalink result page
-//   POST /api/lookup                        → JSON single lookup (client-side fetch)
-//   POST /api/lookup-bulk                   → JSON bulk lookup
-//   GET  /internal/result/:owner/:repo/:sha → Service Binding only; for web-og
-//   GET  /healthz                           → liveness probe
+//   GET  /                                       → homepage with embedded EXAMPLE
+//   GET  /lookup?q=...                           → 302 to the canonical permalink
+//   GET  /r/:owner/:repo/c/:sha                  → permalink result page (GitHub)
+//   GET  /p/:owner/:repo/:number                 → PR permalink (GitHub)
+//   GET  /h/:host/r/:projectPath/c/:sha          → permalink result page (federated, any host)
+//   GET  /h/:host/p/:projectPath/:number         → PR/MR permalink (federated)
+//   POST /api/lookup                             → JSON single lookup (client-side fetch)
+//   POST /api/lookup-bulk                        → JSON bulk lookup
+//   GET  /internal/result/:owner/:repo/:sha      → Service Binding only; for web-og
+//   GET  /healthz                                → liveness probe
 
-import { Hono } from 'hono';
 import { parseInput } from '@released/core';
+import { Hono } from 'hono';
 import type { Env } from './env.js';
+import { commitPermalinkPath, prPermalinkPath } from './paths.js';
 import { homeRoute } from './routes/home.js';
 import { internalResultRoute } from './routes/internal.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
@@ -30,13 +34,13 @@ app.get('/lookup', (c) => {
   try {
     const p = parseInput(q);
     if (p.kind === 'pr') {
-      return c.redirect(`/p/${p.repo.owner}/${p.repo.repo}/${p.number}`, 302);
+      return c.redirect(prPermalinkPath(p.repo, p.number), 302);
     }
     // Use the FULL SHA in the permalink (not a 7-char prefix) — short prefixes
     // collide in large repos like kubernetes/kubernetes, which makes getCommit
     // return 422 ambiguous. The UI displays the short form for cosmetics; the
     // URL is canonical and unambiguous.
-    return c.redirect(`/r/${p.repo.owner}/${p.repo.repo}/c/${p.sha}`, 302);
+    return c.redirect(commitPermalinkPath(p.repo, p.sha), 302);
   } catch (err) {
     // Bounce back to the form with the bad query AND the error reason preserved
     // so the homepage can surface a tailored message.
@@ -45,8 +49,13 @@ app.get('/lookup', (c) => {
   }
 });
 
+// GitHub permalinks (legacy/canonical — preserved for cached unfurls + bookmarks).
 app.get('/r/:owner/:repo/c/:sha', resultRoute);
 app.get('/p/:owner/:repo/:number', prRoute);
+
+// Federated permalinks (any non-GitHub provider). projectPath URL-encoded.
+app.get('/h/:host/r/:projectPath/c/:sha', resultRoute);
+app.get('/h/:host/p/:projectPath/:number', prRoute);
 
 app.post('/api/lookup', lookupRoute);
 app.post('/api/lookup-bulk', lookupBulkRoute);
@@ -55,8 +64,6 @@ app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
 
 app.get('/healthz', (c) => c.text('ok'));
 
-app.notFound((c) =>
-  c.text('Not found — paste a commit at https://released.blabberate.com\n', 404),
-);
+app.notFound((c) => c.text('Not found — paste a commit at https://released.blabberate.com\n', 404));
 
 export default app;

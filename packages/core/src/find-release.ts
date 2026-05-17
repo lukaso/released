@@ -17,22 +17,23 @@ import {
   RateLimitError,
   ReleasedError,
 } from './errors.js';
-import type { GithubClient } from './github.js';
+import type { Provider } from './provider.js';
 import { renderReleaseNotes } from './release-notes.js';
 import {
-  DEFAULT_DATE_CULL_MARGIN_MS,
-  MAX_BULK,
   type BulkResult,
   type BulkSubError,
+  DEFAULT_DATE_CULL_MARGIN_MS,
   type LookupInput,
   type LookupResult,
+  MAX_BULK,
   type RateLimitInfo,
   type ReleaseHit,
+  type RepoRef,
   type TagWithDate,
 } from './types.js';
 
 export type FindReleaseOpts = {
-  client: GithubClient;
+  client: Provider;
   signal?: AbortSignal | undefined;
   /** Absolute epoch-ms. Defaults: now+20s. */
   softDeadline?: number | undefined;
@@ -64,23 +65,23 @@ export async function findRelease(
   const strict = opts.strict ?? false;
   const dateMarginMs = opts.dateMarginMs ?? DEFAULT_DATE_CULL_MARGIN_MS;
   const includePrereleases = opts.includePrereleases ?? false;
-  const { owner, repo } = input.repo;
+  const repo: RepoRef = input.repo;
 
   // Step 1: resolve to a canonical commit SHA
   let canonicalSha: string;
   if (input.kind === 'pr') {
-    const pr = await client.getPullRequest(owner, repo, input.number);
+    const pr = await client.getPullRequest(repo, input.number);
     canonicalSha = pr.mergeCommitSha;
   } else {
     canonicalSha = input.sha;
   }
   // Validate + get the full SHA + committer date
-  const commit = await client.getCommit(owner, repo, canonicalSha);
+  const commit = await client.getCommit(repo, canonicalSha);
   canonicalSha = commit.fullSha;
   const committedDate = commit.committedDate;
 
   // Step 2: list tags
-  const tagList = await client.listTagsWithDates(owner, repo);
+  const tagList = await client.listTagsWithDates(repo);
   let rateLimit: RateLimitInfo | null = tagList.rateLimit;
   if (tagList.tags.length === 0) throw new NoReleasesError();
 
@@ -144,15 +145,18 @@ export async function findRelease(
     commitDate: committedDate,
     compare: async (idx) => {
       const t = candidates[idx]!;
-      const r = await client.compareCommits(owner, repo, t.sha, canonicalSha);
-      return { contains: r.status === 'behind' || r.status === 'identical', rateLimit: r.rateLimit };
+      const r = await client.compareCommits(repo, t.sha, canonicalSha);
+      return {
+        contains: r.status === 'behind' || r.status === 'identical',
+        rateLimit: r.rateLimit,
+      };
     },
     strict,
     softDeadline,
     hardDeadline,
     batchSize,
   });
-  let candidatesTried = locateResult.candidatesTried;
+  const candidatesTried = locateResult.candidatesTried;
   if (locateResult.rateLimit) rateLimit = locateResult.rateLimit;
 
   if (locateResult.timedOut !== null) {
@@ -166,11 +170,12 @@ export async function findRelease(
       return {
         input,
         canonicalSha,
-        firstRelease: toHit(owner, repo, hit),
+        firstRelease: toHit(client, repo, hit),
         alsoIn: [],
         releaseNotesHtml: null,
         rateLimit,
         partial: { reason: 'soft_deadline', candidatesTried },
+        urls: buildResultUrls(client, repo, canonicalSha, input),
       };
     }
     // No hit at all and hard deadline → genuinely a server-side timeout.
@@ -186,16 +191,12 @@ export async function findRelease(
       releaseNotesHtml: null,
       rateLimit,
       partial: { reason: 'soft_deadline', candidatesTried },
+      urls: buildResultUrls(client, repo, canonicalSha, input),
     };
   }
 
   if (locateResult.hitIdx === null) {
-    throw new NotYetReleasedError(
-      canonicalSha,
-      committedDate,
-      culledTagCount,
-      prereleasedCount,
-    );
+    throw new NotYetReleasedError(canonicalSha, committedDate, culledTagCount, prereleasedCount);
   }
 
   const firstHit = candidates[locateResult.hitIdx]!;
@@ -208,7 +209,7 @@ export async function findRelease(
     alsoCandidates.length === 0
       ? []
       : await Promise.all(
-          alsoCandidates.map((t) => client.compareCommits(owner, repo, t.sha, canonicalSha)),
+          alsoCandidates.map((t) => client.compareCommits(repo, t.sha, canonicalSha)),
         );
   const alsoLast = alsoResults[alsoResults.length - 1];
   if (alsoLast?.rateLimit) rateLimit = alsoLast.rateLimit;
@@ -216,14 +217,14 @@ export async function findRelease(
   alsoCandidates.forEach((t, j) => {
     const r = alsoResults[j];
     if (r && (r.status === 'behind' || r.status === 'identical')) {
-      alsoIn.push(toHit(owner, repo, t));
+      alsoIn.push(toHit(client, repo, t));
     }
   });
 
   // Step 6: release notes (CP6)
   let releaseNotesHtml: string | null = null;
   try {
-    const notes = await client.getReleaseNotes(owner, repo, firstHit.name);
+    const notes = await client.getReleaseNotes(repo, firstHit.name);
     if (notes.rateLimit) rateLimit = notes.rateLimit;
     releaseNotesHtml = notes.body ? await renderReleaseNotes(notes.body) : null;
   } catch (err) {
@@ -236,10 +237,11 @@ export async function findRelease(
   return {
     input,
     canonicalSha,
-    firstRelease: toHit(owner, repo, firstHit),
+    firstRelease: toHit(client, repo, firstHit),
     alsoIn,
     releaseNotesHtml,
     rateLimit,
+    urls: buildResultUrls(client, repo, canonicalSha, input),
   };
 }
 
@@ -315,10 +317,10 @@ export async function findReleasesBulk(
 
   const pendingCount = results.filter((r) => r === undefined).length;
   return {
-    results: results.map((r) => (r === undefined ? toBulkError(new Error('not run (cancelled)')) : r)),
-    ...(partialReason
-      ? { partial: { ...partialReason, pendingCount } }
-      : {}),
+    results: results.map((r) =>
+      r === undefined ? toBulkError(new Error('not run (cancelled)')) : r,
+    ),
+    ...(partialReason ? { partial: { ...partialReason, pendingCount } } : {}),
   };
 }
 
@@ -503,13 +505,29 @@ async function locateFirstHit(opts: LocateOpts): Promise<LocateOutcome> {
 
 // --- helpers -----------------------------------------------------------------
 
-function toHit(owner: string, repo: string, t: TagWithDate): ReleaseHit {
+function toHit(client: Provider, repo: RepoRef, t: TagWithDate): ReleaseHit {
   return {
     tag: t.name,
     sha: t.sha,
     date: t.date,
-    url: `https://github.com/${owner}/${repo}/releases/tag/${encodeURIComponent(t.name)}`,
+    url: client.urls.release(repo, t.name),
   };
+}
+
+function buildResultUrls(
+  client: Provider,
+  repo: RepoRef,
+  canonicalSha: string,
+  input: LookupInput,
+): LookupResult['urls'] {
+  const urls: { repo: string; commit: string; pullRequest?: string } = {
+    repo: client.urls.repo(repo),
+    commit: client.urls.commit(repo, canonicalSha),
+  };
+  if (input.kind === 'pr') {
+    urls.pullRequest = client.urls.pullRequest(repo, input.number);
+  }
+  return urls;
 }
 
 function toBulkError(err: unknown): BulkSubError {
@@ -520,18 +538,22 @@ function toBulkError(err: unknown): BulkSubError {
   return { kind: 'error', errorName: e?.name ?? 'Error', message: e?.message ?? String(err) };
 }
 
-/** Wrap a GithubClient so that listTagsWithDates is memoized per (owner, repo)
+/** Wrap a Provider so that listTagsWithDates is memoized per (host, projectPath)
  *  for the lifetime of this wrapper. Used by findReleasesBulk so inputs against
- *  the same repo share one GraphQL pagination. */
-function memoizeTagsClient(client: GithubClient): GithubClient {
-  const cache = new Map<string, ReturnType<GithubClient['listTagsWithDates']>>();
+ *  the same repo share one tag-listing call.
+ *
+ *  Key includes `host` so a bulk lookup mixing github.com/foo/bar and
+ *  gitlab.com/foo/bar hits TWO independent memoization slots — not one, which
+ *  would silently return GitHub tags for the GitLab repo. */
+function memoizeTagsClient(client: Provider): Provider {
+  const cache = new Map<string, ReturnType<Provider['listTagsWithDates']>>();
   return {
     ...client,
-    listTagsWithDates(o, r) {
-      const key = `${o}/${r}`;
+    listTagsWithDates(repo) {
+      const key = `${repo.host}/${repo.projectPath}`;
       let p = cache.get(key);
       if (!p) {
-        p = client.listTagsWithDates(o, r);
+        p = client.listTagsWithDates(repo);
         cache.set(key, p);
       }
       return p;

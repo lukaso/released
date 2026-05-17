@@ -1,33 +1,50 @@
-// GET /r/:owner/:repo/c/:sha — the permalink page (resolved state of the tool).
+// GET /r/:owner/:repo/c/:sha           — permalink result page (GitHub)
+// GET /h/:host/r/:projectPath/c/:sha   — permalink result page (federated)
+//
 // Same page in two states (D33): input stays at top, result card below.
 
-import type { Context } from 'hono';
-import { raw } from 'hono/html';
 import {
-  cacheKey,
-  findRelease,
-  makeGithubClient,
-  NotYetReleasedError,
-  parseInput,
-  ReleasedError,
   type LookupInput,
   type LookupResult,
+  NotYetReleasedError,
+  ReleasedError,
+  type RepoRef,
+  cacheKey,
+  findRelease,
+  providerFor,
 } from '@released/core';
-import { isUnfurlBot, resolveToken } from '../auth.js';
+import type { Context } from 'hono';
+import { raw } from 'hono/html';
+import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
-import { ogBaseUrl, publicBaseUrl, type Env } from '../env.js';
-import { Layout } from '../ui/layout.js';
-import { PrereleaseHint, ResultCard, StrictHint } from '../ui/result-card.js';
+import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
+import { commitPermalinkPath } from '../paths.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { singleFlight } from '../single-flight.js';
+import { Layout } from '../ui/layout.js';
+import { PrereleaseHint, ResultCard, StrictHint } from '../ui/result-card.js';
+
+/** Extract the RepoRef from either route family. Returns null if the params
+ *  shape doesn't match either expected family. */
+function repoFromParams(c: Context): RepoRef | null {
+  const host = c.req.param('host');
+  if (host) {
+    const projectPathEnc = c.req.param('projectPath');
+    if (!projectPathEnc) return null;
+    return { host, projectPath: decodeURIComponent(projectPathEnc) };
+  }
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  if (!owner || !repo) return null;
+  return { host: 'github.com', projectPath: `${owner}/${repo}` };
+}
 
 export async function resultRoute(c: Context): Promise<Response> {
   const env = c.env as Env;
   const req = c.req.raw;
-  const owner = c.req.param('owner');
-  const repo = c.req.param('repo');
+  const repo = repoFromParams(c);
   const sha = c.req.param('sha');
-  if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
+  if (!repo || !sha) return new Response('not found', { status: 404 });
   const strict = c.req.query('strict') === '1' || c.req.query('strict') === 'true';
   const includePrereleases =
     c.req.query('prereleases') === '1' || c.req.query('prereleases') === 'true';
@@ -36,28 +53,25 @@ export async function resultRoute(c: Context): Promise<Response> {
   const pubBase = publicBaseUrl(env, req);
   const ogBase = ogBaseUrl(env, req);
   const isBot = isUnfurlBot(req);
+  const displayName = repo.projectPath;
 
-  // Parse + cache lookup
-  let parsed: LookupInput;
-  try {
-    parsed = parseInput(`${owner}/${repo}`, sha);
-  } catch (err) {
-    // Bounce through the homepage's friendly error UI, with the bad input
-    // preserved so the user can edit-and-retry.
-    const original = `${owner}/${repo}@${sha}`;
-    const reason = (err as { kind?: string })?.kind ?? 'invalid';
+  // Build the canonical input. Validates SHA shape implicitly via parseInput's
+  // SHA regex behavior (we replicate it here directly to avoid double-parsing).
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) {
+    const original = `${displayName}@${sha}`;
     return new Response(null, {
       status: 302,
       headers: {
-        location: `/?bad=${encodeURIComponent(original)}&reason=${encodeURIComponent(reason)}`,
+        location: `/?bad=${encodeURIComponent(original)}&reason=invalid_input`,
       },
     });
   }
+  const parsed: LookupInput = { kind: 'commit', repo, sha: sha.toLowerCase() };
 
   const k = await cacheKey(
     'res',
-    `${owner}/${repo}`,
-    `sha:${parsed.kind === 'commit' ? parsed.sha : sha}`,
+    `${repo.host}/${repo.projectPath}`,
+    `sha:${parsed.sha}`,
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
   );
@@ -67,13 +81,19 @@ export async function resultRoute(c: Context): Promise<Response> {
   // Slackbot/unfurl handling: if no cache + we'd need to compute, return a
   // deferred-render card with short TTL so Slack retries instead of caching an error.
   if (!result && isBot) {
-    return renderDeferred({ pubBase, ogBase, nonce, owner, repo, sha });
+    return renderDeferred({ pubBase, ogBase, nonce, repo, sha });
   }
 
   // Compute if not cached
   if (!result) {
-    const token = resolveToken(env, req);
-    const client = makeGithubClient({ token });
+    const extraGitlabHosts = extraGitlabHostsFromEnv(env);
+    let client;
+    try {
+      const token = resolveProviderToken(env, req, repo.host);
+      client = providerFor(repo.host, { token, extraGitlabHosts });
+    } catch (err) {
+      return renderError(err, { pubBase, ogBase, nonce });
+    }
     try {
       result = await singleFlight(k, async () => {
         const re = await cache.get<LookupResult>(k);
@@ -84,16 +104,12 @@ export async function resultRoute(c: Context): Promise<Response> {
         return r;
       });
     } catch (err) {
-      // For unfurl bots, NEVER return a long-cached error.
-      if (isBot) return renderDeferred({ pubBase, ogBase, nonce, owner, repo, sha });
-      // "Not yet released" is a valid answer, not an error. Render it like a
-      // result with the optional strict-mode hint when tags were culled.
+      if (isBot) return renderDeferred({ pubBase, ogBase, nonce, repo, sha });
       if (err instanceof NotYetReleasedError) {
         return renderNotYetReleased(err, {
           pubBase,
           ogBase,
           nonce,
-          owner,
           repo,
           sha,
           strict,
@@ -104,19 +120,29 @@ export async function resultRoute(c: Context): Promise<Response> {
     }
   }
 
-  const repoQuery = `${owner}/${repo}`;
-  const inputVal = result.input.kind === 'pr'
-    ? `${repoQuery}#${result.input.number}`
-    : `${repoQuery}@${result.canonicalSha.slice(0, 7)}`;
+  // Form pre-fill needs to round-trip through parseInput. GitHub's shorthand
+  // forms (`owner/repo#N`, `owner/repo@sha`) are GitHub-only — using them on
+  // a GitLab result would make the next submit fail or route to the wrong host.
+  // For non-GitHub we pre-fill `result.urls.*`, which parseInput always handles.
+  const inputVal =
+    repo.host === 'github.com'
+      ? result.input.kind === 'pr'
+        ? `${displayName}#${result.input.number}`
+        : `${displayName}@${result.canonicalSha.slice(0, 7)}`
+      : result.input.kind === 'pr'
+        ? (result.urls.pullRequest ?? result.urls.commit)
+        : result.urls.commit;
 
   const inlineData = JSON.stringify(result).replace(/</g, '\\u003c');
+  const shortSha = result.canonicalSha.slice(0, 7);
+  const permalink = `${pubBase}${commitPermalinkPath(repo, shortSha)}`;
 
   const page = (
     <Layout
-      title={`${result.firstRelease ? result.firstRelease.tag : 'not yet released'} — ${repoQuery}`}
+      title={`${result.firstRelease ? result.firstRelease.tag : 'not yet released'} — ${displayName}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={`${pubBase}/r/${owner}/${repo}/c/${result.canonicalSha.slice(0, 7)}`}
+      publicUrl={permalink}
       ogResult={result}
     >
       <Nav />
@@ -127,7 +153,8 @@ export async function resultRoute(c: Context): Promise<Response> {
             <button type="submit">
               <span class="btn-label">Is it released? →</span>
               <span class="btn-loading" aria-hidden="true">
-                Looking up<span class="dots" />
+                Looking up
+                <span class="dots" />
               </span>
             </button>
           </div>
@@ -136,13 +163,7 @@ export async function resultRoute(c: Context): Promise<Response> {
       <main style="padding-top: 24px;">
         <ResultCard result={result} publicBaseUrl={pubBase} />
       </main>
-      <script
-        nonce={nonce}
-        // Expose the result to client.js for the copy buttons.
-        // The string was escaped above so a </script> can't break out.
-      >
-        {raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}
-      </script>
+      <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
       <footer>
         <a href="/how-it-works">how it works</a>
         <a href="https://www.npmjs.com/package/released">CLI</a>
@@ -164,18 +185,19 @@ function renderDeferred(args: {
   pubBase: string;
   ogBase: string;
   nonce: string;
-  owner: string;
-  repo: string;
+  repo: RepoRef;
   sha: string;
 }): Response {
-  const { pubBase, ogBase, nonce, owner, repo, sha } = args;
+  const { pubBase, ogBase, nonce, repo, sha } = args;
+  const displayName = repo.projectPath;
+  const permalink = `${pubBase}${commitPermalinkPath(repo, sha)}`;
   const page = (
     <Layout
-      title={`looking up — ${owner}/${repo}`}
+      title={`looking up — ${displayName}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={`${pubBase}/r/${owner}/${repo}/c/${sha}`}
-      ogFallbackTitle={`released — looking up ${owner}/${repo}@${sha}`}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — looking up ${displayName}@${sha}`}
     >
       <Nav />
       <main>
@@ -184,7 +206,7 @@ function renderDeferred(args: {
             <div class="answer-label">Looking up…</div>
             <div class="answer-version">
               <span class="v" style="font-size: 32px;">
-                {owner}/{repo}@{sha}
+                {displayName}@{sha}
               </span>
             </div>
             <div class="answer-date">Refresh in a moment for the answer.</div>
@@ -196,7 +218,6 @@ function renderDeferred(args: {
   return new Response(`<!DOCTYPE html>${page.toString()}`, {
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      // Short TTL: the bot should re-fetch quickly. NEVER long-cache an error.
       'cache-control': 'public, max-age=60',
       ...securityHeaders(nonce, ogBase),
     },
@@ -209,34 +230,39 @@ function renderNotYetReleased(
     pubBase: string;
     ogBase: string;
     nonce: string;
-    owner: string;
-    repo: string;
+    repo: RepoRef;
     sha: string;
     strict: boolean;
     includePrereleases: boolean;
   },
 ): Response {
-  const { pubBase, ogBase, nonce, owner, repo, sha, strict, includePrereleases } = args;
-  const perma = `${pubBase}/r/${owner}/${repo}/c/${sha}`;
-  const strictHref = `${perma}?strict=1`;
-  const prereleaseHref = `${perma}?prereleases=1`;
+  const { pubBase, ogBase, nonce, repo, sha, strict, includePrereleases } = args;
+  const displayName = repo.projectPath;
+  const permalink = `${pubBase}${commitPermalinkPath(repo, sha)}`;
+  const strictHref = `${permalink}?strict=1`;
+  const prereleaseHref = `${permalink}?prereleases=1`;
   const showStrictHint = err.culledTagCount > 0 && !strict;
   const showPreHint = err.prereleasedSkippedCount > 0 && !includePrereleases;
+  const provider = providerFor(repo.host, { extraGitlabHosts: [] }); // URLs only — token not needed
   const synthetic: LookupResult = {
-    input: { kind: 'commit', repo: { owner, repo }, sha: err.sha },
+    input: { kind: 'commit', repo, sha: err.sha },
     canonicalSha: err.sha,
     firstRelease: null,
     alsoIn: [],
     releaseNotesHtml: null,
     rateLimit: null,
+    urls: {
+      repo: provider.urls.repo(repo),
+      commit: provider.urls.commit(repo, err.sha),
+    },
   };
   const page = (
     <Layout
-      title={`not yet released — ${owner}/${repo}`}
+      title={`not yet released — ${displayName}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={perma}
-      ogFallbackTitle={`released — ${owner}/${repo}@${sha}: not yet released`}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — ${displayName}@${sha}: not yet released`}
     >
       <Nav />
       <main style="padding-top: 24px;">
@@ -254,7 +280,6 @@ function renderNotYetReleased(
     </Layout>
   );
   return new Response(`<!DOCTYPE html>${page.toString()}`, {
-    // 200 — "not yet released" is a real answer, not an error.
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'public, max-age=300',
@@ -263,7 +288,10 @@ function renderNotYetReleased(
   });
 }
 
-function renderError(err: unknown, args: { pubBase: string; ogBase: string; nonce: string }): Response {
+function renderError(
+  err: unknown,
+  args: { pubBase: string; ogBase: string; nonce: string },
+): Response {
   const { pubBase, ogBase, nonce } = args;
   const msg = err instanceof ReleasedError ? err.message : 'Something went wrong.';
   const status = err instanceof ReleasedError ? 404 : 500;

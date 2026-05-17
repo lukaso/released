@@ -6,9 +6,9 @@
 //   → Cache 24h. On data miss, render a neutral placeholder with short TTL
 //     (never a long-cached error).
 
-import { ImageResponse } from 'workers-og';
+import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
 import { Hono } from 'hono';
-import { OG_TEMPLATE_VERSION, type LookupResult } from '@released/core';
+import { ImageResponse } from 'workers-og';
 
 type Env = {
   WEB: Fetcher;
@@ -72,7 +72,7 @@ function renderImage(
 function ResultCard(r: LookupResult) {
   const tag = r.firstRelease?.tag ?? 'not yet released';
   const date = r.firstRelease ? r.firstRelease.date.slice(0, 10) : '';
-  const repo = `${r.input.repo.owner}/${r.input.repo.repo}`;
+  const repo = r.input.repo.projectPath;
   const sha = r.canonicalSha.slice(0, 7);
 
   return (
@@ -91,7 +91,9 @@ function ResultCard(r: LookupResult) {
     >
       {/* top: wordmark + meta */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 28, fontWeight: 600 }}>
+        <div
+          style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 28, fontWeight: 600 }}
+        >
           <div style={{ width: 14, height: 14, borderRadius: 7, background: '#52a8ff' }} />
           <span>released</span>
         </div>
@@ -120,7 +122,14 @@ function ResultCard(r: LookupResult) {
         <span>First released in</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 24 }}>
-        <div style={{ fontFamily: 'Geist Mono, monospace', fontWeight: 700, fontSize: 140, lineHeight: 1 }}>
+        <div
+          style={{
+            fontFamily: 'Geist Mono, monospace',
+            fontWeight: 700,
+            fontSize: 140,
+            lineHeight: 1,
+          }}
+        >
           {tag}
         </div>
         {r.firstRelease && (
@@ -161,9 +170,8 @@ function ResultCard(r: LookupResult) {
 }
 
 function PlaceholderCard(ctx: { owner: string; repo: string; sha: string }) {
-  const label = ctx.owner && ctx.repo
-    ? `${ctx.owner}/${ctx.repo} @ ${ctx.sha.slice(0, 7)}`
-    : 'released';
+  const label =
+    ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo} @ ${ctx.sha.slice(0, 7)}` : 'released';
   return (
     <div
       style={{
@@ -179,12 +187,23 @@ function PlaceholderCard(ctx: { owner: string; repo: string; sha: string }) {
         fontFamily: 'Geist, sans-serif',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, fontSize: 40, fontWeight: 600, marginBottom: 40 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 16,
+          fontSize: 40,
+          fontWeight: 600,
+          marginBottom: 40,
+        }}
+      >
         <div style={{ width: 18, height: 18, borderRadius: 9, background: '#52a8ff' }} />
         <span>released</span>
       </div>
       <div style={{ fontSize: 28, color: '#a1a1a1', marginBottom: 12 }}>Looking up…</div>
-      <div style={{ fontFamily: 'Geist Mono, monospace', fontSize: 24, color: '#6e6e6e' }}>{label}</div>
+      <div style={{ fontFamily: 'Geist Mono, monospace', fontSize: 24, color: '#6e6e6e' }}>
+        {label}
+      </div>
     </div>
   );
 }

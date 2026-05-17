@@ -2,22 +2,22 @@
 // CLI entry. Use either `released <input>` or — when symlinked / installed via
 // npm's bin field — `git released <input>` (git auto-discovers git-* on PATH).
 
-import { cac } from 'cac';
 import {
-  cacheKey,
-  findRelease,
   type LookupResult,
-  makeGithubClient,
   NoReleasesError,
   NotYetReleasedError,
-  parseInput,
   PrNotMergedError,
   RateLimitError,
   ReleasedError,
+  cacheKey,
+  findRelease,
+  parseInput,
+  providerFor,
 } from '@released/core';
+import { cac } from 'cac';
 import { resolveToken } from './auth.js';
 import { makeFileCache } from './cache.js';
-import { formatResult, type FormatKind } from './format.js';
+import { type FormatKind, formatResult } from './format.js';
 
 type Flags = {
   json?: boolean;
@@ -43,8 +43,8 @@ cli
   .option('--no-cache', 'Bypass local cache.')
   .option(
     '--strict',
-    "Disable the 90-day date cull. Slower on repos with imported pre-history (CVS/SVN), " +
-      "but finds containing tags whose underlying commits have manually-backdated dates.",
+    'Disable the 90-day date cull. Slower on repos with imported pre-history (CVS/SVN), ' +
+      'but finds containing tags whose underlying commits have manually-backdated dates.',
   )
   .option(
     '--include-prereleases',
@@ -65,7 +65,11 @@ cli.parse();
 
 // --- impl --------------------------------------------------------------------
 
-async function run(input: string | undefined, ref: string | undefined, flags: Flags): Promise<number> {
+async function run(
+  input: string | undefined,
+  ref: string | undefined,
+  flags: Flags,
+): Promise<number> {
   if (!input) {
     process.stderr.write('error: missing input. Try `released --help`.\n');
     return 2;
@@ -74,14 +78,14 @@ async function run(input: string | undefined, ref: string | undefined, flags: Fl
 
   try {
     const parsed = parseInput(input, ref);
-    const token = await resolveToken({ tokenFlag: flags.token });
-    const client = makeGithubClient({ token });
+    const token = await resolveToken({ tokenFlag: flags.token, host: parsed.repo.host });
+    const client = providerFor(parsed.repo.host, { token });
     const cache = flags.noCache ? null : makeFileCache();
 
     let result: LookupResult | null = null;
     const cacheK = await cacheKey(
       'res',
-      `${parsed.repo.owner}/${parsed.repo.repo}`,
+      `${parsed.repo.host}/${parsed.repo.projectPath}`,
       refKey(parsed),
       flags.strict ? 'strict' : 'cull',
       flags.includePrereleases ? 'pre' : 'nopre',
@@ -123,7 +127,8 @@ function reportError(err: unknown, format: FormatKind, flags: Flags): number {
     const env: Record<string, unknown> = { error: err.kind, message: err.message };
     if (err instanceof NotYetReleasedError) {
       if (err.culledTagCount > 0) env.culledTagCount = err.culledTagCount;
-      if (err.prereleasedSkippedCount > 0) env.prereleasedSkippedCount = err.prereleasedSkippedCount;
+      if (err.prereleasedSkippedCount > 0)
+        env.prereleasedSkippedCount = err.prereleasedSkippedCount;
       const hints: string[] = [];
       if (err.prereleasedSkippedCount > 0 && !flags.includePrereleases) {
         hints.push('try --include-prereleases to also check alpha/beta/rc tags');

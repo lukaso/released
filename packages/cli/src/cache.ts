@@ -15,7 +15,9 @@ export type FileCacheOpts = {
   maxEntries?: number;
 };
 
-export function makeFileCache(opts: FileCacheOpts = {}): CacheStore & { clear(): Promise<void>; dir: string } {
+export function makeFileCache(
+  opts: FileCacheOpts = {},
+): CacheStore & { clear(): Promise<void>; dir: string } {
   const dir = opts.dir ?? join(homedir(), '.cache', 'released');
   const maxEntries = opts.maxEntries ?? 1000;
 

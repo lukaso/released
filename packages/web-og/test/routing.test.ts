@@ -29,23 +29,31 @@ describe('web-og routing', () => {
   });
 
   it('rejects a non-.png URL with 404', async () => {
-    const res = await app.fetch(
-      new Request('https://og.example/r/o/r/c/abc1234.svg'),
-      makeEnv(),
-    );
+    const res = await app.fetch(new Request('https://og.example/r/o/r/c/abc1234.svg'), makeEnv());
     expect(res.status).toBe(404);
   });
 
   it('calls the WEB service binding with the internal secret header', async () => {
-    const env = makeEnv(new Response(JSON.stringify({
-      input: { kind: 'commit', repo: { owner: 'facebook', repo: 'react' }, sha: 'a'.repeat(40) },
-      canonicalSha: 'a'.repeat(40),
-      firstRelease: { tag: 'v1.0.0', sha: 's', date: '2024-01-01T00:00:00Z', url: '' },
-      alsoIn: [],
-      releaseNotesHtml: null,
-      rateLimit: null,
-    })));
-    const res = await app.fetch(new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'), env);
+    const env = makeEnv(
+      new Response(
+        JSON.stringify({
+          input: {
+            kind: 'commit',
+            repo: { owner: 'facebook', repo: 'react' },
+            sha: 'a'.repeat(40),
+          },
+          canonicalSha: 'a'.repeat(40),
+          firstRelease: { tag: 'v1.0.0', sha: 's', date: '2024-01-01T00:00:00Z', url: '' },
+          alsoIn: [],
+          releaseNotesHtml: null,
+          rateLimit: null,
+        }),
+      ),
+    );
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      env,
+    );
     expect(res.status).toBe(200);
     // The service binding was called.
     expect(env.WEB.fetch).toHaveBeenCalled();
@@ -55,7 +63,10 @@ describe('web-og routing', () => {
 
   it('returns a placeholder PNG with SHORT cache when the service binding misses', async () => {
     const env = makeEnv(new Response('not found', { status: 404 }));
-    const res = await app.fetch(new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'), env);
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      env,
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
   });

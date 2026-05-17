@@ -2,17 +2,17 @@
 // Wraps findRelease with the in-isolate single-flight guard and the Cloudflare
 // Cache API for cross-request reuse.
 
-import type { Context } from 'hono';
 import {
-  cacheKey,
-  findRelease,
-  makeGithubClient,
-  parseInput,
-  ReleasedError,
   type LookupInput,
   type LookupResult,
+  ReleasedError,
+  cacheKey,
+  findRelease,
+  parseInput,
+  providerFor,
 } from '@released/core';
-import { checkSameOrigin, resolveToken } from '../auth.js';
+import type { Context } from 'hono';
+import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
 import { singleFlight } from '../single-flight.js';
@@ -46,13 +46,20 @@ export async function lookupRoute(c: Context): Promise<Response> {
     return errorResponse(err);
   }
 
-  const token = resolveToken(env, req);
-  const client = makeGithubClient({ token });
+  const token = resolveProviderToken(env, req, parsed.repo.host);
+  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
+  let client;
+  try {
+    client = providerFor(parsed.repo.host, { token, extraGitlabHosts });
+  } catch (err) {
+    return errorResponse(err);
+  }
   const cache = makeWorkerCache(req);
   // Mode-specific cache key so default / strict / +prereleases don't clobber.
+  // Key includes host so github.com/foo/bar and gitlab.com/foo/bar don't collide.
   const k = await cacheKey(
     'res',
-    `${parsed.repo.owner}/${parsed.repo.repo}`,
+    `${parsed.repo.host}/${parsed.repo.projectPath}`,
     parsed.kind === 'pr' ? `pr#${parsed.number}` : `sha:${parsed.sha}`,
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
@@ -94,10 +101,13 @@ function errorResponse(err: unknown): Response {
       headers: { 'content-type': 'application/json' },
     });
   }
-  return new Response(JSON.stringify({ error: 'internal', message: (err as Error)?.message ?? 'unknown' }), {
-    status: 500,
-    headers: { 'content-type': 'application/json' },
-  });
+  return new Response(
+    JSON.stringify({ error: 'internal', message: (err as Error)?.message ?? 'unknown' }),
+    {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    },
+  );
 }
 
 function jsonErr(error: string, status: number): Response {
@@ -110,6 +120,7 @@ function jsonErr(error: string, status: number): Response {
 function statusFor(kind: string): number {
   switch (kind) {
     case 'non_github_url':
+    case 'unsupported_host':
     case 'invalid_input':
     case 'bulk_limit':
       return 400;
@@ -125,6 +136,7 @@ function statusFor(kind: string): number {
     case 'rate_limit':
       return 429;
     case 'github_server_error':
+    case 'provider_server_error':
     case 'network_error':
     case 'lookup_timeout':
       return 503;

@@ -1,8 +1,9 @@
 // Shared result-card rendering. Used by routes/result.tsx (permalink page)
 // and routes/home.tsx (the labeled EXAMPLE on the homepage).
 
-import { raw } from 'hono/html';
 import type { LookupResult } from '@released/core';
+import { raw } from 'hono/html';
+import { commitPermalinkPath } from '../paths.js';
 
 export type ResultCardProps = {
   result: LookupResult;
@@ -22,73 +23,74 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
   if (result.partial && !result.firstRelease) return <PartialResult result={result} />;
   if (!result.firstRelease) return <NotYetReleased result={result} />;
   const r = result.firstRelease;
-  const owner = result.input.repo.owner;
-  const repoName = result.input.repo.repo;
-  const repo = `${owner}/${repoName}`;
+  const repoDisplay = result.input.repo.projectPath;
   const shortSha = result.canonicalSha.slice(0, 7);
-  const perma = `${publicBaseUrl}/r/${owner}/${repoName}/c/${shortSha}`;
-  // GitHub URL for the original commit — uses full SHA for unambiguous link.
-  const commitUrl = `https://github.com/${owner}/${repoName}/commit/${result.canonicalSha}`;
-  // r.url is already the GitHub release URL.
+  const perma = `${publicBaseUrl}${commitPermalinkPath(result.input.repo, shortSha)}`;
   return (
     <>
       {result.partial && <BestEffortBanner result={result} />}
       <div class={`answer ${asExample ? 'example' : ''}`}>
-      <div class="answer-hero">
-        <div class="answer-label">
-          <span class="ship-dot" />
-          First released in
-        </div>
-        <div class="answer-version">
-          {/* The version tag is a link to the GitHub release. */}
-          <a class="v" href={r.url} style="text-decoration: none; color: inherit;">
-            {r.tag}
-          </a>
-          <span class="ship">SHIPPED</span>
-        </div>
-        <div class="answer-date">
-          <b>{formatDate(r.date)}</b> · shipped {relativeFromCommit(result.canonicalSha, r.date)}
-        </div>
-        <div class="answer-actions">
-          <span class="share-lbl">Copy</span>
-          <button class="btn-fmt primary" data-copy="markdown">as Markdown</button>
-          <button class="btn-fmt" data-copy="slack">for Slack</button>
-          <button class="btn-fmt" data-copy="link">link only</button>
-          <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>
-        </div>
-      </div>
-
-      <div class="answer-meta">
-        <a class="repo" href={`https://github.com/${owner}/${repoName}`}>
-          {repo}
-        </a>
-        <a href={commitUrl}>commit {shortSha}</a>
-      </div>
-
-      {result.releaseNotesHtml && (
-        <div class="answer-sec">
-          <div class="sec-label">
-            Release notes — <a href={r.url}>{r.tag}</a>
+        <div class="answer-hero">
+          <div class="answer-label">
+            <span class="ship-dot" />
+            First released in
           </div>
-          {/* raw() — releaseNotesHtml has already been sanitized via micromark
+          <div class="answer-version">
+            {/* The version tag is a link to the provider's release page. */}
+            <a class="v" href={r.url} style="text-decoration: none; color: inherit;">
+              {r.tag}
+            </a>
+            <span class="ship">SHIPPED</span>
+          </div>
+          <div class="answer-date">
+            <b>{formatDate(r.date)}</b> · shipped {relativeFromCommit(result.canonicalSha, r.date)}
+          </div>
+          <div class="answer-actions">
+            <span class="share-lbl">Copy</span>
+            <button class="btn-fmt primary" data-copy="markdown">
+              as Markdown
+            </button>
+            <button class="btn-fmt" data-copy="slack">
+              for Slack
+            </button>
+            <button class="btn-fmt" data-copy="link">
+              link only
+            </button>
+            <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>
+          </div>
+        </div>
+
+        <div class="answer-meta">
+          <a class="repo" href={result.urls.repo}>
+            {repoDisplay}
+          </a>
+          <a href={result.urls.commit}>commit {shortSha}</a>
+        </div>
+
+        {result.releaseNotesHtml && (
+          <div class="answer-sec">
+            <div class="sec-label">
+              Release notes — <a href={r.url}>{r.tag}</a>
+            </div>
+            {/* raw() — releaseNotesHtml has already been sanitized via micromark
               in core/release-notes.ts. The html`` tagged template was double-
               escaping the result; raw() passes it through correctly. */}
-          <div class="notes-html">{raw(result.releaseNotesHtml)}</div>
-        </div>
-      )}
-
-      {result.alsoIn.length > 0 && (
-        <div class="answer-sec alsoin">
-          <div class="sec-label">Also contained in</div>
-          <div class="versions">
-            {result.alsoIn.map((h) => (
-              <a class="v-chip" href={h.url}>
-                {h.tag}
-              </a>
-            ))}
+            <div class="notes-html">{raw(result.releaseNotesHtml)}</div>
           </div>
-        </div>
-      )}
+        )}
+
+        {result.alsoIn.length > 0 && (
+          <div class="answer-sec alsoin">
+            <div class="sec-label">Also contained in</div>
+            <div class="versions">
+              {result.alsoIn.map((h) => (
+                <a class="v-chip" href={h.url}>
+                  {h.tag}
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
@@ -120,10 +122,10 @@ function BestEffortBanner({ result }: { result: LookupResult }) {
 }
 
 function PartialResult({ result }: { result: LookupResult }) {
-  const owner = result.input.repo.owner;
-  const repoName = result.input.repo.repo;
+  const repoDisplay = result.input.repo.projectPath;
   const sha = result.canonicalSha.slice(0, 7);
-  const commitUrl = `https://github.com/${owner}/${repoName}/commit/${result.canonicalSha}`;
+  const isGithub = result.input.repo.host === 'github.com';
+  const viewLabel = isGithub ? 'View commit on GitHub' : `View commit on ${result.input.repo.host}`;
   const checkedSoFar = result.partial?.candidatesTried ?? 0;
   return (
     <div class="answer">
@@ -136,17 +138,15 @@ function PartialResult({ result }: { result: LookupResult }) {
         </div>
         <div class="answer-date">
           This is a large repo. Checked <b>{checkedSoFar}</b> tags before the time budget ran out.
-          Refresh in a moment to continue (the cache will resume from where we left off), or use
-          the CLI for guaranteed completion:
+          Refresh in a moment to continue (the cache will resume from where we left off), or use the
+          CLI for guaranteed completion:
         </div>
-        <div
-          style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--text);"
-        >
-          npx released {owner}/{repoName} {sha}
+        <div style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--text);">
+          npx released {result.urls.commit}
         </div>
         <div class="answer-actions" style="margin-top: 16px;">
-          <a class="btn-fmt primary" href={commitUrl} style="text-decoration: none;">
-            View commit on GitHub
+          <a class="btn-fmt primary" href={result.urls.commit} style="text-decoration: none;">
+            {viewLabel}
           </a>
         </div>
       </div>
@@ -188,7 +188,9 @@ export function PrereleaseHint({
       style="margin-bottom: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
     >
       <div class="answer-hero" style="padding: 16px 22px;">
-        <div class="answer-label" style="margin-bottom: 6px;">Hint</div>
+        <div class="answer-label" style="margin-bottom: 6px;">
+          Hint
+        </div>
         <div style="font-size: 14px; color: var(--text-2);">
           We searched only <b>production releases</b>. {skipped} prerelease tag
           {skipped === 1 ? '' : 's'} (alpha / beta / rc / etc) {skipped === 1 ? 'was' : 'were'}{' '}
@@ -218,10 +220,12 @@ export function StrictHint({
       style="margin-bottom: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
     >
       <div class="answer-hero" style="padding: 16px 22px;">
-        <div class="answer-label" style="margin-bottom: 6px;">Hint</div>
+        <div class="answer-label" style="margin-bottom: 6px;">
+          Hint
+        </div>
         <div style="font-size: 14px; color: var(--text-2);">
-          {culled} older tag{culled === 1 ? '' : 's'} skipped by the 90-day date cull.
-          If a containing tag might have a manually-backdated commit,{' '}
+          {culled} older tag{culled === 1 ? '' : 's'} skipped by the 90-day date cull. If a
+          containing tag might have a manually-backdated commit,{' '}
           <a href={retryHref} style="color: var(--accent);">
             re-run in strict mode
           </a>

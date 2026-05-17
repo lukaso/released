@@ -16,13 +16,20 @@ export function OgMeta(props: OgMetaInput) {
   const { ogBaseUrl, publicUrl, result, fallbackTitle } = props;
   const title = result?.firstRelease
     ? `${result.firstRelease.tag} — shipped ${shortDate(result.firstRelease.date)}`
-    : fallbackTitle ?? 'released';
+    : (fallbackTitle ?? 'released');
   const desc = result
-    ? `${shortSha(result.canonicalSha)} in ${result.input.repo.owner}/${result.input.repo.repo}`
+    ? `${shortSha(result.canonicalSha)} in ${result.input.repo.projectPath}`
     : 'Find the first release that contains a commit.';
-  const imgUrl = result
-    ? `${ogBaseUrl}/r/${result.input.repo.owner}/${result.input.repo.repo}/c/${shortSha(result.canonicalSha)}.png?v=${OG_TEMPLATE_VERSION}`
-    : `${ogBaseUrl}/placeholder.png?v=${OG_TEMPLATE_VERSION}`;
+  // OG image URL: keep the GitHub-only `/r/o/r/c/sha.png` scheme for github.com.
+  // For other providers, fall back to the placeholder (federated OG image
+  // rendering deferred to a follow-up).
+  const imgUrl =
+    result && result.input.repo.host === 'github.com'
+      ? (() => {
+          const [owner, name] = result.input.repo.projectPath.split('/');
+          return `${ogBaseUrl}/r/${owner}/${name}/c/${shortSha(result.canonicalSha)}.png?v=${OG_TEMPLATE_VERSION}`;
+        })()
+      : `${ogBaseUrl}/placeholder.png?v=${OG_TEMPLATE_VERSION}`;
   return (
     <>
       <meta property="og:type" content="website" />

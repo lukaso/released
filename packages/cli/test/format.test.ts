@@ -1,12 +1,16 @@
-import { describe, expect, it } from 'vitest';
 import type { LookupResult } from '@released/core';
+import { describe, expect, it } from 'vitest';
 import { formatResult } from '../src/format.js';
 
 const RESULT: LookupResult = {
   input: {
     kind: 'commit',
-    repo: { owner: 'facebook', repo: 'react' },
+    repo: { host: 'github.com', projectPath: 'facebook/react' },
     sha: 'a1b2c3d4e5f67890abcdef1234567890abcdef12',
+  },
+  urls: {
+    repo: 'https://github.com/facebook/react',
+    commit: 'https://github.com/facebook/react/commit/a1b2c3d4e5f67890abcdef1234567890abcdef12',
   },
   canonicalSha: 'a1b2c3d4e5f67890abcdef1234567890abcdef12',
   firstRelease: {
@@ -46,7 +50,9 @@ describe('formatResult — slack', () => {
   it('uses Slack mrkdwn syntax', () => {
     const out = formatResult(RESULT, 'slack');
     expect(out).toContain('*v18.2.0*'); // bold via *…*
-    expect(out).toContain('<https://released.blabberate.com/r/facebook/react/c/a1b2c3d|see details>');
+    expect(out).toContain(
+      '<https://released.blabberate.com/r/facebook/react/c/a1b2c3d|see details>',
+    );
     expect(out).toContain('`a1b2c3d`'); // inline code via backticks
   });
 });

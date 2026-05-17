@@ -2,12 +2,20 @@
 
 Find the first release containing a git commit.
 
-Paste a commit SHA, a merged PR number, or a GitHub commit URL — get back the
+Paste a commit SHA, a merged PR/MR number, or a commit URL — get back the
 first release tag that contains it, plus a copy-pasteable permalink for Slack,
-GitHub PR comments, or just a plain link.
+PR/MR comments, or just a plain link.
+
+**Supported hosts:** GitHub plus a curated list of GitLab instances (gitlab.com,
+gitlab.gnome.org, gitlab.freedesktop.org, salsa.debian.org, invent.kde.org,
+gitlab.kitware.com). Self-hosted GitLab instances can be added via
+`EXTRA_GITLAB_HOSTS` env var (Worker) or `--gitlab-host` flag (CLI).
 
 - **Web**: <https://released.blabberate.com>
-- **CLI**: `npx released github.com/facebook/react/commit/a1b2c3d` (or `git released a1b2c3d`)
+- **CLI**:
+  - `npx released github.com/facebook/react/commit/a1b2c3d`
+  - `npx released https://gitlab.gnome.org/GNOME/gimp/-/merge_requests/2466`
+  - or `git released a1b2c3d` for the current repo
 
 ## Packages
 
@@ -15,7 +23,7 @@ This is a pnpm monorepo with four packages:
 
 | Package | What | Where |
 |---|---|---|
-| `@released/core` | Pure-TS library: algorithm, GitHub client, sanitizer, parser. Web Platform APIs only — runs in Node 20+ and Cloudflare Workers unchanged. | `packages/core/` |
+| `@released/core` | Pure-TS library: algorithm, GitHub + GitLab providers, sanitizer, parser. Web Platform APIs only — runs in Node 20+ and Cloudflare Workers unchanged. | `packages/core/` |
 | `released` | Node CLI (`released` + `git-released` bin aliases). | `packages/cli/` |
 | `@released/web` | Cloudflare Worker — homepage + permalink page + JSON API. | `packages/web/` |
 | `@released/web-og` | Cloudflare Worker — OG-image PNG renderer (isolated bundle weight). Service Binding to `@released/web`. | `packages/web-og/` |
@@ -24,7 +32,7 @@ This is a pnpm monorepo with four packages:
 
 ```bash
 pnpm install
-pnpm -r test          # 70+ tests across packages
+pnpm -r test          # 180+ tests across packages
 pnpm -r typecheck
 pnpm -r build
 ```
@@ -49,6 +57,23 @@ Order matters — `web-og` has a Service Binding to `web`, so `web` deploys firs
    ```bash
    cd packages/web
    wrangler secret put GITHUB_TOKEN
+   ```
+
+   For GitLab — anonymous calls from Workers exhaust the edge IP's shared
+   budget almost immediately, so a token is effectively required for
+   federation:
+
+   ```bash
+   # gitlab.com (most common case):
+   cd packages/web && wrangler secret put GITLAB_TOKEN
+
+   # Per-host PAT for a specific self-hosted instance. Name is uppercased
+   # with `.` and `-` → `_`. Example for gitlab.gnome.org:
+   wrangler secret put GITLAB_TOKEN_GITLAB_GNOME_ORG
+
+   # To extend the known-hosts allowlist (so users can paste URLs from
+   # additional self-hosted instances), set the env var in wrangler.toml:
+   #   EXTRA_GITLAB_HOSTS = "git.example.com,gitlab.acme.net"
    ```
 
 2. **Internal secret** shared between `web` and `web-og` (used by `web` to
@@ -95,7 +120,8 @@ secrets:
 ```
 packages/core   (pure TS — runs in Node + Workers)
    │
-   ├─► packages/cli       (Node CLI; auth = --token | GITHUB_TOKEN | gh auth)
+   ├─► packages/cli       (Node CLI; GitHub auth = --token | GITHUB_TOKEN | gh auth,
+   │                       GitLab auth = --token | GITLAB_TOKEN[_<HOST>] | glab auth)
    │
    └─► packages/web       (Cloudflare Worker — homepage, /r/:o/:r/c/:sha, /api/*)
                   │

@@ -1,8 +1,18 @@
 // Smart-input parser (CP5).
 // Accepts the single-arg "paste anything reasonable" form and the explicit
 // two-arg form (repoUrl, ref).
+//
+// After federation: returns the host-aware RepoRef shape. GitHub URL shapes
+// live here; GitLab URL shapes live in parsers/gitlab.ts (Lane D). The
+// dispatcher (parsers/index.ts) routes URLs to the right table by host.
 
-import { BareShaError, InvalidInputError, NonGithubUrlError } from './errors.js';
+import {
+  BareShaError,
+  InvalidInputError,
+  NonGithubUrlError,
+  UnsupportedHostError,
+} from './errors.js';
+import { KNOWN_GITLAB_HOSTS } from './providers/index.js';
 import type { LookupInput, RepoRef } from './types.js';
 
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
@@ -34,25 +44,43 @@ const BARE_OWNER_REPO_RE = /^([\w.-]+)\/([\w.-]+)$/;
 // shape. Used to surface a more honest error than "non-GitHub URL".
 const ANY_GITHUB_URL_RE = /^(?:https?:\/\/)?github\.com\//i;
 
+// GitLab URL shapes (note the /-/ infix that disambiguates nested subgroups
+// from resource segments). Project path captured greedily as `(.+?)`.
+//   /<group>(/<sub>)*/<project>/-/commit/{sha}[/path][.patch|.diff]
+//   /<group>(/<sub>)*/<project>/-/commits/{sha}[/path]
+//   /<group>(/<sub>)*/<project>/-/blob|tree|blame|raw/{sha}/{path}
+//   /<group>(/<sub>)*/<project>/-/merge_requests/{iid}[/diffs|commits|...]
+//
+// Host portion captured so dispatcher knows which GitLab instance.
+const GITLAB_SHA_URL_RE =
+  /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:commit|commits|blob|tree|blame|raw)\/([0-9a-f]{7,40})(?:\.(?:patch|diff))?(?:\/.*)?$/i;
+const GITLAB_MR_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/i;
+const ANY_GITLAB_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(?:.+?)\/-\//i;
+
+const GITHUB_HOST = 'github.com';
+
 /**
  * Parse user input into a canonical {@link LookupInput}.
  *
- * Single-arg form (`input` only): accepts a GitHub commit URL, PR URL,
- * `owner/repo@sha` shorthand, or `owner/repo#pr` shorthand.
+ * Single-arg form (`input` only): accepts a GitHub or supported-GitLab commit URL,
+ * PR/MR URL, `owner/repo@sha` shorthand (GitHub), or `owner/repo#pr` shorthand (GitHub).
  *
- * Two-arg form (`input` + `ref`): `input` is a repo identifier (URL or
+ * Two-arg form (`input` + `ref`): `input` is a GitHub repo identifier (URL or
  * owner/repo), `ref` is either a SHA (7-40 hex) or a PR number (optionally
- * prefixed with `#`).
+ * prefixed with `#`). The two-arg form is GitHub-only; for GitLab paste the full URL.
  *
- * Non-GitHub URLs throw {@link NonGithubUrlError}. Unrecognized inputs throw
- * {@link InvalidInputError}.
+ * Throws:
+ *  - {@link UnsupportedHostError} for URLs whose host we don't recognize.
+ *  - {@link InvalidInputError} for inputs we can't parse at all.
+ *  - {@link BareShaError} for a SHA pasted without a repo.
+ *  - {@link NonGithubUrlError} (legacy alias) for cases the catch-all needs.
  */
 export function parseInput(input: string, ref?: string): LookupInput {
   const trimmed = (input ?? '').trim();
   if (!trimmed) throw new InvalidInputError(input ?? '');
 
   if (ref !== undefined) {
-    const repo = parseRepoRef(trimmed);
+    const repo = parseGithubRepoRef(trimmed);
     return resolveRef(repo, ref.trim());
   }
 
@@ -60,11 +88,13 @@ export function parseInput(input: string, ref?: string): LookupInput {
   // (but NOT '#', which is a separator in the PR shorthand).
   const stripped = trimmed.replace(/\?.*$/, '').replace(/\/+$/, '');
 
+  // GitHub URL shapes — try first because owner/repo@sha and owner/repo#PR
+  // shorthands have no host and would falsely look like GitLab.
   const shaUrl = stripped.match(GITHUB_SHA_URL_RE);
   if (shaUrl) {
     return {
       kind: 'commit',
-      repo: { owner: shaUrl[1]!, repo: shaUrl[2]! },
+      repo: githubRef(shaUrl[1]!, shaUrl[2]!),
       sha: shaUrl[3]!.toLowerCase(),
     };
   }
@@ -75,7 +105,7 @@ export function parseInput(input: string, ref?: string): LookupInput {
   if (prCommitUrl) {
     return {
       kind: 'commit',
-      repo: { owner: prCommitUrl[1]!, repo: prCommitUrl[2]! },
+      repo: githubRef(prCommitUrl[1]!, prCommitUrl[2]!),
       sha: prCommitUrl[3]!.toLowerCase(),
     };
   }
@@ -84,8 +114,30 @@ export function parseInput(input: string, ref?: string): LookupInput {
   if (prUrl) {
     return {
       kind: 'pr',
-      repo: { owner: prUrl[1]!, repo: prUrl[2]! },
+      repo: githubRef(prUrl[1]!, prUrl[2]!),
       number: Number.parseInt(prUrl[3]!, 10),
+    };
+  }
+
+  // GitLab URL shapes — checked after GitHub, before bareword shorthands.
+  const gitlabSha = stripped.match(GITLAB_SHA_URL_RE);
+  if (gitlabSha) {
+    const host = gitlabSha[1]!.toLowerCase();
+    if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
+    return {
+      kind: 'commit',
+      repo: { host, projectPath: gitlabSha[2]! },
+      sha: gitlabSha[3]!.toLowerCase(),
+    };
+  }
+  const gitlabMr = stripped.match(GITLAB_MR_URL_RE);
+  if (gitlabMr) {
+    const host = gitlabMr[1]!.toLowerCase();
+    if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
+    return {
+      kind: 'pr',
+      repo: { host, projectPath: gitlabMr[2]! },
+      number: Number.parseInt(gitlabMr[3]!, 10),
     };
   }
 
@@ -93,7 +145,7 @@ export function parseInput(input: string, ref?: string): LookupInput {
   if (atSha) {
     return {
       kind: 'commit',
-      repo: { owner: atSha[1]!, repo: atSha[2]! },
+      repo: githubRef(atSha[1]!, atSha[2]!),
       sha: atSha[3]!.toLowerCase(),
     };
   }
@@ -102,7 +154,7 @@ export function parseInput(input: string, ref?: string): LookupInput {
   if (hashPr) {
     return {
       kind: 'pr',
-      repo: { owner: hashPr[1]!, repo: hashPr[2]! },
+      repo: githubRef(hashPr[1]!, hashPr[2]!),
       number: Number.parseInt(hashPr[3]!, 10),
     };
   }
@@ -114,11 +166,13 @@ export function parseInput(input: string, ref?: string): LookupInput {
     const [a, b] = parts as [string, string];
     // Try (repo, ref) order first
     if (BARE_OWNER_REPO_RE.test(a) && (SHA_RE.test(b) || PR_REF_RE.test(b))) {
-      return resolveRef({ owner: a.split('/')[0]!, repo: a.split('/')[1]! }, b);
+      const [owner, name] = a.split('/');
+      return resolveRef(githubRef(owner!, name!), b);
     }
     // Try (ref, repo) order
     if (BARE_OWNER_REPO_RE.test(b) && (SHA_RE.test(a) || PR_REF_RE.test(a))) {
-      return resolveRef({ owner: b.split('/')[0]!, repo: b.split('/')[1]! }, a);
+      const [owner, name] = b.split('/');
+      return resolveRef(githubRef(owner!, name!), a);
     }
   }
 
@@ -129,31 +183,50 @@ export function parseInput(input: string, ref?: string): LookupInput {
   }
 
   if (ANY_GITHUB_URL_RE.test(trimmed)) {
-    // It IS a GitHub URL — just not a path we recognize. Be specific.
     throw new InvalidInputError(
       `${input} — that's a GitHub URL but not one I recognize. ` +
         `I can read /commit/{sha}, /commits/{sha}, /blob|tree|blame|raw/{sha}/..., and /pull/{N}.`,
     );
   }
+  const gitlabShape = trimmed.match(ANY_GITLAB_URL_RE);
+  if (gitlabShape) {
+    const host = gitlabShape[1]!.toLowerCase();
+    if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
+    throw new InvalidInputError(
+      `${input} — that's a ${host} URL but not a shape I recognize. ` +
+        `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., and /-/merge_requests/{N}.`,
+    );
+  }
   if (looksLikeUrl(trimmed)) {
+    // Capture the host so the error message names it.
+    const host = extractHost(trimmed);
+    if (host) throw unsupportedHost(host);
     throw new NonGithubUrlError(trimmed);
   }
   throw new InvalidInputError(input);
 }
 
-function parseRepoRef(s: string): RepoRef {
+function githubRef(owner: string, repo: string): RepoRef {
+  return { host: GITHUB_HOST, projectPath: `${owner}/${repo}` };
+}
+
+function parseGithubRepoRef(s: string): RepoRef {
   const stripped = s.replace(/\?.*$/, '').replace(/\/+$/, '');
 
   const ssh = stripped.match(REPO_SSH_RE);
-  if (ssh) return { owner: ssh[1]!, repo: ssh[2]! };
+  if (ssh) return githubRef(ssh[1]!, ssh[2]!);
 
   const url = stripped.match(REPO_URL_RE);
-  if (url) return { owner: url[1]!, repo: url[2]! };
+  if (url) return githubRef(url[1]!, url[2]!);
 
   const bare = stripped.match(BARE_OWNER_REPO_RE);
-  if (bare) return { owner: bare[1]!, repo: bare[2]! };
+  if (bare) return githubRef(bare[1]!, bare[2]!);
 
-  if (looksLikeUrl(stripped)) throw new NonGithubUrlError(stripped);
+  if (looksLikeUrl(stripped)) {
+    const host = extractHost(stripped);
+    if (host && host !== GITHUB_HOST) throw unsupportedHost(host);
+    throw new NonGithubUrlError(stripped);
+  }
   throw new InvalidInputError(s);
 }
 
@@ -167,6 +240,20 @@ function resolveRef(repo: RepoRef, ref: string): LookupInput {
     return { kind: 'commit', repo, sha: ref.toLowerCase() };
   }
   throw new InvalidInputError(ref);
+}
+
+function isKnownGitlabHost(host: string): boolean {
+  return KNOWN_GITLAB_HOSTS.has(host);
+}
+
+function unsupportedHost(host: string): UnsupportedHostError {
+  const supported = ['github.com', ...KNOWN_GITLAB_HOSTS];
+  return new UnsupportedHostError(host, supported);
+}
+
+function extractHost(s: string): string | null {
+  const m = s.match(/^(?:https?:\/\/)?([\w.-]+)\//);
+  return m?.[1]?.toLowerCase() ?? null;
 }
 
 /** Heuristic: looks URL-shaped (has scheme or a dotted host with a path). */

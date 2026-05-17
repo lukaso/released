@@ -1,7 +1,18 @@
 // Public API for @released/core.
 
 export { parseInput } from './parse-input.js';
+// Legacy aliases — keep working until consumers migrate to providerFor.
 export { makeGithubClient, type GithubClient, type GithubClientOpts } from './github.js';
+// New provider surface.
+export { makeGithubProvider } from './providers/github/client.js';
+export { makeGitlabProvider } from './providers/gitlab/client.js';
+export {
+  providerFor,
+  isKnownHost,
+  KNOWN_GITLAB_HOSTS,
+  type ProviderForOpts,
+} from './providers/index.js';
+export type { Provider, ProviderOpts } from './provider.js';
 export {
   findRelease,
   findReleasesBulk,
@@ -15,6 +26,8 @@ export {
   CACHE_NS,
   MAX_BULK,
   OG_TEMPLATE_VERSION,
+  displayName,
+  githubOwnerRepo,
   type BulkResult,
   type BulkSubError,
   type LookupInput,
@@ -40,7 +53,9 @@ export {
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
+  ProviderServerError,
   RateLimitError,
   ReleasedError,
   SanitizeError,
+  UnsupportedHostError,
 } from './errors.js';

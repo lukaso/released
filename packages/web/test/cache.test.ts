@@ -5,7 +5,7 @@
 // evicted aggressively, which is what was causing the live "second hit was
 // still cold" bug.
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeWorkerCache } from '../src/cache.js';
 
 type FakeCache = {

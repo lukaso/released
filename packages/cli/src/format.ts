@@ -53,7 +53,7 @@ function formatHuman(r: LookupResult): string {
 function formatSlack(r: LookupResult): string {
   if (!r.firstRelease) return 'Not yet released — on the default branch.';
   // Slack mrkdwn dialect: *bold*, _italic_, <url|text>
-  const repo = `${r.input.repo.owner}/${r.input.repo.repo}`;
+  const repo = r.input.repo.projectPath;
   return [
     `*${r.firstRelease.tag}* shipped ${formatDate(r.firstRelease.date)} contains \`${shortSha(r.canonicalSha)}\` in \`${repo}\``,
     `<${permalink(r)}|see details>`,
@@ -62,7 +62,6 @@ function formatSlack(r: LookupResult): string {
 
 function formatMarkdown(r: LookupResult): string {
   if (!r.firstRelease) return '⏳ **Not yet released** — on the default branch.';
-  const repo = `${r.input.repo.owner}/${r.input.repo.repo}`;
   const lines: string[] = [];
   lines.push(
     `✅ \`${shortSha(r.canonicalSha)}\` is first released in [**${r.firstRelease.tag}**](${r.firstRelease.url}) (${formatDate(
@@ -86,5 +85,9 @@ function formatDate(iso: string): string {
 }
 
 function permalink(r: LookupResult): string {
-  return `${PERMA_BASE}/r/${r.input.repo.owner}/${r.input.repo.repo}/c/${shortSha(r.canonicalSha)}`;
+  const sha = shortSha(r.canonicalSha);
+  if (r.input.repo.host === 'github.com') {
+    return `${PERMA_BASE}/r/${r.input.repo.projectPath}/c/${sha}`;
+  }
+  return `${PERMA_BASE}/h/${r.input.repo.host}/r/${encodeURIComponent(r.input.repo.projectPath)}/c/${sha}`;
 }

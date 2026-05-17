@@ -1,5 +1,7 @@
-// Web auth: resolves the GitHub token used for an outbound API call.
-// Precedence (D9, D17 fix): X-User-Github-Token header > GITHUB_TOKEN secret > none.
+// Web auth: resolves the provider API token used for an outbound API call.
+// Precedence per provider:
+//   GitHub: X-User-Github-Token header > GITHUB_TOKEN secret > none
+//   GitLab: X-User-Gitlab-Token header > GITLAB_TOKEN_<HOST> secret > GITLAB_TOKEN secret > none
 // Also implements same-origin Origin-header check as defense-in-depth on /api/*.
 
 import type { Env } from './env.js';
@@ -10,6 +12,37 @@ export function resolveToken(env: Env | undefined, req: Request): string | undef
   if (userPat && userPat.trim()) return userPat.trim();
   if (env?.GITHUB_TOKEN && env.GITHUB_TOKEN.trim()) return env.GITHUB_TOKEN.trim();
   return undefined;
+}
+
+/** Resolve a provider API token for a given host. Honors per-host Worker secrets
+ *  (GITLAB_TOKEN_<HOST>) so different self-hosted GitLab instances can use
+ *  different PATs. */
+export function resolveProviderToken(
+  env: Env | undefined,
+  req: Request,
+  host: string,
+): string | undefined {
+  if (host === 'github.com') return resolveToken(env, req);
+  // GitLab path
+  const userPat = req.headers.get('x-user-gitlab-token');
+  if (userPat && userPat.trim()) return userPat.trim();
+  if (env) {
+    const hostKey = `GITLAB_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}` as const;
+    const hostSecret = (env as Record<string, string | undefined>)[hostKey];
+    if (hostSecret && hostSecret.trim()) return hostSecret.trim();
+    if (env.GITLAB_TOKEN && env.GITLAB_TOKEN.trim()) return env.GITLAB_TOKEN.trim();
+  }
+  return undefined;
+}
+
+/** Parse EXTRA_GITLAB_HOSTS env var into a string[] (trimmed, empty entries dropped). */
+export function extraGitlabHostsFromEnv(env: Env | undefined): readonly string[] {
+  const raw = env?.EXTRA_GITLAB_HOSTS;
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0);
 }
 
 /** Returns true if the request's Origin matches the worker's own origin (same-origin)

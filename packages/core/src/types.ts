@@ -7,8 +7,10 @@ export const MAX_BULK = 10;
  *  and the OG image PNG. Bumping this invalidates both without disturbing the data cache. */
 export const OG_TEMPLATE_VERSION = 'og.v1';
 
-/** Cache key namespace prefix. Bumping to v2 invalidates everything cleanly. */
-export const CACHE_NS = 'v1';
+/** Cache key namespace prefix. Bumped to v2 when federation landed (RepoRef shape
+ *  changed; keys now include host to keep github.com/foo/bar and gitlab.com/foo/bar
+ *  in independent cache slots). */
+export const CACHE_NS = 'v2';
 
 /** Default safety margin for date-based tag culling (ms). Tags whose commit-date
  *  is more than this far BEFORE the input commit's date are dropped as candidates.
@@ -17,11 +19,34 @@ export const CACHE_NS = 'v1';
  *  per-call with `strict: true` if you have a repo with manually-backdated commits. */
 export const DEFAULT_DATE_CULL_MARGIN_MS = 90 * 24 * 60 * 60 * 1000;
 
-/** A repository identifier on GitHub. */
+/** A repository identifier, host-aware so the same algorithm runs against
+ *  github.com, gitlab.com, gitlab.gnome.org, salsa.debian.org, etc.
+ *
+ *  - `host` is the bare hostname ("github.com", "gitlab.gnome.org"), no scheme.
+ *  - `projectPath` is the rest of the URL between host and resource:
+ *      GitHub: "owner/repo" (always exactly two segments)
+ *      GitLab: "group/repo" OR "group/subgroup/.../repo" (N segments)
+ *    No leading or trailing slash. */
 export type RepoRef = {
-  readonly owner: string;
-  readonly repo: string;
+  readonly host: string;
+  readonly projectPath: string;
 };
+
+/** Convenience: the (owner, repo) tuple some GitHub-shaped callers expect.
+ *  Throws if the projectPath isn't exactly two segments — only call this on
+ *  RepoRefs you know are GitHub. */
+export function githubOwnerRepo(r: RepoRef): { owner: string; repo: string } {
+  const parts = r.projectPath.split('/');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    throw new Error(`githubOwnerRepo: expected "owner/repo", got "${r.projectPath}"`);
+  }
+  return { owner: parts[0], repo: parts[1] };
+}
+
+/** Display name for a repo: "facebook/react", "GNOME/gimp", "gitlab-org/security-products/foo". */
+export function displayName(r: RepoRef): string {
+  return r.projectPath;
+}
 
 /** Parsed user input — what to look up. */
 export type LookupInput =
@@ -45,9 +70,13 @@ export type TagWithDate = {
 /** Tag-name heuristic: does this look like a prerelease tag? Conservative — only
  *  flags well-known suffixes; everything else is treated as a production tag.
  *  Detected substrings (case-insensitive): alpha, beta, rc, pre, snapshot,
- *  nightly, canary, dev (when preceded by `-` or `.`), preview. */
+ *  nightly, canary, dev, preview — when preceded by `-`, `.`, or `_` and
+ *  followed by `-`, `.`, `_`, a digit, or end-of-string.
+ *  Underscore-separated forms catch GIMP-style tags like GIMP_3_2_0_RC1. */
 export function isPrereleaseTag(name: string): boolean {
-  return /(?:^|[\-.])(?:alpha|beta|rc|pre|preview|snapshot|nightly|canary|dev)(?:[\-.]|\d|$)/i.test(name);
+  return /(?:^|[\-._])(?:alpha|beta|rc|pre|preview|snapshot|nightly|canary|dev)(?:[\-._]|\d|$)/i.test(
+    name,
+  );
 }
 
 /** A release that contains the input commit. */
@@ -58,7 +87,7 @@ export type ReleaseHit = {
   readonly url: string;
 };
 
-/** Rate-limit metadata surfaced from every GitHub API response. */
+/** Rate-limit metadata surfaced from every provider API response. */
 export type RateLimitInfo = {
   readonly remaining: number;
   readonly limit: number;
@@ -80,6 +109,14 @@ export type LookupResult = {
   readonly partial?: {
     readonly reason: 'soft_deadline';
     readonly candidatesTried: number;
+  };
+  /** Pre-built URLs the algorithm populated via the provider. Web/CLI consume
+   *  these instead of templating provider-specific URLs themselves. */
+  readonly urls: {
+    readonly repo: string;
+    readonly commit: string;
+    /** Present only when input.kind === 'pr' (PR on GitHub, MR on GitLab). */
+    readonly pullRequest?: string;
   };
 };
 

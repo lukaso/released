@@ -1,17 +1,25 @@
 // POST /api/lookup-bulk — bulk lookup (CP3, cap MAX_BULK=10).
 // Shared deadline across all sub-lookups; returns partial response shape.
+//
+// Mixed-provider inputs (GitHub + GitLab + ...) are supported: we group inputs
+// by host, run findReleasesBulk separately per host (each with its own provider
+// instance), then re-thread results into the original input order. This avoids
+// the trap of trying to use ONE client for ALL hosts.
 
-import type { Context } from 'hono';
 import {
-  findReleasesBulk,
-  MAX_BULK,
-  makeGithubClient,
-  parseInput,
-  ReleasedError,
   type LookupInput,
+  type LookupResult,
+  MAX_BULK,
+  type ReleasedError,
+  findReleasesBulk,
+  parseInput,
+  providerFor,
 } from '@released/core';
-import { checkSameOrigin, resolveToken } from '../auth.js';
+import type { Context } from 'hono';
+import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import type { Env } from '../env.js';
+
+type BulkSubError = { kind: 'error'; errorName: string; message: string };
 
 export async function lookupBulkRoute(c: Context): Promise<Response> {
   const env = c.env as Env;
@@ -37,32 +45,65 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
     );
   }
 
-  // Parse all inputs up front; bad ones become errors in the response.
-  const parsed: ({ ok: true; v: LookupInput } | { ok: false; err: ReleasedError })[] = body.inputs.map(
-    (s) => {
+  // Parse all inputs up front; parse failures become errors at their original index.
+  const parsed: ({ ok: true; v: LookupInput } | { ok: false; err: ReleasedError })[] =
+    body.inputs.map((s) => {
       try {
         return { ok: true as const, v: parseInput(s) };
       } catch (err) {
         return { ok: false as const, err: err as ReleasedError };
       }
-    },
-  );
-  const okInputs = parsed.filter((p) => p.ok).map((p) => (p as { ok: true; v: LookupInput }).v);
+    });
 
-  const client = makeGithubClient({ token: resolveToken(env, req) });
-  const bulk = await findReleasesBulk(okInputs, { client });
-
-  // Re-thread parse failures back into the result array by index.
-  let okIdx = 0;
-  const results = parsed.map((p) => {
-    if (!p.ok) return { kind: 'error', errorName: p.err.name, message: p.err.message };
-    return bulk.results[okIdx++];
+  // Group successful inputs by host so each host's sub-bulk uses the right provider.
+  const byHost = new Map<string, { input: LookupInput; originalIdx: number }[]>();
+  parsed.forEach((p, idx) => {
+    if (!p.ok) return;
+    const host = p.v.repo.host;
+    if (!byHost.has(host)) byHost.set(host, []);
+    byHost.get(host)!.push({ input: p.v, originalIdx: idx });
   });
 
-  const respBody = bulk.partial
-    ? { results, partial: bulk.partial }
-    : { results };
-  return new Response(JSON.stringify(respBody), {
+  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
+  const okResultsByIdx = new Map<number, LookupResult | BulkSubError>();
+
+  // Run each host's bulk in parallel — different hosts have independent rate limits
+  // and there's no cross-host shared state.
+  await Promise.all(
+    [...byHost.entries()].map(async ([host, group]) => {
+      const token = resolveProviderToken(env, req, host);
+      let client;
+      try {
+        client = providerFor(host, { token, extraGitlabHosts });
+      } catch (err) {
+        // Host not supported — every input in this group fails the same way.
+        const errAsReleased = err as ReleasedError;
+        for (const g of group) {
+          okResultsByIdx.set(g.originalIdx, {
+            kind: 'error',
+            errorName: errAsReleased.name,
+            message: errAsReleased.message,
+          });
+        }
+        return;
+      }
+      const subBulk = await findReleasesBulk(
+        group.map((g) => g.input),
+        { client },
+      );
+      subBulk.results.forEach((r, i) => {
+        okResultsByIdx.set(group[i]!.originalIdx, r);
+      });
+    }),
+  );
+
+  // Re-thread results into the original input order, mixing parse failures.
+  const results = parsed.map((p, idx) => {
+    if (!p.ok) return { kind: 'error', errorName: p.err.name, message: p.err.message };
+    return okResultsByIdx.get(idx)!;
+  });
+
+  return new Response(JSON.stringify({ results }), {
     headers: { 'content-type': 'application/json' },
   });
 }

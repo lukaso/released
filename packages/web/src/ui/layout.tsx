@@ -1,7 +1,7 @@
 // HTML shell with CSP, nonce, OG meta, and the locked design system.
 
-import { html, raw } from 'hono/html';
 import type { LookupResult } from '@released/core';
+import { html, raw } from 'hono/html';
 import { OgMeta } from './og-meta.js';
 import { STYLES } from './styles.js';
 
@@ -86,9 +86,14 @@ const CLIENT_JS = `
     });
   });
   function formatForCopy(r, fmt){
-    var repo = r.input.repo.owner + '/' + r.input.repo.repo;
+    var repo = r.input.repo.projectPath;
+    var host = r.input.repo.host;
     var sha = r.canonicalSha.slice(0,7);
-    var perma = window.location.origin + '/r/' + r.input.repo.owner + '/' + r.input.repo.repo + '/c/' + sha;
+    // Build the host-aware permalink path (mirrors paths.ts on the server).
+    var permaPath = host === 'github.com'
+      ? '/r/' + repo + '/c/' + sha
+      : '/h/' + host + '/r/' + encodeURIComponent(repo) + '/c/' + sha;
+    var perma = window.location.origin + permaPath;
     var tag = r.firstRelease ? r.firstRelease.tag : null;
     if (!tag) return null;
     if (fmt === 'markdown') {

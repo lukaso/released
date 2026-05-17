@@ -1,40 +1,60 @@
-// GET /p/:owner/:repo/:number — PR permalink. Resolves the PR to its merge
-// commit, then renders the same result UI as /r/. The URL preserves the PR
-// shape so users sharing PR-URL inputs see a PR-themed final URL.
+// GET /p/:owner/:repo/:number          — PR permalink (GitHub)
+// GET /h/:host/p/:projectPath/:number  — PR/MR permalink (federated)
+//
+// Resolves the PR/MR to its merge commit, then renders the same result UI as /r/.
+// Label and reference syntax come from provider.terms so GitLab shows "Merge
+// request !1234" instead of "Pull request #1234".
 
-import type { Context } from 'hono';
-import { raw } from 'hono/html';
 import {
-  cacheKey,
-  findRelease,
-  makeGithubClient,
+  type LookupResult,
   NotYetReleasedError,
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
+  type Provider,
   ReleasedError,
-  type LookupResult,
+  type RepoRef,
+  cacheKey,
+  findRelease,
+  providerFor,
 } from '@released/core';
-import { isUnfurlBot, resolveToken } from '../auth.js';
+import type { Context } from 'hono';
+import { raw } from 'hono/html';
+import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
-import { ogBaseUrl, publicBaseUrl, type Env } from '../env.js';
-import { Layout } from '../ui/layout.js';
-import { ResultCard, StrictHint } from '../ui/result-card.js';
+import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
+import { prPermalinkPath } from '../paths.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { singleFlight } from '../single-flight.js';
+import { Layout } from '../ui/layout.js';
+import { ResultCard, StrictHint } from '../ui/result-card.js';
+
+function repoFromParams(c: Context): RepoRef | null {
+  const host = c.req.param('host');
+  if (host) {
+    const projectPathEnc = c.req.param('projectPath');
+    if (!projectPathEnc) return null;
+    return { host, projectPath: decodeURIComponent(projectPathEnc) };
+  }
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  if (!owner || !repo) return null;
+  return { host: 'github.com', projectPath: `${owner}/${repo}` };
+}
 
 export async function prRoute(c: Context): Promise<Response> {
   const env = c.env as Env;
   const req = c.req.raw;
-  const owner = c.req.param('owner');
-  const repo = c.req.param('repo');
+  const repo = repoFromParams(c);
   const numberStr = c.req.param('number');
-  if (!owner || !repo || !numberStr) return new Response('not found', { status: 404 });
+  if (!repo || !numberStr) return new Response('not found', { status: 404 });
   const prNumber = Number.parseInt(numberStr, 10);
   if (!Number.isFinite(prNumber) || prNumber <= 0) {
     return new Response(null, {
       status: 302,
-      headers: { location: `/?bad=${encodeURIComponent(`${owner}/${repo}#${numberStr}`)}&reason=invalid_input` },
+      headers: {
+        location: `/?bad=${encodeURIComponent(`${repo.projectPath}#${numberStr}`)}&reason=invalid_input`,
+      },
     });
   }
   const strict = c.req.query('strict') === '1' || c.req.query('strict') === 'true';
@@ -45,11 +65,20 @@ export async function prRoute(c: Context): Promise<Response> {
   const pubBase = publicBaseUrl(env, req);
   const ogBase = ogBaseUrl(env, req);
   const isBot = isUnfurlBot(req);
+  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
+
+  let provider: Provider;
+  try {
+    const token = resolveProviderToken(env, req, repo.host);
+    provider = providerFor(repo.host, { token, extraGitlabHosts });
+  } catch (err) {
+    return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
+  }
 
   // Cache by PR number — different lookups for default vs strict.
   const k = await cacheKey(
     'res',
-    `${owner}/${repo}`,
+    `${repo.host}/${repo.projectPath}`,
     `pr#${prNumber}`,
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
@@ -58,57 +87,65 @@ export async function prRoute(c: Context): Promise<Response> {
   let result: LookupResult | null = await cache.get<LookupResult>(k);
 
   if (!result && isBot) {
-    return renderDeferred({ pubBase, ogBase, nonce, owner, repo, numberStr });
+    return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
   }
 
   if (!result) {
-    const token = resolveToken(env, req);
-    const client = makeGithubClient({ token });
     try {
       result = await singleFlight(k, async () => {
         const re = await cache.get<LookupResult>(k);
         if (re) return re;
         const r = await findRelease(
-          { kind: 'pr', repo: { owner, repo }, number: prNumber },
-          { client, strict, includePrereleases },
+          { kind: 'pr', repo, number: prNumber },
+          { client: provider, strict, includePrereleases },
         );
         await cache.put(k, r, r.partial ? 60 : 30 * 60);
         return r;
       });
     } catch (err) {
-      if (isBot) return renderDeferred({ pubBase, ogBase, nonce, owner, repo, numberStr });
+      if (isBot) return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
       if (err instanceof PrNotMergedError) {
-        return renderPrNotMerged(err, { pubBase, ogBase, nonce, owner, repo, prNumber });
+        return renderPrNotMerged(err, { pubBase, ogBase, nonce, repo, prNumber, provider });
       }
       if (err instanceof PrNotFoundError || err instanceof PrMergeCommitUnavailableError) {
-        return renderPrError(err, { pubBase, ogBase, nonce, owner, repo, prNumber });
+        return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
       }
       if (err instanceof NotYetReleasedError) {
         return renderPrNotYetReleased(err, {
           pubBase,
           ogBase,
           nonce,
-          owner,
           repo,
           prNumber,
           strict,
+          provider,
         });
       }
-      return renderPrError(err, { pubBase, ogBase, nonce, owner, repo, prNumber });
+      return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
     }
   }
 
   // Successful result. The merge commit's full SHA is in canonicalSha.
   const inlineData = JSON.stringify(result).replace(/</g, '\\u003c');
-  const perma = `${pubBase}/p/${owner}/${repo}/${prNumber}`;
-  const inputVal = `${owner}/${repo}#${prNumber}`;
+  const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
+  // Form pre-fill needs to round-trip through parseInput. GitHub's
+  // `owner/repo#PR` shorthand is GitHub-only — using it on a GitLab MR would
+  // make the next submit hit github.com/o/r/pull/N (PR not found). For non-
+  // GitHub providers we pre-fill the full provider URL, which parseInput
+  // always re-routes correctly.
+  const inputVal =
+    repo.host === 'github.com'
+      ? `${repo.projectPath}#${prNumber}`
+      : provider.urls.pullRequest(repo, prNumber);
+  const displayName = repo.projectPath;
+  const prefix = provider.terms.mergeRequestPrefix;
 
   const page = (
     <Layout
-      title={`${result.firstRelease ? result.firstRelease.tag : 'not yet released'} — ${owner}/${repo}#${prNumber}`}
+      title={`${result.firstRelease ? result.firstRelease.tag : 'not yet released'} — ${displayName}${prefix}${prNumber}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={perma}
+      publicUrl={permalink}
       ogResult={result}
     >
       <Nav />
@@ -119,14 +156,20 @@ export async function prRoute(c: Context): Promise<Response> {
             <button type="submit">
               <span class="btn-label">Is it released? →</span>
               <span class="btn-loading" aria-hidden="true">
-                Looking up<span class="dots" />
+                Looking up
+                <span class="dots" />
               </span>
             </button>
           </div>
         </form>
       </div>
       <main style="padding-top: 24px;">
-        <PrBanner owner={owner} repo={repo} prNumber={prNumber} mergeSha={result.canonicalSha} />
+        <PrBanner
+          provider={provider}
+          repo={repo}
+          prNumber={prNumber}
+          mergeSha={result.canonicalSha}
+        />
         <ResultCard result={result} publicBaseUrl={pubBase} />
       </main>
       <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
@@ -150,23 +193,28 @@ export async function prRoute(c: Context): Promise<Response> {
 // --- partial / error renderers ----------------------------------------------
 
 function PrBanner({
-  owner,
+  provider,
   repo,
   prNumber,
   mergeSha,
 }: {
-  owner: string;
-  repo: string;
+  provider: Provider;
+  repo: RepoRef;
   prNumber: number;
   mergeSha: string;
 }) {
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  const commitUrl = `https://github.com/${owner}/${repo}/commit/${mergeSha}`;
+  const prUrl = provider.urls.pullRequest(repo, prNumber);
+  const commitUrl = provider.urls.commit(repo, mergeSha);
+  const label = provider.terms.mergeRequest;
+  const prefix = provider.terms.mergeRequestPrefix;
   return (
-    <div
-      style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);"
-    >
-      Resolved <a href={prUrl}>PR #{prNumber}</a> → merge commit{' '}
+    <div style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);">
+      Resolved{' '}
+      <a href={prUrl}>
+        {label} {prefix}
+        {prNumber}
+      </a>{' '}
+      → merge commit{' '}
       <a href={commitUrl} style="font-family: 'Geist Mono', monospace;">
         {mergeSha.slice(0, 7)}
       </a>
@@ -178,18 +226,21 @@ function renderDeferred(args: {
   pubBase: string;
   ogBase: string;
   nonce: string;
-  owner: string;
-  repo: string;
+  repo: RepoRef;
   numberStr: string;
+  provider: Provider;
 }): Response {
-  const { pubBase, ogBase, nonce, owner, repo, numberStr } = args;
+  const { pubBase, ogBase, nonce, repo, numberStr, provider } = args;
+  const displayName = repo.projectPath;
+  const prefix = provider.terms.mergeRequestPrefix;
+  const permalink = `${pubBase}${prPermalinkPath(repo, Number.parseInt(numberStr, 10))}`;
   const page = (
     <Layout
-      title={`looking up — ${owner}/${repo}#${numberStr}`}
+      title={`looking up — ${displayName}${prefix}${numberStr}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={`${pubBase}/p/${owner}/${repo}/${numberStr}`}
-      ogFallbackTitle={`released — looking up ${owner}/${repo}#${numberStr}`}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — looking up ${displayName}${prefix}${numberStr}`}
     >
       <Nav />
       <main>
@@ -198,7 +249,9 @@ function renderDeferred(args: {
             <div class="answer-label">Looking up…</div>
             <div class="answer-version">
               <span class="v" style="font-size: 32px;">
-                {owner}/{repo}#{numberStr}
+                {displayName}
+                {prefix}
+                {numberStr}
               </span>
             </div>
             <div class="answer-date">Refresh in a moment for the answer.</div>
@@ -222,20 +275,28 @@ function renderPrNotMerged(
     pubBase: string;
     ogBase: string;
     nonce: string;
-    owner: string;
-    repo: string;
+    repo: RepoRef;
     prNumber: number;
+    provider: Provider;
   },
 ): Response {
-  const { pubBase, ogBase, nonce, owner, repo, prNumber } = args;
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  const { pubBase, ogBase, nonce, repo, prNumber, provider } = args;
+  const displayName = repo.projectPath;
+  const prUrl = provider.urls.pullRequest(repo, prNumber);
+  const label = provider.terms.mergeRequest;
+  const prefix = provider.terms.mergeRequestPrefix;
+  const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
+  const linkLabel =
+    repo.host === 'github.com'
+      ? 'Open PR on GitHub'
+      : `Open ${label.toLowerCase()} on ${repo.host}`;
   const page = (
     <Layout
-      title={`PR not merged — ${owner}/${repo}#${prNumber}`}
+      title={`${label} not merged — ${displayName}${prefix}${prNumber}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={`${pubBase}/p/${owner}/${repo}/${prNumber}`}
-      ogFallbackTitle={`released — ${owner}/${repo}#${prNumber}: not merged yet`}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — ${displayName}${prefix}${prNumber}: not merged yet`}
     >
       <Nav />
       <main style="padding-top: 24px;">
@@ -250,14 +311,16 @@ function renderPrNotMerged(
             <div class="answer-date">
               <b>
                 <a href={prUrl}>
-                  {owner}/{repo}#{prNumber}
+                  {displayName}
+                  {prefix}
+                  {prNumber}
                 </a>
               </b>{' '}
               hasn't been merged. Re-check after it lands.
             </div>
             <div class="answer-actions" style="margin-top: 16px;">
               <a class="btn-fmt primary" href={prUrl} style="text-decoration: none;">
-                Open PR on GitHub
+                {linkLabel}
               </a>
             </div>
           </div>
@@ -266,10 +329,8 @@ function renderPrNotMerged(
     </Layout>
   );
   return new Response(`<!DOCTYPE html>${page.toString()}`, {
-    // 200 — "not merged yet" is a real answer, not a server error.
     headers: {
       'content-type': 'text/html; charset=utf-8',
-      // Short cache: PR could merge at any moment, don't lock in "not merged".
       'cache-control': 'public, max-age=60',
       ...securityHeaders(nonce, ogBase),
     },
@@ -282,40 +343,51 @@ function renderPrNotYetReleased(
     pubBase: string;
     ogBase: string;
     nonce: string;
-    owner: string;
-    repo: string;
+    repo: RepoRef;
     prNumber: number;
     strict: boolean;
+    provider: Provider;
   },
 ): Response {
-  const { pubBase, ogBase, nonce, owner, repo, prNumber, strict } = args;
-  const perma = `${pubBase}/p/${owner}/${repo}/${prNumber}`;
-  const strictHref = `${perma}?strict=1`;
+  const { pubBase, ogBase, nonce, repo, prNumber, strict, provider } = args;
+  const displayName = repo.projectPath;
+  const prefix = provider.terms.mergeRequestPrefix;
+  const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
+  const strictHref = `${permalink}?strict=1`;
   const showHint = err.culledTagCount > 0 && !strict;
   const synthetic: LookupResult = {
-    input: { kind: 'pr', repo: { owner, repo }, number: prNumber },
+    input: { kind: 'pr', repo, number: prNumber },
     canonicalSha: err.sha,
     firstRelease: null,
     alsoIn: [],
     releaseNotesHtml: null,
     rateLimit: null,
+    urls: {
+      repo: provider.urls.repo(repo),
+      commit: provider.urls.commit(repo, err.sha),
+      pullRequest: provider.urls.pullRequest(repo, prNumber),
+    },
   };
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  const mergeUrl = `https://github.com/${owner}/${repo}/commit/${err.sha}`;
+  const prUrl = provider.urls.pullRequest(repo, prNumber);
+  const mergeUrl = provider.urls.commit(repo, err.sha);
+  const label = provider.terms.mergeRequest;
   const page = (
     <Layout
-      title={`not yet released — ${owner}/${repo}#${prNumber}`}
+      title={`not yet released — ${displayName}${prefix}${prNumber}`}
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={perma}
-      ogFallbackTitle={`released — ${owner}/${repo}#${prNumber}: merged, not released yet`}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — ${displayName}${prefix}${prNumber}: merged, not released yet`}
     >
       <Nav />
       <main style="padding-top: 24px;">
-        <div
-          style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);"
-        >
-          Resolved <a href={prUrl}>PR #{prNumber}</a> → merge commit{' '}
+        <div style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);">
+          Resolved{' '}
+          <a href={prUrl}>
+            {label} {prefix}
+            {prNumber}
+          </a>{' '}
+          → merge commit{' '}
           <a href={mergeUrl} style="font-family: 'Geist Mono', monospace;">
             {err.sha.slice(0, 7)}
           </a>
@@ -340,20 +412,20 @@ function renderPrError(
     pubBase: string;
     ogBase: string;
     nonce: string;
-    owner: string;
-    repo: string;
+    repo: RepoRef;
     prNumber: number;
   },
 ): Response {
-  const { pubBase, ogBase, nonce, owner, repo, prNumber } = args;
+  const { pubBase, ogBase, nonce, repo, prNumber } = args;
   const msg = err instanceof ReleasedError ? err.message : 'Something went wrong.';
   const status = err instanceof ReleasedError ? 404 : 500;
+  const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
   const page = (
     <Layout
       title="released — error"
       nonce={nonce}
       ogBaseUrl={ogBase}
-      publicUrl={`${pubBase}/p/${owner}/${repo}/${prNumber}`}
+      publicUrl={permalink}
       ogFallbackTitle="released"
     >
       <Nav />

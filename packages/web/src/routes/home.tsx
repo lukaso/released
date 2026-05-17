@@ -2,11 +2,11 @@
 // Same page in resolved state lives at /r/:o/:r/c/:sha (routes/result.tsx).
 
 import type { Context } from 'hono';
-import { EXAMPLE_LIVE_URL, EXAMPLE_RESULT } from '../example.js';
 import { ogBaseUrl, publicBaseUrl } from '../env.js';
+import { EXAMPLE_LIVE_URL, EXAMPLE_RESULT } from '../example.js';
+import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
 import { ResultCard } from '../ui/result-card.js';
-import { makeNonce, securityHeaders } from '../security.js';
 
 export async function homeRoute(c: Context): Promise<Response> {
   const env = c.env as import('../env.js').Env;
@@ -41,7 +41,7 @@ export async function homeRoute(c: Context): Promise<Response> {
 
         <form method="get" action="/lookup" data-loading-form>
           <label class="field-label" for="q">
-            Commit URL, SHA, or pull request
+            Commit URL, SHA, or pull/merge request
           </label>
           <div class="searchbox">
             <input
@@ -49,7 +49,7 @@ export async function homeRoute(c: Context): Promise<Response> {
               name="q"
               type="text"
               value={bad}
-              placeholder="github.com/o/r/commit/abc1234  ·  owner/repo abc1234  ·  o/r#PR  ·  PR URL"
+              placeholder="github.com/o/r/commit/abc1234  ·  owner/repo abc1234  ·  o/r#PR  ·  gitlab.gnome.org/.../-/merge_requests/N"
               autocomplete="off"
               spellcheck={false}
               required
@@ -57,7 +57,8 @@ export async function homeRoute(c: Context): Promise<Response> {
             <button type="submit">
               <span class="btn-label">Is it released? →</span>
               <span class="btn-loading" aria-hidden="true">
-                Looking up<span class="dots" />
+                Looking up
+                <span class="dots" />
               </span>
             </button>
           </div>
@@ -140,9 +141,7 @@ function ErrorBanner({ message, bad }: { message: string; bad: string }) {
       <div style="font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px;">
         Couldn't parse that
       </div>
-      <div style="font-size: 14px; color: var(--text); line-height: 1.5;">
-        {message}
-      </div>
+      <div style="font-size: 14px; color: var(--text); line-height: 1.5;">{message}</div>
       {bad && (
         <div style="margin-top: 8px; font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--text-3); word-break: break-all;">
           input: {bad}
@@ -154,8 +153,14 @@ function ErrorBanner({ message, bad }: { message: string; bad: string }) {
 
 function messageForReason(reason: string, bad: string): string {
   switch (reason) {
+    case 'unsupported_host':
     case 'non_github_url':
-      return "Only GitHub repos are supported in v1. The CLI can handle other hosts when run inside a local checkout — see Docs.";
+      // List supported hosts AND the env-var path so users can self-serve.
+      return (
+        "I don't recognize that host. Supported: github.com, gitlab.com, gitlab.gnome.org, " +
+        'gitlab.freedesktop.org, salsa.debian.org, invent.kde.org, gitlab.kitware.com. ' +
+        'If yours is a self-hosted GitLab, the admin can add it via the EXTRA_GITLAB_HOSTS env var.'
+      );
     case 'bare_sha':
       // The input WAS a valid SHA, just no repo. Be specific and actionable —
       // show the exact shorthand they should paste.
@@ -165,7 +170,10 @@ function messageForReason(reason: string, bad: string): string {
       if (/^(?:https?:\/\/)?github\.com\//i.test(bad)) {
         return "That's a GitHub URL but not a shape I recognize. I read /commit/{sha}, /commits/{sha}, /blob|tree|blame|raw/{sha}/..., and /pull/{N}. If you have just the SHA, paste it on its own with the repo (e.g. owner/repo@sha).";
       }
-      return "I expected a GitHub commit URL, SHA (7-40 hex), PR URL or `owner/repo#PR` shorthand. Try one of the formats in the placeholder or pick the example below.";
+      if (/^(?:https?:\/\/)?gitlab/i.test(bad)) {
+        return "That's a GitLab URL but not a shape I recognize. I read /-/commit/{sha}, /-/commits/{sha}, /-/blob|tree|blame|raw/{sha}/..., and /-/merge_requests/{N}.";
+      }
+      return 'I expected a commit URL, SHA (7-40 hex), PR/MR URL or `owner/repo#PR` shorthand. Try one of the formats in the placeholder or pick the example below.';
     default:
       return `Couldn't parse the input (${reason}). Try one of the formats in the placeholder.`;
   }
