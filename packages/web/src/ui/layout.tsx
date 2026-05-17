@@ -69,6 +69,19 @@ const CLIENT_JS = `
     });
   });
 
+  // Reset the loading state when the page is restored from the browser's
+  // back-forward cache (BFCache). Without this, hitting Back after a
+  // submitted lookup shows the spinner still spinning and the button still
+  // disabled, because BFCache restores the DOM exactly as it was at unload.
+  window.addEventListener('pageshow', function(e){
+    if (!e.persisted) return;
+    document.querySelectorAll('form[data-loading-form]').forEach(function(form){
+      form.classList.remove('loading');
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn) btn.disabled = false;
+    });
+  });
+
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!(t instanceof HTMLElement)) return;
