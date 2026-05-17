@@ -288,12 +288,15 @@ describe('GitlabProvider.containingTags', () => {
   });
 
   it('asks the API with type=tag in the query string', async () => {
-    const mockFetch = vi.fn(async () => jsonResp([]));
-    const c = makeGitlabProvider('gitlab.com', { fetch: mockFetch as unknown as typeof fetch });
+    const calls: string[] = [];
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResp([]);
+    }) as unknown as typeof fetch;
+    const c = makeGitlabProvider('gitlab.com', { fetch: mockFetch });
     await c.containingTags!(NESTED, 'commitSha');
-    const url = (mockFetch.mock.calls[0]?.[0] as string) ?? '';
-    expect(url).toContain('/repository/commits/commitSha/refs');
-    expect(url).toContain('type=tag');
+    expect(calls[0]).toContain('/repository/commits/commitSha/refs');
+    expect(calls[0]).toContain('type=tag');
   });
 
   it('throws ProviderServerError on 5xx (caller falls back to galloping)', async () => {
