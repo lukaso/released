@@ -137,6 +137,7 @@ function statusFor(kind: string): number {
       return 429;
     case 'github_server_error':
     case 'provider_server_error':
+    case 'provider_json_error':
     case 'network_error':
     case 'lookup_timeout':
       return 503;

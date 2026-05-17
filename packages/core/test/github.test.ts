@@ -350,6 +350,48 @@ describe('rate-limit + network failure modes', () => {
       c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234'),
     ).rejects.toBeInstanceOf(NetworkError);
   });
+
+  it('throws ProviderJsonError with anti-bot hint when provider returns HTML (CF interstitial)', async () => {
+    // Reproduces gitlab.freedesktop.org behavior — Cloudflare anti-bot
+    // returns "Making sure you're not a bot!" HTML with status 200. The
+    // Worker must surface this as a typed error suggesting auth, not crash
+    // with an unhandled SyntaxError → 500.
+    const fetch = queuedFetch(
+      new Response(
+        '<!doctype html><html lang="en"><head><title>Making sure you\'re not a bot!</title>',
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      ),
+    );
+    const { ProviderJsonError } = await import('../src/errors.js');
+    const c = makeGithubClient({ fetch });
+    try {
+      await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderJsonError);
+      const msg = (err as Error).message;
+      expect(msg).toMatch(/anti-bot/i);
+      expect(msg).toMatch(/token/i);
+    }
+  });
+
+  it('ProviderJsonError without bot-challenge signature falls back to generic message + snippet', async () => {
+    const fetch = queuedFetch(
+      new Response('not json at all, just plain text', {
+        status: 200,
+        headers: { 'content-type': 'text/plain' },
+      }),
+    );
+    const { ProviderJsonError } = await import('../src/errors.js');
+    const c = makeGithubClient({ fetch });
+    try {
+      await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abc1234');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderJsonError);
+      expect((err as Error).message).toContain('not json at all');
+    }
+  });
 });
 
 describe('token + headers', () => {

@@ -179,6 +179,33 @@ export class ProviderServerError extends ReleasedError {
   }
 }
 
+/** Thrown when a provider returned a 2xx with a body that isn't valid JSON.
+ *  Almost always an upstream interstitial (CDN challenge, captive portal,
+ *  proxy error page) leaking through with a 200. Treated as a transient
+ *  upstream-server error from the user's perspective.
+ *
+ *  The error message detects Cloudflare's "Just a moment / Making sure you're
+ *  not a bot" signature and suggests authentication, which usually exempts
+ *  the request from the challenge. */
+export class ProviderJsonError extends ReleasedError {
+  readonly kind = 'provider_json_error' as const;
+  constructor(
+    public readonly status: number,
+    public readonly snippet: string,
+    cause: unknown,
+  ) {
+    const looksLikeBotChallenge =
+      /not a bot|just a moment|cloudflare|checking your browser/i.test(snippet);
+    const base = `Upstream provider returned status ${status} but the body wasn't JSON`;
+    const detail = looksLikeBotChallenge
+      ? ' — it looks like an anti-bot challenge page. Authenticated requests usually skip these; setting a provider token (e.g. GITLAB_TOKEN for the Worker, or `released --token=...`) typically resolves it.'
+      : ` (usually a CDN challenge page or proxy error). First chars: ${snippet}`;
+    super(base + detail);
+    this.name = 'ProviderJsonError';
+    this.cause = cause;
+  }
+}
+
 export class NetworkError extends ReleasedError {
   readonly kind = 'network_error' as const;
   constructor(cause: unknown) {

@@ -2,7 +2,7 @@
 // GithubProvider and GitlabProvider. Prevents drift between providers and
 // keeps the 30 lines of fetch ceremony in one place.
 
-import { NetworkError, ProviderServerError, RateLimitError } from '../errors.js';
+import { NetworkError, ProviderJsonError, ProviderServerError, RateLimitError } from '../errors.js';
 import type { RateLimitInfo } from '../types.js';
 
 export type CallOpts = {
@@ -91,7 +91,18 @@ async function backoff(attempt: number): Promise<void> {
 }
 
 export async function readJson<T = unknown>(res: Response): Promise<T> {
-  return (await res.json()) as T;
+  // Defensive: providers occasionally return HTML (Cloudflare interstitial,
+  // anti-bot challenge, captive portal between Worker and provider) with a
+  // 200 status. Catch the parse error and surface a friendly typed error
+  // including the response status and a snippet, so callers don't get an
+  // unhandled SyntaxError → 500.
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    const snippet = text.slice(0, 120).replace(/\s+/g, ' ');
+    throw new ProviderJsonError(res.status, snippet, cause);
+  }
 }
 
 export function enc(s: string): string {

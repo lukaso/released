@@ -53,6 +53,7 @@ export {
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
+  ProviderJsonError,
   ProviderServerError,
   RateLimitError,
   ReleasedError,
