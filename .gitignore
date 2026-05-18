@@ -6,3 +6,10 @@ dist
 *.log
 coverage
 .vitest-cache
+
+# Claude Code: .claude/settings.json + .claude/hooks/ ARE committed (shared
+# agent config). These are runtime-only / per-machine, never commit:
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+.claude/tasks/
+.claude/settings.local.json

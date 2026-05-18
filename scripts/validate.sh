@@ -33,3 +33,9 @@ pnpm -r test
 
 echo "→ lint"
 pnpm lint
+
+# Marker for Claude Code's .claude/hooks/{commit-gate,validate-gate}.sh —
+# its presence (+ mtime newer than any .ts/.tsx edited this session) lets
+# Claude `git commit`/`git push` and declare turns done. See those hooks
+# for the freshness logic.
+touch /tmp/released-validate.stamp
