@@ -66,10 +66,6 @@ export async function homeRoute(c: Context): Promise<Response> {
             </button>
           </div>
         </form>
-        <a class="bulk" href="/bulk">
-          Look up several at once →
-        </a>
-
         <ProjectChips />
 
         <div class="example-section">
@@ -173,7 +169,7 @@ function ErrorBanner({
  * Popular projects chip row. Each chip is a <button> carrying the alias in
  * data-alias; the delegated click handler in layout.tsx inserts the alias
  * (and preserves any SHA-shape input) into the search box and refocuses it.
- * Rendered twice: once below the bulk link as the main discovery surface,
+ * Rendered twice: once below the search form as the main discovery surface,
  * and again inside the bare-SHA error banner so the user can recover in one
  * click. The two instances share the same handler via event delegation.
  */

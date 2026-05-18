@@ -86,9 +86,6 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
   75%  { content: '...'; }
   100% { content: ''; }
 }
-.bulk { display: inline-block; margin-top: 14px; font-size: 13.5px; color: var(--text-2); text-decoration: none; }
-.bulk:hover { color: var(--accent); }
-
 /* the example/result card */
 .example-section { margin-top: 40px; }
 .example-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }

@@ -346,6 +346,29 @@ describe('web Worker — basic routing', () => {
   });
 });
 
+// Issue #1: nav + footer linked to /how-it-works but no route existed → every
+// click 404'd. Cheapest fix: redirect to the README's Architecture anchor,
+// where the content already lives.
+describe('/how-it-works redirect (issue #1)', () => {
+  it('redirects to the GitHub README Architecture anchor', async () => {
+    const res = await app.fetch(new Request('https://released.example/how-it-works'));
+    expect(res.status).toBe(301);
+    expect(res.headers.get('location')).toBe('https://github.com/lukaso/released#architecture');
+  });
+});
+
+// Issue #3: homepage advertised "Look up several at once →" linking to /bulk,
+// but the /bulk UI was never built (only the API). Link removed until the page
+// exists; tracked in issue #3.
+describe('homepage no longer links to /bulk (issue #3)', () => {
+  it('does not link to /bulk or show the "Look up several at once" CTA', async () => {
+    const res = await app.fetch(new Request('https://released.example/'));
+    const body = await res.text();
+    expect(body).not.toContain('href="/bulk"');
+    expect(body).not.toContain('Look up several at once');
+  });
+});
+
 describe('homepage popular-projects chips', () => {
   it('renders a chip section between the bulk link and the example', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
