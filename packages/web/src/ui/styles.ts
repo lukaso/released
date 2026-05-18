@@ -194,9 +194,38 @@ footer {
 footer a { color: var(--text-3); text-decoration: none; }
 footer a:hover { color: var(--text-2); }
 footer a:visited { color: var(--text-3); }
+/* Popular projects chip row — clickable alias shortcuts on the homepage
+ * and inside the bare-SHA error banner. Each chip is a real <button>; click
+ * inserts the alias into the search input via the delegated handler in
+ * layout.tsx (see chip-click.ts for the tested source-of-truth logic). */
+.projects-section { margin-top: 28px; }
+.projects-label {
+  display: block; font-size: 12px; font-weight: 500; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .05em; margin-bottom: 10px;
+}
+.projects-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.project-chip {
+  font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 500;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  color: var(--text-2); padding: 7px 12px; border-radius: 6px;
+  cursor: pointer;
+  transition: border-color .12s ease, color .12s ease, background .12s ease;
+}
+.project-chip:hover, .project-chip:focus-visible {
+  border-color: var(--border-bright); color: var(--text); background: var(--bg-hover);
+}
+.project-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.project-chip--just-clicked { border-color: var(--accent); color: var(--text); }
+.projects-hint { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+.error-chips { margin-top: 12px; }
+.error-chips .projects-label { color: var(--warn); }
+
 @media (max-width: 600px) {
   .searchbox { flex-direction: column; }
   .searchbox button { padding: 13px; }
   .answer-version .v { font-size: 36px; }
+  /* ~40px tap target on touch devices */
+  .project-chip { padding: 10px 14px; font-size: 13.5px; }
+  .projects-row { gap: 8px; }
 }
 `;

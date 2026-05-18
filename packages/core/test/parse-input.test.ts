@@ -360,3 +360,186 @@ describe('parseInput — rejection', () => {
     expect(() => parseInput('facebook/react', 'not-a-sha-zzz')).toThrow(InvalidInputError);
   });
 });
+
+describe('parseInput — alias shorthand', () => {
+  // Aliases resolve to repos via the curated KNOWN_PROJECTS catalog.
+  // `gtk` → gitlab.gnome.org/GNOME/gtk; `react` → github.com/facebook/react.
+  // Tests cover all four orderings + no-space variants + edge cases.
+
+  describe('single-arg, alias + SHA', () => {
+    it('parses "gtk 8c0ef808ea" (alias first, GitLab project)', () => {
+      expect(parseInput('gtk 8c0ef808ea')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+
+    it('parses "8c0ef808ea gtk" (SHA first, reverse order)', () => {
+      expect(parseInput('8c0ef808ea gtk')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+
+    it('parses "gtk@8c0ef808ea" (no-space, mirrors owner/repo@sha)', () => {
+      expect(parseInput('gtk@8c0ef808ea')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+
+    it('parses "react abc1234" (GitHub alias)', () => {
+      expect(parseInput('react abc1234')).toEqual({
+        kind: 'commit',
+        repo: GH('facebook/react'),
+        sha: 'abc1234',
+      });
+    });
+
+    it('is case-insensitive on the alias ("GTK 8c0ef808ea")', () => {
+      expect(parseInput('GTK 8c0ef808ea')).toEqual(parseInput('gtk 8c0ef808ea'));
+    });
+
+    it('handles dot in alias ("next.js abc1234")', () => {
+      expect(parseInput('next.js abc1234')).toEqual({
+        kind: 'commit',
+        repo: GH('vercel/next.js'),
+        sha: 'abc1234',
+      });
+    });
+
+    it('tolerates extra whitespace between tokens', () => {
+      expect(parseInput('gtk   8c0ef808ea')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+  });
+
+  describe('single-arg, alias + PR', () => {
+    it('parses "gtk #2466" (alias first, hash PR)', () => {
+      expect(parseInput('gtk #2466')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+
+    it('parses "#2466 gtk" (hash PR first, reverse order)', () => {
+      expect(parseInput('#2466 gtk')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+
+    it('parses "gtk 2466" (bare number, alias disambiguates)', () => {
+      expect(parseInput('gtk 2466')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+
+    it('parses "2466 gtk" (bare number first, alias disambiguates)', () => {
+      expect(parseInput('2466 gtk')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+
+    it('parses "react#12345" (no-space, mirrors owner/repo#PR)', () => {
+      expect(parseInput('react#12345')).toEqual({
+        kind: 'pr',
+        repo: GH('facebook/react'),
+        number: 12345,
+      });
+    });
+  });
+
+  describe('two-arg form, alias side', () => {
+    it('parses ("gtk", "8c0ef808ea") (alias first)', () => {
+      expect(parseInput('gtk', '8c0ef808ea')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+
+    it('parses ("8c0ef808ea", "gtk") (SHA first)', () => {
+      expect(parseInput('8c0ef808ea', 'gtk')).toEqual({
+        kind: 'commit',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        sha: '8c0ef808ea',
+      });
+    });
+
+    it('parses ("gtk", "#2466") (alias + PR)', () => {
+      expect(parseInput('gtk', '#2466')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+
+    it('parses ("gtk", "2466") (alias + bare PR)', () => {
+      expect(parseInput('gtk', '2466')).toEqual({
+        kind: 'pr',
+        repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+        number: 2466,
+      });
+    });
+  });
+
+  describe('rejection', () => {
+    it('unknown alias + SHA throws InvalidInputError (not BareShaError)', () => {
+      expect(() => parseInput('totallyfake 8c0ef808')).toThrow(InvalidInputError);
+    });
+
+    it('alias alone throws InvalidInputError (no SHA/PR context)', () => {
+      expect(() => parseInput('gtk')).toThrow(InvalidInputError);
+    });
+
+    it('alias + non-classifiable token throws InvalidInputError', () => {
+      expect(() => parseInput('gtk hello')).toThrow(InvalidInputError);
+    });
+
+    it('bare SHA alone still throws BareShaError (existing behavior unchanged)', () => {
+      expect(() => parseInput('8c0ef808ea')).toThrow(BareShaError);
+    });
+
+    it('bare PR number alone still throws InvalidInputError (no repo context)', () => {
+      expect(() => parseInput('2466')).toThrow(InvalidInputError);
+    });
+  });
+
+  describe('aliases via opts.aliases override', () => {
+    it('accepts a custom alias catalog instead of KNOWN_PROJECTS', () => {
+      const customAliases = [
+        {
+          alias: 'myproj',
+          displayName: 'MyProj',
+          host: 'github.com',
+          projectPath: 'me/myproj',
+        },
+      ];
+      expect(parseInput('myproj abc1234', undefined, { aliases: customAliases })).toEqual({
+        kind: 'commit',
+        repo: GH('me/myproj'),
+        sha: 'abc1234',
+      });
+    });
+
+    it('custom catalog supplants the default (gtk no longer resolves)', () => {
+      // Empty catalog means alias resolution finds nothing — alias path falls through.
+      expect(() => parseInput('gtk 8c0ef808ea', undefined, { aliases: [] })).toThrow(
+        InvalidInputError,
+      );
+    });
+  });
+});

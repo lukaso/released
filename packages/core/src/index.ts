@@ -1,6 +1,7 @@
 // Public API for @released/core.
 
-export { parseInput } from './parse-input.js';
+export { parseInput, type ParseOpts } from './parse-input.js';
+export { KNOWN_PROJECTS, findProjectByAlias, type KnownProject } from './known-projects.js';
 // Legacy aliases — keep working until consumers migrate to providerFor.
 export { makeGithubClient, type GithubClient, type GithubClientOpts } from './github.js';
 // New provider surface.

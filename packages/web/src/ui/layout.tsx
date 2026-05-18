@@ -82,6 +82,28 @@ const CLIENT_JS = `
     });
   });
 
+  // Project chip clicks — insert the alias into the search input. The
+  // SHA detection / replacement logic mirrors computeChipClickInputValue
+  // in chip-click.ts (the tested source of truth). Kept short and inline
+  // so drift stays obvious; if you change it, update chip-click.ts too.
+  document.addEventListener('click', function(e){
+    var t = e.target;
+    if (!(t instanceof HTMLElement)) return;
+    var chip = t.closest('.project-chip');
+    if (!chip) return;
+    var alias = chip.getAttribute('data-alias');
+    if (!alias) return;
+    e.preventDefault();
+    var input = document.getElementById('q');
+    if (!input) return;
+    var trimmed = input.value.trim();
+    input.value = /^[0-9a-f]{7,40}$/i.test(trimmed) ? (alias + ' ' + trimmed) : (alias + ' ');
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+    chip.classList.add('project-chip--just-clicked');
+    setTimeout(function(){ chip.classList.remove('project-chip--just-clicked'); }, 200);
+  });
+
   document.addEventListener('click', function(e){
     var t = e.target;
     if (!(t instanceof HTMLElement)) return;
