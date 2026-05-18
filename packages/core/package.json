@@ -1,8 +1,7 @@
 {
   "name": "@released/core",
   "version": "0.0.0",
-  "private": true,
-  "description": "Find the first release containing a git commit (algorithm + GitHub client). Internal workspace package — bundled into the CLI and used by the Workers; not separately published in v1.",
+  "description": "Find the first release containing a git commit — algorithm, GitHub + GitLab providers, parser, sanitizer. Pure TypeScript, Web Platform APIs only (Node 20+ and Cloudflare Workers).",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
