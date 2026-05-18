@@ -22,16 +22,15 @@ jobs:
       # pass `version:` here, pnpm/action-setup errors on double-specification.
       - uses: pnpm/action-setup@v4
 
+      # Node 24 ships with npm 11.x. OIDC Trusted Publishing requires
+      # npm >= 11.5.1; on Node 22 (npm 10.x) `npm i -g npm@latest` half-
+      # upgrades and crashes with "Cannot find module 'promise-retry'",
+      # so we just use a Node that already has the right npm.
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
-
-      # Node 22 ships with npm 10.x; OIDC Trusted Publishing requires
-      # npm >= 11.5.1 to mint the publish token from the GitHub OIDC token.
-      - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
 
