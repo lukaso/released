@@ -6,6 +6,11 @@ compatibility_flags = ["nodejs_compat"]
 [observability]
 enabled = true
 
+# Static assets (self-hosted Geist fonts under /fonts/*.woff2).
+# Keeps visitor IPs on our edge instead of googleapis/gstatic.
+[assets]
+directory = "./public"
+
 # Set with: wrangler secret put GITHUB_TOKEN
 # This is the SHARED server-side token. PAT-paste is per-user via X-User-Github-Token header.
 

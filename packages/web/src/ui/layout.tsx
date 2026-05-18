@@ -24,12 +24,10 @@ export function Layout(props: LayoutProps) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{props.title}</title>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap"
-        />
+        {/* Geist Sans + Mono are self-hosted under /fonts/ (Workers Assets).
+            No googleapis/gstatic preconnects — visitor IPs stay on our edge. */}
+        <link rel="preload" as="font" type="font/woff2" href="/fonts/Geist-Variable.woff2" crossorigin="" />
+        <link rel="preload" as="font" type="font/woff2" href="/fonts/GeistMono-Variable.woff2" crossorigin="" />
         <style>{raw(STYLES)}</style>
         <OgMeta
           ogBaseUrl={props.ogBaseUrl}

@@ -23,8 +23,8 @@ export function securityHeaders(nonce: string, ogBaseUrl: string): Record<string
   const csp = [
     "default-src 'none'",
     `script-src 'self' 'nonce-${nonce}'`,
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "font-src 'self' https://fonts.gstatic.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self'",
     `img-src 'self' data: ${ogOrigin}`,
     "connect-src 'self'",
     "form-action 'self'",
