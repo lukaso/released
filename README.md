@@ -106,14 +106,85 @@ pnpm --filter @released/web-og deploy
 
 ### CI/CD
 
-`.github/workflows/release.yml` runs the above sequence automatically on push
-to `main` after the Changesets "Version Packages" PR is merged. Required
-secrets:
+`.github/workflows/release.yml` runs on every push to `main`. Depending on
+repo state, the Changesets step does one of:
 
-- `NPM_TOKEN` — npm publish access for the CLI
-- `CLOUDFLARE_API_TOKEN` — Workers deploy
-- `CLOUDFLARE_ACCOUNT_ID`
-- (per-Worker secrets above must already be set via `wrangler secret put`)
+- **Pending changeset(s) in `.changeset/`**: opens or force-pushes a "Version
+  Packages" PR (`changeset-release/main` → `main`) that bumps versions,
+  writes CHANGELOGs, and deletes the consumed changeset files.
+- **No pending changesets + a version-bump commit just landed** (i.e., you
+  just merged the "Version Packages" PR): runs `pnpm run release` (=
+  `pnpm -r build && changeset publish`), which publishes `git-released` to
+  npm via OIDC Trusted Publishing.
+
+After either path, the workflow deploys the Cloudflare Workers (`web` first
+— `web-og` has a Service Binding to it).
+
+Required GitHub repo configuration:
+
+- **Repo secrets**:
+  - `CLOUDFLARE_API_TOKEN` — Workers deploy
+  - `CLOUDFLARE_ACCOUNT_ID`
+- **Repo settings** (Settings → Actions → General → Workflow permissions):
+  - "Allow GitHub Actions to create and approve pull requests" enabled
+    (the Changesets action needs this to open the Version Packages PR)
+- **npm side** (one-time per published package, at
+  `npmjs.com/package/git-released/access` → Trusted Publisher):
+  - Repository: `lukaso/released`, Workflow: `release.yml`, Environment: blank
+- Per-Worker secrets (`GITHUB_TOKEN`, `GITLAB_TOKEN`, `INTERNAL_SECRET`, etc.)
+  must already be set via `wrangler secret put` — see the one-time setup above.
+
+No `NPM_TOKEN` secret is needed — the `id-token: write` permission in
+`release.yml` plus the npm-side Trusted Publisher rule above lets the
+workflow exchange a GitHub OIDC token for a short-lived npm publish token
+at publish time, with a signed provenance attestation attached.
+
+### Releasing the CLI
+
+The CLI (`git-released` on npm) ships via [Changesets](https://github.com/changesets/changesets).
+No manual `npm publish` step — the only thing you do by hand is write a
+changeset file and merge a PR.
+
+1. **Make your code change** on a feature branch as normal.
+
+2. **Add a changeset** describing what you shipped:
+
+   ```bash
+   pnpm changeset
+   ```
+
+   Pick `git-released`, pick a bump type (patch / minor / major), write a
+   short summary that will land in the CHANGELOG. Commit the generated
+   `.changeset/<random-name>.md` file alongside your code change. (Internal
+   packages — `@released/core`, `@released/web`, `@released/web-og` — are
+   in the `ignore` list in `.changeset/config.json` and never appear in
+   the picker. `@released/core` is bundled into the CLI tarball at build
+   time, not separately published.)
+
+3. **Merge your change to `main`**. The `release.yml` workflow opens (or
+   updates) a "chore(release): version packages" PR with the version bump
+   + CHANGELOG entry.
+
+4. **Review and merge that auto-PR**. The next `release.yml` run publishes
+   to npm. You can watch the "Create release PR or publish CLI to npm"
+   step in the workflow for the `+ git-released@<version>` line.
+
+**To verify a release after CI publishes**:
+
+```bash
+npm view git-released versions --json | tail -5
+npx --yes git-released github.com/facebook/react/commit/a1b2c3d
+```
+
+**To deprecate a published version** (e.g., a broken release):
+
+```bash
+npm deprecate "git-released@<version>" "reason / what to use instead"
+```
+
+Versions cannot be republished after `npm unpublish` — npm permanently
+retires version numbers — so deprecation is almost always the right move
+for shipping a fix, paired with bumping to the next patch.
 
 ## Architecture
 
