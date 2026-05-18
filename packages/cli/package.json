@@ -1,6 +1,6 @@
 {
   "name": "git-released",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Find the first release containing a git commit — CLI. (Published as `git-released` because the unscoped `released` name on npm was taken in 2014.)",
   "keywords": [
     "git",
@@ -19,7 +19,9 @@
     "url": "git+https://github.com/lukaso/released.git",
     "directory": "packages/cli"
   },
-  "bugs": { "url": "https://github.com/lukaso/released/issues" },
+  "bugs": {
+    "url": "https://github.com/lukaso/released/issues"
+  },
   "license": "MIT",
   "author": "Lukas Oberhuber <lukas@hiphops.io>",
   "type": "module",
@@ -27,7 +29,9 @@
     "released": "./dist/cli.js",
     "git-released": "./dist/cli.js"
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup src/cli.ts --format esm --target node20 --out-dir dist --clean --shims",
     "test": "vitest run",
@@ -47,6 +51,10 @@
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
-  "engines": { "node": ">=20" },
-  "publishConfig": { "access": "public" }
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }
