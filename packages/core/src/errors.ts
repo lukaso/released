@@ -204,10 +204,10 @@ export class ProviderJsonError extends ReleasedError {
     let detail: string;
     if (looksLikeAnubis) {
       detail =
-        " — this host uses Anubis, a proof-of-work anti-bot challenge that fingerprints the Worker's HTTP stack. A provider token does NOT bypass it (Anubis runs before API auth). The CLI works against these hosts because Node's fetch has a different fingerprint: `npx released <url>` or `pnpm dlx released <url>`.";
+        " — this host uses Anubis, a proof-of-work anti-bot challenge that fingerprints the Worker's HTTP stack. A provider token does NOT bypass it (Anubis runs before API auth). The CLI works against these hosts because Node's fetch has a different fingerprint: `npx git-released <url>` or `pnpm dlx git-released <url>`.";
     } else if (looksLikeCloudflare) {
       detail =
-        ' — it looks like a Cloudflare anti-bot challenge page. Authenticated requests usually skip these; setting a provider token (e.g. GITLAB_TOKEN for the Worker, or `released --token=...`) typically resolves it.';
+        ' — it looks like a Cloudflare anti-bot challenge page. Authenticated requests usually skip these; setting a provider token (e.g. GITLAB_TOKEN for the Worker, or `git-released --token=...`) typically resolves it.';
     } else {
       detail = ` (usually a CDN challenge page or proxy error). First chars: ${snippet}`;
     }

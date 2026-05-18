@@ -93,7 +93,7 @@ export async function homeRoute(c: Context): Promise<Response> {
       </main>
       <footer>
         <a href="/how-it-works">how it works</a>
-        <a href="https://www.npmjs.com/package/released">CLI</a>
+        <a href="https://www.npmjs.com/package/git-released">CLI</a>
         <a href="https://github.com/lukaso/released">GitHub</a>
       </footer>
     </Layout>
@@ -119,7 +119,7 @@ function Nav() {
       </div>
       <div class="nav-links">
         <a href="/how-it-works">Docs</a>
-        <a href="https://www.npmjs.com/package/released">CLI</a>
+        <a href="https://www.npmjs.com/package/git-released">CLI</a>
         <a href="https://github.com/lukaso/released">GitHub</a>
       </div>
     </nav>

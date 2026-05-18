@@ -145,7 +145,7 @@ function PartialResult({ result }: { result: LookupResult }) {
           CLI for guaranteed completion:
         </div>
         <div style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--text);">
-          npx released {result.urls.commit}
+          npx git-released {result.urls.commit}
         </div>
         <div class="answer-actions" style="margin-top: 16px;">
           <a class="btn-fmt primary" href={result.urls.commit} style="text-decoration: none;">

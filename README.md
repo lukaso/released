@@ -12,10 +12,10 @@ gitlab.kitware.com). Self-hosted GitLab instances can be added via
 `EXTRA_GITLAB_HOSTS` env var (Worker) or `--gitlab-host` flag (CLI).
 
 - **Web**: <https://released.blabberate.com>
-- **CLI**:
-  - `npx released github.com/facebook/react/commit/a1b2c3d`
-  - `npx released https://gitlab.gnome.org/GNOME/gimp/-/merge_requests/2466`
-  - or `git released a1b2c3d` for the current repo
+- **CLI** (published on npm as `git-released` — `released` was taken):
+  - `npx git-released github.com/facebook/react/commit/a1b2c3d`
+  - `npx git-released https://gitlab.gnome.org/GNOME/gimp/-/merge_requests/2466`
+  - or `git released a1b2c3d` for the current repo (uses the `git-released` bin)
 
 ## Packages
 
@@ -24,7 +24,7 @@ This is a pnpm monorepo with four packages:
 | Package | What | Where |
 |---|---|---|
 | `@released/core` | Pure-TS library: algorithm, GitHub + GitLab providers, sanitizer, parser. Web Platform APIs only — runs in Node 20+ and Cloudflare Workers unchanged. | `packages/core/` |
-| `released` | Node CLI (`released` + `git-released` bin aliases). | `packages/cli/` |
+| `git-released` | Node CLI (installs `git-released` + `released` bin aliases). Published as `git-released` because the unscoped `released` name was taken on npm. | `packages/cli/` |
 | `@released/web` | Cloudflare Worker — homepage + permalink page + JSON API. | `packages/web/` |
 | `@released/web-og` | Cloudflare Worker — OG-image PNG renderer (isolated bundle weight). Service Binding to `@released/web`. | `packages/web-og/` |
 
@@ -42,7 +42,7 @@ Per-package dev:
 ```bash
 pnpm --filter @released/web dev          # wrangler dev for web
 pnpm --filter @released/web-og dev       # wrangler dev for web-og
-pnpm --filter released dev -- <input>    # tsx-run the CLI in place
+pnpm --filter git-released dev -- <input>    # tsx-run the CLI in place
 ```
 
 ## Deploy (Cloudflare Workers)

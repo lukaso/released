@@ -166,7 +166,7 @@ export async function resultRoute(c: Context): Promise<Response> {
       <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
       <footer>
         <a href="/how-it-works">how it works</a>
-        <a href="https://www.npmjs.com/package/released">CLI</a>
+        <a href="https://www.npmjs.com/package/git-released">CLI</a>
         <a href="https://github.com/lukaso/released">GitHub</a>
       </footer>
     </Layout>
@@ -274,7 +274,7 @@ function renderNotYetReleased(
       </main>
       <footer>
         <a href="/how-it-works">how it works</a>
-        <a href="https://www.npmjs.com/package/released">CLI</a>
+        <a href="https://www.npmjs.com/package/git-released">CLI</a>
         <a href="https://github.com/lukaso/released">GitHub</a>
       </footer>
     </Layout>
@@ -337,7 +337,7 @@ function Nav() {
       </a>
       <div class="nav-links">
         <a href="/how-it-works">Docs</a>
-        <a href="https://www.npmjs.com/package/released">CLI</a>
+        <a href="https://www.npmjs.com/package/git-released">CLI</a>
         <a href="https://github.com/lukaso/released">GitHub</a>
       </div>
     </nav>
