@@ -87,7 +87,7 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
             <div class="sec-label">Also contained in</div>
             <div class="versions">
               {result.alsoIn.map((h) => (
-                <a class="v-chip" href={h.url}>
+                <a key={h.tag} class="v-chip" href={h.url}>
                   {h.tag}
                 </a>
               ))}
@@ -231,9 +231,9 @@ function ProviderPrereleaseBanner({ tag, releaseUrl }: { tag: string; releaseUrl
       <a href={releaseUrl} style="color: inherit; text-decoration: underline;">
         {tag}
       </a>{' '}
-      as a prerelease, even though our tag-name heuristic didn't recognize it. The first
-      stable release containing this commit may not exist yet — check the project for an
-      unreleased stable version, or treat this answer with caution.
+      as a prerelease, even though our tag-name heuristic didn't recognize it. The first stable
+      release containing this commit may not exist yet — check the project for an unreleased stable
+      version, or treat this answer with caution.
     </div>
   );
 }

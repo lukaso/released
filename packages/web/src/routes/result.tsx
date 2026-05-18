@@ -7,6 +7,7 @@ import {
   type LookupInput,
   type LookupResult,
   NotYetReleasedError,
+  type Provider,
   ReleasedError,
   type RepoRef,
   cacheKey,
@@ -87,7 +88,7 @@ export async function resultRoute(c: Context): Promise<Response> {
   // Compute if not cached
   if (!result) {
     const extraGitlabHosts = extraGitlabHostsFromEnv(env);
-    let client;
+    let client: Provider;
     try {
       const token = resolveProviderToken(env, req, repo.host);
       client = providerFor(repo.host, { token, extraGitlabHosts });

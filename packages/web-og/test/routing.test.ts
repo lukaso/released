@@ -5,10 +5,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('workers-og', () => ({
-  ImageResponse: class {
+  // Mock ImageResponse as a Response subclass — cleaner than `return new
+  // Response(...)` from a constructor (which trips lint/correctness/
+  // noConstructorReturn and relies on the JS oddity where a constructor's
+  // returned object overrides `this`).
+  ImageResponse: class extends Response {
     constructor(_node: unknown, init?: { headers?: Record<string, string> }) {
-      // biome-ignore lint/correctness/noConstructorReturn: intentional — mocking workers-og's ImageResponse, whose real implementation also returns a Response from its constructor.
-      return new Response('PNG-BYTES', { headers: init?.headers ?? {} });
+      super('PNG-BYTES', { headers: init?.headers ?? {} });
     }
   },
 }));

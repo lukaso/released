@@ -125,7 +125,9 @@ describe('web Worker — basic routing', () => {
     const body = await res.text();
     // GitHub forms are positions 1-3, GitLab is position 4. This locks in the
     // design-review decision so a future contributor doesn't "fairly" re-order.
-    expect(body).toMatch(/placeholder="github\.com[^"]*owner\/repo[^"]*o\/r#PR[^"]*gitlab\.gnome\.org/);
+    expect(body).toMatch(
+      /placeholder="github\.com[^"]*owner\/repo[^"]*o\/r#PR[^"]*gitlab\.gnome\.org/,
+    );
     // Field label generalizes to pull/merge.
     expect(body).toContain('Commit URL, SHA, or pull/merge request');
   });
@@ -386,16 +388,22 @@ describe('homepage popular-projects chips', () => {
     const res = await app.fetch(new Request('https://released.example/'));
     const body = await res.text();
     // Spot-check three representative aliases (GitLab, GitHub, dotted)
-    expect(body).toMatch(/<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="gtk"[^>]*>GTK<\/button>/);
-    expect(body).toMatch(/<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="react"[^>]*>React<\/button>/);
-    expect(body).toMatch(/<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="next\.js"[^>]*>Next\.js<\/button>/);
+    expect(body).toMatch(
+      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="gtk"[^>]*>GTK<\/button>/,
+    );
+    expect(body).toMatch(
+      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="react"[^>]*>React<\/button>/,
+    );
+    expect(body).toMatch(
+      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="next\.js"[^>]*>Next\.js<\/button>/,
+    );
   });
 
   it('exposes the click handler that wires chip clicks to the search input', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
     const body = await res.text();
     // The inline JS targets .project-chip and writes to the #q input.
-    expect(body).toContain(".project-chip");
+    expect(body).toContain('.project-chip');
     expect(body).toMatch(/getElementById\(.q.\)/);
     // Mirror of computeChipClickInputValue is inlined (SHA-shape detection).
     expect(body).toMatch(/\[0-9a-f\]\{7,40\}/);
@@ -410,7 +418,7 @@ describe('bare-SHA error banner — recovery chips', () => {
     expect(res.status).toBe(200);
     const body = await res.text();
     // Error banner is present with the bare-SHA copy
-    expect(body).toContain("looks like a SHA, but I need a repo too");
+    expect(body).toContain('looks like a SHA, but I need a repo too');
     // In-banner chips block
     expect(body).toContain('class="error-chips"');
     expect(body).toContain('aria-labelledby="popular-projects-label-err"');

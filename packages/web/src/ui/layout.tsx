@@ -26,8 +26,20 @@ export function Layout(props: LayoutProps) {
         <title>{props.title}</title>
         {/* Geist Sans + Mono are self-hosted under /fonts/ (Workers Assets).
             No googleapis/gstatic preconnects — visitor IPs stay on our edge. */}
-        <link rel="preload" as="font" type="font/woff2" href="/fonts/Geist-Variable.woff2" crossorigin="" />
-        <link rel="preload" as="font" type="font/woff2" href="/fonts/GeistMono-Variable.woff2" crossorigin="" />
+        <link
+          rel="preload"
+          as="font"
+          type="font/woff2"
+          href="/fonts/Geist-Variable.woff2"
+          crossorigin=""
+        />
+        <link
+          rel="preload"
+          as="font"
+          type="font/woff2"
+          href="/fonts/GeistMono-Variable.woff2"
+          crossorigin=""
+        />
         <style>{raw(STYLES)}</style>
         <OgMeta
           ogBaseUrl={props.ogBaseUrl}

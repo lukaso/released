@@ -5,6 +5,7 @@
 import {
   type LookupInput,
   type LookupResult,
+  type Provider,
   ReleasedError,
   cacheKey,
   findRelease,
@@ -48,7 +49,7 @@ export async function lookupRoute(c: Context): Promise<Response> {
 
   const token = resolveProviderToken(env, req, parsed.repo.host);
   const extraGitlabHosts = extraGitlabHostsFromEnv(env);
-  let client;
+  let client: Provider;
   try {
     client = providerFor(parsed.repo.host, { token, extraGitlabHosts });
   } catch (err) {

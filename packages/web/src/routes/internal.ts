@@ -6,13 +6,7 @@
 // permalinks today. Federated OG rendering is a captured TODO; when that lands,
 // add a parallel /internal/h/:host/r/:projectPath/:sha route.
 
-import {
-  type LookupResult,
-  cacheKey,
-  findRelease,
-  parseInput,
-  providerFor,
-} from '@released/core';
+import { type LookupResult, cacheKey, findRelease, parseInput, providerFor } from '@released/core';
 import type { Context } from 'hono';
 import { extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';

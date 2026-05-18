@@ -22,13 +22,16 @@
     "rules": {
       "recommended": true,
       "style": {
-        "noNonNullAssertion": "warn"
+        "noNonNullAssertion": "warn",
+        "useTemplate": "warn",
+        "noUnusedTemplateLiteral": "warn"
       },
       "suspicious": {
         "noExplicitAny": "warn"
       },
       "complexity": {
-        "noBannedTypes": "warn"
+        "noBannedTypes": "warn",
+        "useOptionalChain": "warn"
       }
     }
   }

@@ -38,9 +38,7 @@ export async function homeRoute(c: Context): Promise<Response> {
           Paste a commit, SHA, or merged PR — get back the first release that contains it.
         </p>
 
-        {errorMsg && (
-          <ErrorBanner message={errorMsg} bad={bad} reason={reason} />
-        )}
+        {errorMsg && <ErrorBanner message={errorMsg} bad={bad} reason={reason} />}
 
         <form method="get" action="/lookup" data-loading-form>
           <label class="field-label" for="q">
@@ -182,14 +180,12 @@ function ProjectChips({ inErrorBanner = false }: { inErrorBanner?: boolean }) {
       </span>
       <div class="projects-row">
         {KNOWN_PROJECTS.map((p) => (
-          <button type="button" class="project-chip" data-alias={p.alias}>
+          <button key={p.alias} type="button" class="project-chip" data-alias={p.alias}>
             {p.displayName}
           </button>
         ))}
       </div>
-      {!inErrorBanner && (
-        <p class="projects-hint">…or paste any GitHub / GitLab URL above.</p>
-      )}
+      {!inErrorBanner && <p class="projects-hint">…or paste any GitHub / GitLab URL above.</p>}
     </section>
   );
 }

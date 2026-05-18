@@ -65,9 +65,7 @@ app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
 // /how-it-works lived in the nav + footer of every page (issue #1) but never
 // had a route. The content already exists as the README's Architecture section;
 // rather than duplicate it, redirect there permanently.
-app.get('/how-it-works', (c) =>
-  c.redirect('https://github.com/lukaso/released#architecture', 301),
-);
+app.get('/how-it-works', (c) => c.redirect('https://github.com/lukaso/released#architecture', 301));
 
 app.get('/healthz', (c) => c.text('ok'));
 

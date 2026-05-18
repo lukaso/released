@@ -10,6 +10,7 @@ import {
   type LookupInput,
   type LookupResult,
   MAX_BULK,
+  type Provider,
   type ReleasedError,
   findReleasesBulk,
   parseInput,
@@ -72,7 +73,7 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
   await Promise.all(
     [...byHost.entries()].map(async ([host, group]) => {
       const token = resolveProviderToken(env, req, host);
-      let client;
+      let client: Provider;
       try {
         client = providerFor(host, { token, extraGitlabHosts });
       } catch (err) {

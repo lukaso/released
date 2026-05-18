@@ -611,7 +611,9 @@ describe('findRelease — galloping search (D36: O(log n) compares for the commo
       // Spread the older 42 tags backward from datePos.
       // Tag at index 42 lands exactly on commitDate; tags 43-45 are later.
       const offsetDays = i - 42;
-      const tagDate = new Date(Date.parse(commitDate) + offsetDays * 24 * 60 * 60 * 1000).toISOString();
+      const tagDate = new Date(
+        Date.parse(commitDate) + offsetDays * 24 * 60 * 60 * 1000,
+      ).toISOString();
       return { name: `v${i}`, sha: `s${i}`, date: tagDate };
     });
     const client = fakeClient({

@@ -2,7 +2,17 @@
   "name": "git-released",
   "version": "0.1.1",
   "description": "Find the first release containing a git commit — CLI. (Published as `git-released` because the unscoped `released` name on npm was taken in 2014.)",
-  "keywords": ["git", "release", "tag", "version", "github", "gitlab", "first-release", "since-release", "cli"],
+  "keywords": [
+    "git",
+    "release",
+    "tag",
+    "version",
+    "github",
+    "gitlab",
+    "first-release",
+    "since-release",
+    "cli"
+  ],
   "homepage": "https://released.blabberate.com",
   "repository": {
     "type": "git",
