@@ -28,6 +28,11 @@ jobs:
           cache: pnpm
           registry-url: "https://registry.npmjs.org"
 
+      # Node 22 ships with npm 10.x; OIDC Trusted Publishing requires
+      # npm >= 11.5.1 to mint the publish token from the GitHub OIDC token.
+      - name: Upgrade npm for Trusted Publishing
+        run: npm install -g npm@latest
+
       - run: pnpm install --frozen-lockfile
 
       # Build must run BEFORE typecheck/test: downstream workspace packages

@@ -2,6 +2,16 @@
   "name": "git-released",
   "version": "0.0.0",
   "description": "Find the first release containing a git commit — CLI. (Published as `git-released` because the unscoped `released` name on npm was taken in 2014.)",
+  "keywords": ["git", "release", "tag", "version", "github", "gitlab", "first-release", "since-release", "cli"],
+  "homepage": "https://released.blabberate.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lukaso/released.git",
+    "directory": "packages/cli"
+  },
+  "bugs": { "url": "https://github.com/lukaso/released/issues" },
+  "license": "MIT",
+  "author": "Lukas Oberhuber <lukas@hiphops.io>",
   "type": "module",
   "bin": {
     "released": "./dist/cli.js",

@@ -2,6 +2,16 @@
   "name": "@released/core",
   "version": "0.0.0",
   "description": "Find the first release containing a git commit — algorithm, GitHub + GitLab providers, parser, sanitizer. Pure TypeScript, Web Platform APIs only (Node 20+ and Cloudflare Workers).",
+  "keywords": ["git", "release", "tag", "github", "gitlab", "first-release", "since-release"],
+  "homepage": "https://released.blabberate.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lukaso/released.git",
+    "directory": "packages/core"
+  },
+  "bugs": { "url": "https://github.com/lukaso/released/issues" },
+  "license": "MIT",
+  "author": "Lukas Oberhuber <lukas@hiphops.io>",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
