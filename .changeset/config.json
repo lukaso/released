@@ -3,9 +3,9 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [],
-  "linked": [["@released/core", "git-released"]],
+  "linked": [],
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["@released/web", "@released/web-og"]
+  "ignore": ["@released/core", "@released/web", "@released/web-og"]
 }

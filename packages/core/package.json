@@ -1,17 +1,8 @@
 {
   "name": "@released/core",
   "version": "0.0.0",
-  "description": "Find the first release containing a git commit — algorithm, GitHub + GitLab providers, parser, sanitizer. Pure TypeScript, Web Platform APIs only (Node 20+ and Cloudflare Workers).",
-  "keywords": ["git", "release", "tag", "github", "gitlab", "first-release", "since-release"],
-  "homepage": "https://released.blabberate.com",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/lukaso/released.git",
-    "directory": "packages/core"
-  },
-  "bugs": { "url": "https://github.com/lukaso/released/issues" },
-  "license": "MIT",
-  "author": "Lukas Oberhuber <lukas@hiphops.io>",
+  "private": true,
+  "description": "Find the first release containing a git commit — algorithm, GitHub + GitLab providers, parser, sanitizer. Pure TypeScript, internal workspace package: bundled into the `git-released` CLI tarball at publish time, and consumed by the Workers via the pnpm workspace symlink. Not published to npm.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -35,6 +26,5 @@
   "dependencies": {
     "micromark": "^4.0.1"
   },
-  "engines": { "node": ">=20" },
-  "publishConfig": { "access": "public" }
+  "engines": { "node": ">=20" }
 }

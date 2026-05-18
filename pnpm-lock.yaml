@@ -23,13 +23,16 @@ importers:
 
   packages/cli:
     dependencies:
-      '@released/core':
-        specifier: workspace:*
-        version: link:../core
       cac:
         specifier: ^6.7.14
         version: 6.7.14
+      micromark:
+        specifier: ^4.0.1
+        version: 4.0.2
     devDependencies:
+      '@released/core':
+        specifier: workspace:*
+        version: link:../core
       '@types/node':
         specifier: ^22.10.2
         version: 22.19.19
