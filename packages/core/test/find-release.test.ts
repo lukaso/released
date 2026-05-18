@@ -104,7 +104,7 @@ function fakeClient(spec: {
 }
 
 /** Convenience: build a fake provider that identifies as a GitLab instance. */
-export function fakeGitlabClient(host: string, spec: Parameters<typeof fakeClient>[0]) {
+function fakeGitlabClient(host: string, spec: Parameters<typeof fakeClient>[0]) {
   return fakeClient({ ...spec, base: makeGitlabProvider(host) });
 }
 

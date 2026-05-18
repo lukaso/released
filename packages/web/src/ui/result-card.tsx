@@ -50,13 +50,13 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
           </div>
           <div class="answer-actions">
             <span class="share-lbl">Copy</span>
-            <button class="btn-fmt primary" data-copy="markdown">
+            <button type="button" class="btn-fmt primary" data-copy="markdown">
               as Markdown
             </button>
-            <button class="btn-fmt" data-copy="slack">
+            <button type="button" class="btn-fmt" data-copy="slack">
               for Slack
             </button>
-            <button class="btn-fmt" data-copy="link">
+            <button type="button" class="btn-fmt" data-copy="link">
               link only
             </button>
             <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>

@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('workers-og', () => ({
   ImageResponse: class {
     constructor(_node: unknown, init?: { headers?: Record<string, string> }) {
+      // biome-ignore lint/correctness/noConstructorReturn: intentional — mocking workers-og's ImageResponse, whose real implementation also returns a Response from its constructor.
       return new Response('PNG-BYTES', { headers: init?.headers ?? {} });
     }
   },
