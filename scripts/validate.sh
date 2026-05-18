@@ -12,6 +12,14 @@
 # Skip with `git push --no-verify` when intentionally pushing WIP.
 set -euo pipefail
 
+# Skip in CI — the workflow already runs build/typecheck/test/lint as
+# explicit steps, and the Changesets action's force-push to
+# changeset-release/main triggers this via the pre-push hook,
+# duplicating work and risking environmental mismatches.
+if [ -n "${CI:-}" ]; then
+  exit 0
+fi
+
 cd "$(git rev-parse --show-toplevel)"
 
 echo "→ build"
