@@ -153,13 +153,41 @@ changeset file and merge a PR.
    pnpm changeset
    ```
 
-   Pick `git-released`, pick a bump type (patch / minor / major), write a
-   short summary that will land in the CHANGELOG. Commit the generated
-   `.changeset/<random-name>.md` file alongside your code change. (Internal
-   packages — `@released/core`, `@released/web`, `@released/web-og` — are
-   in the `ignore` list in `.changeset/config.json` and never appear in
-   the picker. `@released/core` is bundled into the CLI tarball at build
-   time, not separately published.)
+   This is an interactive prompt:
+
+   - **Which packages?** Only `git-released` is selectable. The internal
+     packages (`@released/core`, `@released/web`, `@released/web-og`) are
+     in the `ignore` list in `.changeset/config.json` and don't appear.
+     `@released/core` is bundled into the CLI tarball at build time and
+     is not separately published.
+   - **Which type of bump?** Pick by what your change does to users:
+
+     | Bump  | When                                                                 | Example: from `0.1.1` to… |
+     |-------|----------------------------------------------------------------------|----------------------------|
+     | patch | Bug fix, perf improvement, doc fix, internal refactor. No new flags, no behavior change for existing inputs. | `0.1.2` |
+     | minor | New feature or flag, new supported host, new output format. No breaking changes to existing usage. | `0.2.0` |
+     | major | Breaking change: removed/renamed flag, changed default behavior, dropped a Node version, changed CLI exit-code semantics, removed a previously-exported function from the bundled library. | `1.0.0` |
+
+     **Pre-1.0 caveat**: while the CLI is `0.x`, you can also fold
+     breaking changes into a minor bump (`0.1.x → 0.2.0`) rather than
+     going to `1.0.0` — that's the conventional escape hatch for
+     unstable APIs. Use `major` (→ `1.0.0`) only when you're consciously
+     declaring stability and the bump signals "this is the API now."
+
+   - **Summary**: one or two sentences that will land verbatim in
+     `packages/cli/CHANGELOG.md`. Write it for the person who'll grep
+     the changelog six months from now: lead with the user-visible
+     effect, not the implementation detail.
+
+   Commit the generated `.changeset/<random-name>.md` file alongside
+   your code change. You can hand-edit or delete this file freely before
+   pushing — it's just markdown with YAML frontmatter, no magic.
+
+   **Stacking multiple changesets** is fine: run `pnpm changeset` once
+   per logical change before pushing. When the Version Packages PR
+   opens, it sums them — the highest bump type wins (one `minor` + two
+   `patch` → minor bump), and all summaries land in the CHANGELOG under
+   the new version header.
 
 3. **Merge your change to `main`**. The `release.yml` workflow opens (or
    updates) a "chore(release): version packages" PR with the version bump
