@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit: lint staged JS/TS/JSON files with biome. Fast (~tens of ms).
+# Mirrors the Lint step in .github/workflows/ci.yml so CI never fails on
+# something a local commit could have caught.
+#
+# Skip for WIP commits with: `git commit --no-verify`
+#
+# Written for macOS's bundled bash 3.2 + BSD grep — no mapfile, no -z flag,
+# no process substitution into arrays.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+# Newline-separated list of staged files. --diff-filter=ACM = Added, Copied,
+# Modified (skips Deletions, which can't be linted). Filenames with embedded
+# newlines aren't a realistic concern in a TS project; if they ever are,
+# rewrite this to use `git diff -z` + a portable null-delimited loop.
+STAGED=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(ts|tsx|js|jsx|json|jsonc)$' || true)
+
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+# biome check = formatter + linter + import organizer in one pass.
+# Intentional word-splitting on STAGED.
+# shellcheck disable=SC2086
+pnpm exec biome check $STAGED
