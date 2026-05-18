@@ -50,8 +50,11 @@ jobs:
         id: changesets
         uses: changesets/action@v1
         with:
-          publish: pnpm release
-          version: pnpm version
+          # `pnpm version` and `pnpm publish` are pnpm built-ins — they bypass
+          # the package.json `scripts` block. Force the script lookup with `run`
+          # so changeset version/publish actually execute.
+          publish: pnpm run release
+          version: pnpm run version
           commit: "chore(release): version packages"
           title: "chore(release): version packages"
         env:
