@@ -13,9 +13,8 @@ gitlab.kitware.com). Self-hosted GitLab instances can be added via
 
 - **Web**: <https://released.blabberate.com>
 - **CLI** (published on npm as `git-released` — `released` was taken):
-  - `npx git-released github.com/facebook/react/commit/a1b2c3d`
-  - `npx git-released https://gitlab.gnome.org/GNOME/gimp/-/merge_requests/2466`
-  - or `git released a1b2c3d` for the current repo (uses the `git-released` bin)
+  - `npx git-released github.com/honojs/hono/commit/f82aba8` → first released in `v4.12.11`
+  - or `git released <sha>` for the current repo (uses the `git-released` bin)
 
 ## Packages
 
