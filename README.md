@@ -76,6 +76,18 @@ Order matters — `web-og` has a Service Binding to `web`, so `web` deploys firs
    #   EXTRA_GITLAB_HOSTS = "git.example.com,gitlab.acme.net"
    ```
 
+   **Token type + identity (matters for the Worker):** use a **legacy /
+   classic** GitLab Personal Access Token with the **`read_api`** scope —
+   *not* a fine-grained token. The Worker serves lookups for arbitrary
+   gitlab.com projects that visitors paste, so it needs broad read access;
+   fine-grained tokens require enumerating specific projects up front,
+   which doesn't fit. This token is the Worker's shared service identity
+   for *every* visitor's GitLab lookup, so prefer a **dedicated bot/service
+   account** over a personal one — that keeps rate-limit consumption and
+   audit logs cleanly attributable, and means rotating it doesn't touch
+   your personal credentials. Set a far-out expiry and rotate on a
+   schedule.
+
 2. **Internal secret** shared between `web` and `web-og` (used by `web` to
    reject direct public hits to `/internal/result/*` and only accept calls
    coming through the Service Binding):
