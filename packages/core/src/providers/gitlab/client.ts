@@ -32,6 +32,8 @@ import { makeGitlabUrls } from './urls.js';
  *  history in even the largest repos while keeping the deadline budget intact. */
 const MAX_TAG_PAGES = 5;
 
+const GITLAB_TERMS = { mergeRequest: 'Merge request', mergeRequestPrefix: '!' } as const;
+
 export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provider {
   // Bind fetch so calls inside Cloudflare Workers don't trip the
   // "Illegal invocation: function called with incorrect `this` reference" check.
@@ -84,7 +86,7 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     const url = `${restBase}/projects/${projectId(repo)}/merge_requests/${n}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
-    if (res.status === 404) throw new PrNotFoundError(n);
+    if (res.status === 404) throw new PrNotFoundError(n, GITLAB_TERMS);
     if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
     const body = await readJson<{
       state: string;
@@ -95,9 +97,11 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
        *  commit is created — `sha` IS the commit that ended up in the target branch. */
       sha: string | null;
     }>(res);
-    if (body.state !== 'merged') throw new PrNotMergedError(n);
+    if (body.state !== 'merged') {
+      throw new PrNotMergedError(n, body.state === 'closed' ? 'closed' : 'open', GITLAB_TERMS);
+    }
     const sha = body.merge_commit_sha ?? body.squash_commit_sha ?? body.sha;
-    if (sha == null) throw new PrMergeCommitUnavailableError(n);
+    if (sha == null) throw new PrMergeCommitUnavailableError(n, GITLAB_TERMS);
     return { merged: true as const, mergeCommitSha: sha, rateLimit };
   }
 
@@ -195,7 +199,7 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
   return {
     host,
     kind: 'gitlab',
-    terms: { mergeRequest: 'Merge request', mergeRequestPrefix: '!' },
+    terms: GITLAB_TERMS,
     getPullRequest,
     getCommit,
     listTagsWithDates,

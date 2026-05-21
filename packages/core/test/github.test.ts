@@ -65,11 +65,27 @@ describe('getPullRequest', () => {
   });
 
   it('throws PrNotMergedError when not merged', async () => {
-    const fetch = queuedFetch(jsonResp({ merged: false, merge_commit_sha: null }));
+    const fetch = queuedFetch(jsonResp({ merged: false, state: 'open', merge_commit_sha: null }));
     const c = makeGithubClient({ fetch });
     await expect(
       c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 56012),
     ).rejects.toBeInstanceOf(PrNotMergedError);
+  });
+
+  it('PrNotMergedError says "has not been merged yet" for an OPEN PR', async () => {
+    const fetch = queuedFetch(jsonResp({ merged: false, state: 'open', merge_commit_sha: null }));
+    const c = makeGithubClient({ fetch });
+    await expect(
+      c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 56012),
+    ).rejects.toThrow(/Pull request #56012 has not been merged yet/);
+  });
+
+  it('PrNotMergedError says "closed without being merged" for a CLOSED PR', async () => {
+    const fetch = queuedFetch(jsonResp({ merged: false, state: 'closed', merge_commit_sha: null }));
+    const c = makeGithubClient({ fetch });
+    await expect(
+      c.getPullRequest({ host: 'github.com', projectPath: 'vercel/next.js' }, 56012),
+    ).rejects.toThrow(/Pull request #56012 was closed without being merged/);
   });
 
   it('throws PrMergeCommitUnavailableError when merged=true but merge_commit_sha=null', async () => {

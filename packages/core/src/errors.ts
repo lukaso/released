@@ -76,26 +76,52 @@ export class AmbiguousShaError extends ReleasedError {
   }
 }
 
+/** Provider display vocabulary for PR/MR error messages. Mirrors
+ *  {@link Provider.terms} so error copy reads "Merge request !2466" on GitLab
+ *  and "Pull request #2466" on GitHub. Defaults to GitHub for back-compat with
+ *  callers that don't pass terms. */
+export type PrTerms = { mergeRequest: string; mergeRequestPrefix: string };
+const DEFAULT_PR_TERMS: PrTerms = { mergeRequest: 'Pull request', mergeRequestPrefix: '#' };
+const prRef = (n: number, terms: PrTerms) =>
+  `${terms.mergeRequest} ${terms.mergeRequestPrefix}${n}`;
+
 export class PrNotMergedError extends ReleasedError {
   readonly kind = 'pr_not_merged' as const;
-  constructor(public readonly prNumber: number) {
-    super(`PR #${prNumber} has not been merged yet.`);
+  constructor(
+    public readonly prNumber: number,
+    /** 'open' — still open, may merge later. 'closed' — closed WITHOUT merging,
+     *  so it will never produce a merge commit. Drives the message wording. */
+    public readonly prState: 'open' | 'closed' = 'open',
+    terms: PrTerms = DEFAULT_PR_TERMS,
+  ) {
+    const ref = prRef(prNumber, terms);
+    super(
+      prState === 'closed'
+        ? `${ref} was closed without being merged.`
+        : `${ref} has not been merged yet.`,
+    );
     this.name = 'PrNotMergedError';
   }
 }
 
 export class PrNotFoundError extends ReleasedError {
   readonly kind = 'pr_not_found' as const;
-  constructor(public readonly prNumber: number) {
-    super(`PR #${prNumber} not found.`);
+  constructor(
+    public readonly prNumber: number,
+    terms: PrTerms = DEFAULT_PR_TERMS,
+  ) {
+    super(`${prRef(prNumber, terms)} not found.`);
     this.name = 'PrNotFoundError';
   }
 }
 
 export class PrMergeCommitUnavailableError extends ReleasedError {
   readonly kind = 'pr_merge_commit_unavailable' as const;
-  constructor(public readonly prNumber: number) {
-    super(`PR #${prNumber} is marked merged but its merge commit is not available.`);
+  constructor(
+    public readonly prNumber: number,
+    terms: PrTerms = DEFAULT_PR_TERMS,
+  ) {
+    super(`${prRef(prNumber, terms)} is marked merged but its merge commit is not available.`);
     this.name = 'PrMergeCommitUnavailableError';
   }
 }

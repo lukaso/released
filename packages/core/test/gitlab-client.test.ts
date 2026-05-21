@@ -102,6 +102,26 @@ describe('GitlabProvider.getPullRequest (MR)', () => {
     await expect(c.getPullRequest(GNOME_GIMP, 2466)).rejects.toBeInstanceOf(PrNotMergedError);
   });
 
+  it('PrNotMergedError uses MR vocabulary + "has not been merged yet" for an OPENED MR', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'opened', merge_commit_sha: null, squash_commit_sha: null }),
+    );
+    const c = makeGitlabProvider('gitlab.com', { fetch });
+    await expect(c.getPullRequest(GNOME_GIMP, 2466)).rejects.toThrow(
+      /Merge request !2466 has not been merged yet/,
+    );
+  });
+
+  it('PrNotMergedError uses MR vocabulary + "closed without being merged" for a CLOSED MR', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', merge_commit_sha: null, squash_commit_sha: null }),
+    );
+    const c = makeGitlabProvider('gitlab.com', { fetch });
+    await expect(c.getPullRequest(GNOME_GIMP, 2466)).rejects.toThrow(
+      /Merge request !2466 was closed without being merged/,
+    );
+  });
+
   it('throws PrMergeCommitUnavailableError when merged with no SHAs (rare — only when GitLab loses all metadata)', async () => {
     const fetch = queuedFetch(
       jsonResp({ state: 'merged', merge_commit_sha: null, squash_commit_sha: null, sha: null }),

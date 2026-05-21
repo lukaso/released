@@ -23,6 +23,8 @@ import { githubUrls } from './urls.js';
 const DEFAULT_REST_BASE = 'https://api.github.com';
 const DEFAULT_GQL_ENDPOINT = 'https://api.github.com/graphql';
 
+const GITHUB_TERMS = { mergeRequest: 'Pull request', mergeRequestPrefix: '#' } as const;
+
 const TAGS_QUERY = `
   query($owner:String!,$name:String!,$cursor:String){
     repository(owner:$owner,name:$name){
@@ -90,11 +92,17 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
     const url = `${restBase}/repos/${enc(owner)}/${enc(name)}/pulls/${n}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
-    if (res.status === 404) throw new PrNotFoundError(n);
+    if (res.status === 404) throw new PrNotFoundError(n, GITHUB_TERMS);
     if (!res.ok) throw new GitHubServerError(res.status, res.statusText);
-    const body = await readJson<{ merged: boolean; merge_commit_sha: string | null }>(res);
-    if (!body.merged) throw new PrNotMergedError(n);
-    if (body.merge_commit_sha == null) throw new PrMergeCommitUnavailableError(n);
+    const body = await readJson<{
+      merged: boolean;
+      state: string;
+      merge_commit_sha: string | null;
+    }>(res);
+    if (!body.merged) {
+      throw new PrNotMergedError(n, body.state === 'closed' ? 'closed' : 'open', GITHUB_TERMS);
+    }
+    if (body.merge_commit_sha == null) throw new PrMergeCommitUnavailableError(n, GITHUB_TERMS);
     return { merged: true as const, mergeCommitSha: body.merge_commit_sha, rateLimit };
   }
 
@@ -183,7 +191,7 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
   return {
     host: HOST,
     kind: 'github',
-    terms: { mergeRequest: 'Pull request', mergeRequestPrefix: '#' },
+    terms: GITHUB_TERMS,
     getPullRequest,
     getCommit,
     listTagsWithDates,
