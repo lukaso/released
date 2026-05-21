@@ -25,6 +25,38 @@ export type ParseOpts = {
   readonly aliases?: readonly KnownProject[];
 };
 
+/** Pull the first `n` capture groups from a successful regex match, asserting
+ *  each is present. Every regex in this file has fixed, known capture arity, so
+ *  a missing group means the pattern and its call site have drifted — a
+ *  programmer error worth throwing on, not silently coercing to undefined.
+ *
+ *  Overloaded to return a fixed-length tuple so destructured groups are typed
+ *  `string` (not `string | undefined`) — array destructuring is still subject
+ *  to noUncheckedIndexedAccess, but tuple element access is not. */
+function captures(m: RegExpMatchArray, n: 1): [string];
+function captures(m: RegExpMatchArray, n: 2): [string, string];
+function captures(m: RegExpMatchArray, n: 3): [string, string, string];
+function captures(m: RegExpMatchArray, n: number): string[] {
+  const out: string[] = [];
+  for (let i = 1; i <= n; i++) {
+    const g = m[i];
+    if (g === undefined) throw new Error(`parse-input: match missing capture group ${i}/${n}`);
+    out.push(g);
+  }
+  return out;
+}
+
+/** Split an "owner/repo" string (already validated against BARE_OWNER_REPO_RE)
+ *  into its two parts, asserting both are present. The regex guarantees exactly
+ *  one slash, so a failure here means validation and this split have drifted. */
+function splitOwnerRepo(s: string): [string, string] {
+  const [owner, name] = s.split('/');
+  if (owner === undefined || name === undefined) {
+    throw new Error(`parse-input: "${s}" is not owner/repo shaped`);
+  }
+  return [owner, name];
+}
+
 const SHA_RE = /^[0-9a-f]{7,40}$/i;
 const PR_REF_RE = /^#?\d+$/;
 // Any github URL form that carries an unambiguous (repo, sha) tuple. Trailing
@@ -109,71 +141,50 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   // shorthands have no host and would falsely look like GitLab.
   const shaUrl = stripped.match(GITHUB_SHA_URL_RE);
   if (shaUrl) {
-    return {
-      kind: 'commit',
-      repo: githubRef(shaUrl[1]!, shaUrl[2]!),
-      sha: shaUrl[3]!.toLowerCase(),
-    };
+    const [owner, repo, sha] = captures(shaUrl, 3);
+    return { kind: 'commit', repo: githubRef(owner, repo), sha: sha.toLowerCase() };
   }
 
   // PR-with-specific-commit URL form (/pull/N/commits|changes|files/SHA).
   // The SHA is more specific than the PR; treat as a commit lookup.
   const prCommitUrl = stripped.match(PR_COMMIT_URL_RE);
   if (prCommitUrl) {
-    return {
-      kind: 'commit',
-      repo: githubRef(prCommitUrl[1]!, prCommitUrl[2]!),
-      sha: prCommitUrl[3]!.toLowerCase(),
-    };
+    const [owner, repo, sha] = captures(prCommitUrl, 3);
+    return { kind: 'commit', repo: githubRef(owner, repo), sha: sha.toLowerCase() };
   }
 
   const prUrl = stripped.match(PR_URL_RE);
   if (prUrl) {
-    return {
-      kind: 'pr',
-      repo: githubRef(prUrl[1]!, prUrl[2]!),
-      number: Number.parseInt(prUrl[3]!, 10),
-    };
+    const [owner, repo, num] = captures(prUrl, 3);
+    return { kind: 'pr', repo: githubRef(owner, repo), number: Number.parseInt(num, 10) };
   }
 
   // GitLab URL shapes — checked after GitHub, before bareword shorthands.
   const gitlabSha = stripped.match(GITLAB_SHA_URL_RE);
   if (gitlabSha) {
-    const host = gitlabSha[1]!.toLowerCase();
+    const [hostRaw, projectPath, sha] = captures(gitlabSha, 3);
+    const host = hostRaw.toLowerCase();
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
-    return {
-      kind: 'commit',
-      repo: { host, projectPath: gitlabSha[2]! },
-      sha: gitlabSha[3]!.toLowerCase(),
-    };
+    return { kind: 'commit', repo: { host, projectPath }, sha: sha.toLowerCase() };
   }
   const gitlabMr = stripped.match(GITLAB_MR_URL_RE);
   if (gitlabMr) {
-    const host = gitlabMr[1]!.toLowerCase();
+    const [hostRaw, projectPath, num] = captures(gitlabMr, 3);
+    const host = hostRaw.toLowerCase();
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
-    return {
-      kind: 'pr',
-      repo: { host, projectPath: gitlabMr[2]! },
-      number: Number.parseInt(gitlabMr[3]!, 10),
-    };
+    return { kind: 'pr', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
   }
 
   const atSha = stripped.match(OWNER_REPO_AT_SHA_RE);
   if (atSha) {
-    return {
-      kind: 'commit',
-      repo: githubRef(atSha[1]!, atSha[2]!),
-      sha: atSha[3]!.toLowerCase(),
-    };
+    const [owner, repo, sha] = captures(atSha, 3);
+    return { kind: 'commit', repo: githubRef(owner, repo), sha: sha.toLowerCase() };
   }
 
   const hashPr = trimmed.match(OWNER_REPO_HASH_PR_RE);
   if (hashPr) {
-    return {
-      kind: 'pr',
-      repo: githubRef(hashPr[1]!, hashPr[2]!),
-      number: Number.parseInt(hashPr[3]!, 10),
-    };
+    const [owner, repo, num] = captures(hashPr, 3);
+    return { kind: 'pr', repo: githubRef(owner, repo), number: Number.parseInt(num, 10) };
   }
 
   // Space/tab-separated forms: "owner/repo <sha>", "owner/repo #N",
@@ -183,13 +194,13 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     const [a, b] = parts as [string, string];
     // Try (repo, ref) order first
     if (BARE_OWNER_REPO_RE.test(a) && (SHA_RE.test(b) || PR_REF_RE.test(b))) {
-      const [owner, name] = a.split('/');
-      return resolveRef(githubRef(owner!, name!), b);
+      const [owner, name] = splitOwnerRepo(a);
+      return resolveRef(githubRef(owner, name), b);
     }
     // Try (ref, repo) order
     if (BARE_OWNER_REPO_RE.test(b) && (SHA_RE.test(a) || PR_REF_RE.test(a))) {
-      const [owner, name] = b.split('/');
-      return resolveRef(githubRef(owner!, name!), a);
+      const [owner, name] = splitOwnerRepo(b);
+      return resolveRef(githubRef(owner, name), a);
     }
   }
 
@@ -213,7 +224,8 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   }
   const gitlabShape = trimmed.match(ANY_GITLAB_URL_RE);
   if (gitlabShape) {
-    const host = gitlabShape[1]!.toLowerCase();
+    const [hostRaw] = captures(gitlabShape, 1);
+    const host = hostRaw.toLowerCase();
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
     throw new InvalidInputError(
       `${input} — that's a ${host} URL but not a shape I recognize. ` +
@@ -237,13 +249,22 @@ function parseGithubRepoRef(s: string): RepoRef {
   const stripped = s.replace(/\?.*$/, '').replace(/\/+$/, '');
 
   const ssh = stripped.match(REPO_SSH_RE);
-  if (ssh) return githubRef(ssh[1]!, ssh[2]!);
+  if (ssh) {
+    const [owner, repo] = captures(ssh, 2);
+    return githubRef(owner, repo);
+  }
 
   const url = stripped.match(REPO_URL_RE);
-  if (url) return githubRef(url[1]!, url[2]!);
+  if (url) {
+    const [owner, repo] = captures(url, 2);
+    return githubRef(owner, repo);
+  }
 
   const bare = stripped.match(BARE_OWNER_REPO_RE);
-  if (bare) return githubRef(bare[1]!, bare[2]!);
+  if (bare) {
+    const [owner, repo] = captures(bare, 2);
+    return githubRef(owner, repo);
+  }
 
   if (looksLikeUrl(stripped)) {
     const host = extractHost(stripped);

@@ -61,8 +61,12 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
   parsed.forEach((p, idx) => {
     if (!p.ok) return;
     const host = p.v.repo.host;
-    if (!byHost.has(host)) byHost.set(host, []);
-    byHost.get(host)!.push({ input: p.v, originalIdx: idx });
+    let group = byHost.get(host);
+    if (!group) {
+      group = [];
+      byHost.set(host, group);
+    }
+    group.push({ input: p.v, originalIdx: idx });
   });
 
   const extraGitlabHosts = extraGitlabHostsFromEnv(env);
@@ -92,8 +96,11 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
         group.map((g) => g.input),
         { client },
       );
+      // subBulk.results is 1:1 with group (built from group.map above), so the
+      // index always resolves; the guard is just to satisfy the type checker.
       subBulk.results.forEach((r, i) => {
-        okResultsByIdx.set(group[i]!.originalIdx, r);
+        const g = group[i];
+        if (g) okResultsByIdx.set(g.originalIdx, r);
       });
     }),
   );
@@ -101,7 +108,15 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
   // Re-thread results into the original input order, mixing parse failures.
   const results = parsed.map((p, idx) => {
     if (!p.ok) return { kind: 'error', errorName: p.err.name, message: p.err.message };
-    return okResultsByIdx.get(idx)!;
+    // Every ok input was grouped and processed above, so a result always
+    // exists; fall back to an explicit error rather than emitting `undefined`.
+    return (
+      okResultsByIdx.get(idx) ?? {
+        kind: 'error',
+        errorName: 'InternalError',
+        message: 'no result produced for this input',
+      }
+    );
   });
 
   return new Response(JSON.stringify({ results }), {

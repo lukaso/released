@@ -22,20 +22,20 @@ export type AuthOpts = {
 };
 
 export async function resolveToken(opts: AuthOpts = {}): Promise<string | undefined> {
-  if (opts.tokenFlag && opts.tokenFlag.trim()) return opts.tokenFlag.trim();
+  if (opts.tokenFlag?.trim()) return opts.tokenFlag.trim();
   const env = opts.env ?? process.env;
   const host = opts.host ?? 'github.com';
   if (host === 'github.com') {
     const envToken = env.GITHUB_TOKEN ?? env.GH_TOKEN;
-    if (envToken && envToken.trim()) return envToken.trim();
+    if (envToken?.trim()) return envToken.trim();
     return await tryShellAuth('gh', 'github.com');
   }
   // GitLab path: host-specific env var first, then generic GITLAB_TOKEN.
   const hostKey = `GITLAB_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}`;
   const hostToken = env[hostKey];
-  if (hostToken && hostToken.trim()) return hostToken.trim();
+  if (hostToken?.trim()) return hostToken.trim();
   const generic = env.GITLAB_TOKEN;
-  if (generic && generic.trim()) return generic.trim();
+  if (generic?.trim()) return generic.trim();
   return await tryShellAuth('glab', host);
 }
 

@@ -9,8 +9,8 @@ import type { Env } from './env.js';
 /** Pick the token to use for outbound GitHub calls for this request. */
 export function resolveToken(env: Env | undefined, req: Request): string | undefined {
   const userPat = req.headers.get('x-user-github-token');
-  if (userPat && userPat.trim()) return userPat.trim();
-  if (env?.GITHUB_TOKEN && env.GITHUB_TOKEN.trim()) return env.GITHUB_TOKEN.trim();
+  if (userPat?.trim()) return userPat.trim();
+  if (env?.GITHUB_TOKEN?.trim()) return env.GITHUB_TOKEN.trim();
   return undefined;
 }
 
@@ -25,12 +25,12 @@ export function resolveProviderToken(
   if (host === 'github.com') return resolveToken(env, req);
   // GitLab path
   const userPat = req.headers.get('x-user-gitlab-token');
-  if (userPat && userPat.trim()) return userPat.trim();
+  if (userPat?.trim()) return userPat.trim();
   if (env) {
     const hostKey = `GITLAB_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}` as const;
     const hostSecret = (env as Record<string, string | undefined>)[hostKey];
-    if (hostSecret && hostSecret.trim()) return hostSecret.trim();
-    if (env.GITLAB_TOKEN && env.GITLAB_TOKEN.trim()) return env.GITLAB_TOKEN.trim();
+    if (hostSecret?.trim()) return hostSecret.trim();
+    if (env.GITLAB_TOKEN?.trim()) return env.GITLAB_TOKEN.trim();
   }
   return undefined;
 }

@@ -32,6 +32,18 @@ import {
   type TagWithDate,
 } from './types.js';
 
+/** Index into an array, throwing a descriptive error if out of bounds. For the
+ *  algorithm's hot-path access where the index is provably valid (bounded by a
+ *  prior findIndex / length check) but TS's noUncheckedIndexedAccess can't see
+ *  it. Clearer failure than a bare `arr[i]!` if an invariant ever breaks. */
+function at<T>(arr: readonly T[], i: number): T {
+  const v = arr[i];
+  if (v === undefined) {
+    throw new Error(`find-release: index ${i} out of bounds (length ${arr.length})`);
+  }
+  return v;
+}
+
 export type FindReleaseOpts = {
   client: Provider;
   signal?: AbortSignal | undefined;
@@ -153,9 +165,12 @@ export async function findRelease(
   if (!strict && client.containingTags) {
     const shortcut = await client.containingTags(repo, canonicalSha);
     if (shortcut.rateLimit) rateLimit = shortcut.rateLimit;
-    containingSet = new Set(shortcut.tags);
+    const set = new Set(shortcut.tags);
+    containingSet = set;
     // candidates is sorted ascending by date; first containing one is firstHit.
-    const idx = candidates.findIndex((t) => containingSet!.has(t.name));
+    // Capture `set` (const) so the closure narrows it — `containingSet` is a
+    // reassignable `let`, which TS won't narrow inside a callback.
+    const idx = candidates.findIndex((t) => set.has(t.name));
     locateResult = {
       hitIdx: idx === -1 ? null : idx,
       timedOut: null,
@@ -167,7 +182,7 @@ export async function findRelease(
       candidates,
       commitDate: committedDate,
       compare: async (idx) => {
-        const t = candidates[idx]!;
+        const t = at(candidates, idx);
         const r = await client.compareCommits(repo, t.sha, canonicalSha);
         return {
           contains: r.status === 'behind' || r.status === 'identical',
@@ -190,7 +205,7 @@ export async function findRelease(
     // bisect just verifies "could there be an earlier one." Better UX: show
     // *an* answer, flag partial, than throw "took too long."
     if (locateResult.hitIdx !== null) {
-      const hit = candidates[locateResult.hitIdx]!;
+      const hit = at(candidates, locateResult.hitIdx);
       return {
         input,
         canonicalSha,
@@ -223,7 +238,7 @@ export async function findRelease(
     throw new NotYetReleasedError(canonicalSha, committedDate, culledTagCount, prereleasedCount);
   }
 
-  const firstHit = candidates[locateResult.hitIdx]!;
+  const firstHit = at(candidates, locateResult.hitIdx);
   const firstHitIdx = locateResult.hitIdx;
 
   // Step 5: also-in list (next ~N newer tags). Use `candidates` (post-cull) —
@@ -453,8 +468,8 @@ async function locateFirstHit(opts: LocateOpts): Promise<LocateOutcome> {
   const commitMs = Date.parse(opts.commitDate);
   let datePos = candidates.length;
   if (Number.isFinite(commitMs)) {
-    for (let i = 0; i < candidates.length; i++) {
-      const tMs = Date.parse(candidates[i]!.date);
+    for (const [i, t] of candidates.entries()) {
+      const tMs = Date.parse(t.date);
       if (Number.isFinite(tMs) && tMs >= commitMs) {
         datePos = i;
         break;
@@ -510,8 +525,8 @@ async function locateFirstHit(opts: LocateOpts): Promise<LocateOutcome> {
   }
 
   // Step 4: parallel-K bisect within [low, high] where high is the first hit.
-  let high = probes[firstHitProbe]!;
-  let low = firstHitProbe === 0 ? start : probes[firstHitProbe - 1]! + 1;
+  let high = at(probes, firstHitProbe);
+  let low = firstHitProbe === 0 ? start : at(probes, firstHitProbe - 1) + 1;
   let answer = high;
 
   while (low < high) {
@@ -539,13 +554,13 @@ async function locateFirstHit(opts: LocateOpts): Promise<LocateOutcome> {
     const results = await compareAll(idxs);
     const localHit = results.indexOf(true);
     if (localHit >= 0) {
-      high = idxs[localHit]!;
+      high = at(idxs, localHit);
       answer = high;
-      low = localHit === 0 ? low : idxs[localHit - 1]! + 1;
+      low = localHit === 0 ? low : at(idxs, localHit - 1) + 1;
     } else {
       // None of the bisect probes hit — the earliest containing is in (last
       // probe, high]. Set low to last-probe + 1.
-      low = idxs[idxs.length - 1]! + 1;
+      low = at(idxs, idxs.length - 1) + 1;
     }
   }
 
