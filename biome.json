@@ -23,8 +23,8 @@
       "recommended": true,
       "style": {
         "noNonNullAssertion": "warn",
-        "useTemplate": "warn",
-        "noUnusedTemplateLiteral": "warn"
+        "useTemplate": "off",
+        "noUnusedTemplateLiteral": "off"
       },
       "suspicious": {
         "noExplicitAny": "warn"
