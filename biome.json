@@ -34,5 +34,17 @@
         "useOptionalChain": "warn"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "include": ["**/*.test.ts", "**/*.test.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noNonNullAssertion": "off"
+          }
+        }
+      }
+    }
+  ]
 }

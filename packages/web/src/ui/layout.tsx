@@ -49,6 +49,7 @@ export function Layout(props: LayoutProps) {
         />
       </head>
       <body>
+        {/* biome-ignore lint/suspicious/noExplicitAny: children is typed `unknown` (Layout accepts arbitrary JSX); Hono's renderer needs a renderable child, and `as any` is the localized escape hatch. */}
         <div class="wrap">{props.children as any}</div>
         <script nonce={props.nonce}>{raw(CLIENT_JS)}</script>
       </body>
