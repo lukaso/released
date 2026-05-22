@@ -9,17 +9,21 @@
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "validate": "scripts/validate.sh",
+    "doctor": "scripts/doctor.sh",
+    "check:publish": "scripts/check-publish.sh",
+    "ci:status": "scripts/ci-status.sh",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "changeset": "changeset",
     "version": "changeset version && pnpm format",
-    "release": "pnpm -r build && changeset publish",
+    "release": "pnpm -r build && pnpm check:publish && changeset publish",
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@changesets/cli": "^2.27.10",
+    "publint": "^0.3.21",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

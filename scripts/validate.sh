@@ -34,6 +34,18 @@ pnpm -r test
 echo "→ lint"
 pnpm lint
 
+# publint: structural lint of the published CLI package. npm-provided (every
+# clone has it after pnpm install), so it hard-fails like the checks above.
+echo "→ publint"
+pnpm exec publint ./packages/cli
+
+# osv: dependency CVE scan. LOCAL is warn-only (|| true) — a contributor may not
+# have osv-scanner installed (esp. Windows), and CI runs the same script as the
+# authoritative High/Critical gate on every PR. The agent still sees findings
+# here for early warning; the push is never blocked locally.
+echo "→ osv (local heads-up; CI gates High/Critical on PRs)"
+scripts/osv-check.sh || true
+
 # Marker for Claude Code's .claude/hooks/{commit-gate,validate-gate}.sh —
 # its presence (+ mtime newer than any .ts/.tsx edited this session) lets
 # Claude `git commit`/`git push` and declare turns done. See those hooks
