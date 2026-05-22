@@ -29,11 +29,33 @@ This is a pnpm monorepo with four packages:
 
 ## Development
 
+### Prerequisites
+
+Three tiers — you only need the first to contribute:
+
+| Tier | What | Needed for |
+|---|---|---|
+| **Contribute** | Node 20+, `pnpm`, [`osv-scanner`](https://google.github.io/osv-scanner/installation/) | build, test, lint, push, open PRs |
+| **Run the CLI live** *(optional)* | `GITHUB_TOKEN` / `GITLAB_TOKEN` env vars | running `git-released` against rate-limited hosts. The test suite uses mocks, so this is **not** needed for dev |
+| **Publish / deploy** *(maintainer only)* | npm publish rights, Cloudflare API token + account, `gh` | only used by `release.yml`; contributors never touch this |
+
+`osv-scanner` is the one non-npm prerequisite. It's optional locally (the
+pre-push hook warns and continues without it; CI scans every PR regardless),
+but installing it gives you the dependency CVE scan in your own loop. Run
+`pnpm doctor` to check your setup and get exact install commands:
+
 ```bash
-pnpm install
-pnpm -r test          # 180+ tests across packages
-pnpm -r typecheck
-pnpm -r build
+pnpm install      # also wires git hooks via the prepare script
+pnpm doctor       # one-shot prerequisite check
+```
+
+### Daily flow (the fast loop)
+
+```bash
+# edit ...
+pnpm validate     # build · typecheck · test · lint · publint · osv  (~8-10s; also the pre-push hook)
+git push          # pre-push runs pnpm validate automatically
+pnpm ci:status    # poll CI for your pushed commit (pass/fail + failed-step logs)
 ```
 
 Per-package dev:
@@ -43,6 +65,36 @@ pnpm --filter @released/web dev          # wrangler dev for web
 pnpm --filter @released/web-og dev       # wrangler dev for web-og
 pnpm --filter git-released dev -- <input>    # tsx-run the CLI in place
 ```
+
+### Local checks reference
+
+| Command | What it does | Gate? |
+|---|---|---|
+| `pnpm validate` | build, typecheck, test, lint, publint (hard-fail); osv (warn-only locally) | pre-push hook |
+| `pnpm check:publish` | publint + pack the CLI, install the tarball in a clean dir, run `git-released --help` | pre-publish gate in `release.yml`; run on demand |
+| `pnpm ci:status` | shows CI runs for HEAD (`ci.yml` + `release.yml`) + failed-step logs | read-only |
+| `pnpm doctor` | prerequisite check with fixes | read-only |
+
+Two independent hook systems live here, by design:
+
+- **Git hooks** (`.githooks/`, wired via `core.hooksPath` in the `prepare`
+  script): `pre-push` runs `pnpm validate`. Skips in CI (`CI=true`). Bypass a
+  WIP push with `git push --no-verify`.
+- **Claude Code hooks** (`.claude/hooks/`): a commit/push approval gate + a
+  "run validate before declaring done" gate, active only when working through
+  the Claude Code agent. Plain `git` users never hit these.
+
+Dependency CVEs gate on **High/Critical** only (Medium/Low are reported but not
+blocking); routine bumps + newly-disclosed CVEs come in as Dependabot PRs.
+
+<!-- TODO: the dev scripts (validate.sh, check-publish.sh, ci-status.sh, doctor.sh)
+     are bash; a Windows contributor without git-bash/WSL can't run the hooks.
+     Cross-platform them (or document WSL) if/when a Windows contributor appears. -->
+
+> **Maintainer note (publish/deploy):** publishing to npm and deploying the
+> Workers happen only in `release.yml` (npm via OIDC Trusted Publishing,
+> Cloudflare via API token). See [Deploy](#deploy-cloudflare-workers) and
+> [CI/CD](#cicd) below. Contributors do not need any of these credentials.
 
 ## Deploy (Cloudflare Workers)
 
