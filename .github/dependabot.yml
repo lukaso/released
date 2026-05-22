@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # npm/pnpm dependencies. Covers the time axis that push-time osv can't: a CVE
+  # disclosed for a dependency you haven't touched since your last push. Opens
+  # PRs (which then get scanned by the osv CI job + the rest of CI).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      # Batch routine dev-dependency bumps into one PR to cut noise. Security
+      # updates still arrive as their own PRs regardless of grouping.
+      dev-dependencies:
+        dependency-type: "development"
+
+  # Keep pinned GitHub Actions (checkout, setup-node, setup-go, wrangler, etc.)
+  # current — stale actions are their own supply-chain risk.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -57,3 +57,25 @@ jobs:
           node packages/cli/dist/cli.js --help
           node packages/cli/dist/cli.js garbage-input || exit 0
         shell: bash
+
+  # Authoritative dependency CVE scan. Runs the SAME scripts/osv-check.sh the
+  # pre-push hook runs locally (DRY) — but here it's the gate: High/Critical
+  # fail the check. Local osv is warn-only (a contributor may lack the binary),
+  # so this job guarantees every PR is scanned regardless of local setup.
+  osv:
+    name: osv dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Install osv-scanner
+        run: |
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Scan dependencies (gate High/Critical)
+        run: bash scripts/osv-check.sh
