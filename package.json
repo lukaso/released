@@ -21,11 +21,11 @@
     "prepare": "git config core.hooksPath .githooks || true"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
+    "@biomejs/biome": "^2.4.15",
     "@changesets/cli": "^2.27.10",
     "publint": "^0.3.21",
-    "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.7"
   },
   "engines": {
     "node": ">=20"
