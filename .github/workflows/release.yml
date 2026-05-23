@@ -16,7 +16,7 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # pnpm version is read from package.json#packageManager — do not also
       # pass `version:` here, pnpm/action-setup errors on double-specification.
