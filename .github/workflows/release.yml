@@ -20,7 +20,7 @@ jobs:
 
       # pnpm version is read from package.json#packageManager — do not also
       # pass `version:` here, pnpm/action-setup errors on double-specification.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       # Node 24 ships with npm 11.x. OIDC Trusted Publishing requires
       # npm >= 11.5.1; on Node 22 (npm 10.x) `npm i -g npm@latest` half-

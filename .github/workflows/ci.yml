@@ -24,7 +24,7 @@ jobs:
 
       # pnpm version is read from package.json#packageManager — do not also
       # pass `version:` here, pnpm/action-setup errors on double-specification.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
@@ -131,7 +131,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
