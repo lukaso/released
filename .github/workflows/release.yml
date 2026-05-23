@@ -26,7 +26,7 @@ jobs:
       # npm >= 11.5.1; on Node 22 (npm 10.x) `npm i -g npm@latest` half-
       # upgrades and crashes with "Cannot find module 'promise-retry'",
       # so we just use a Node that already has the right npm.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
