@@ -3,7 +3,7 @@
 
 import type { LookupResult } from '@released/core';
 import { raw } from 'hono/html';
-import { commitPermalinkPath } from '../paths.js';
+import { permalinkPathForInput } from '../paths.js';
 
 export type ResultCardProps = {
   result: LookupResult;
@@ -21,11 +21,11 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
   // "could be off by one" caveat (PartialBanner above the result).
   // If partial AND no firstRelease, show the "taking longer" UI.
   if (result.partial && !result.firstRelease) return <PartialResult result={result} />;
-  if (!result.firstRelease) return <NotYetReleased result={result} />;
+  if (!result.firstRelease) return <NotYetReleased result={result} publicBaseUrl={publicBaseUrl} />;
   const r = result.firstRelease;
   const repoDisplay = result.input.repo.projectPath;
   const shortSha = result.canonicalSha.slice(0, 7);
-  const perma = `${publicBaseUrl}${commitPermalinkPath(result.input.repo, shortSha)}`;
+  const perma = `${publicBaseUrl}${permalinkPathForInput(result.input, result.canonicalSha)}`;
   return (
     <>
       {result.partial && <BestEffortBanner result={result} />}
@@ -48,19 +48,7 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
           <div class="answer-date">
             <b>{formatDate(r.date)}</b> · shipped {relativeFromCommit(result.canonicalSha, r.date)}
           </div>
-          <div class="answer-actions">
-            <span class="share-lbl">Copy</span>
-            <button type="button" class="btn-fmt primary" data-copy="markdown">
-              as Markdown
-            </button>
-            <button type="button" class="btn-fmt" data-copy="slack">
-              for Slack
-            </button>
-            <button type="button" class="btn-fmt" data-copy="link">
-              link only
-            </button>
-            <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>
-          </div>
+          <CopyActions perma={perma} />
         </div>
 
         <div class="answer-meta">
@@ -96,6 +84,41 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
         )}
       </div>
     </>
+  );
+}
+
+/** The "Copy" row: badge markdown (primary, live image), Slack mrkdwn, raw link.
+ *  The client handler in layout.tsx (formatForCopy) builds each format. All
+ *  three work even when not yet released.
+ *
+ *  Below the buttons sits a live preview that mirrors what each format copies —
+ *  the rendered image for "as Badge", the literal string for the rest. It's
+ *  populated client-side (the exact strings are built in formatForCopy) and
+ *  stays hidden when there's no result payload (e.g. the homepage EXAMPLE). */
+function CopyActions({ perma }: { perma: string }) {
+  return (
+    <div class="copy">
+      <div class="answer-actions">
+        <span class="share-lbl">Copy</span>
+        <button type="button" class="btn-fmt primary" data-copy="badge">
+          as Badge
+        </button>
+        <button type="button" class="btn-fmt" data-copy="slack">
+          for Slack
+        </button>
+        <button type="button" class="btn-fmt" data-copy="link">
+          link only
+        </button>
+        <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>
+      </div>
+      <div class="copy-preview" data-copy-preview hidden>
+        <span class="copy-preview-label" data-copy-preview-label>
+          Badge preview
+        </span>
+        <img class="copy-preview-badge" alt="status badge preview" height="20" hidden />
+        <code class="copy-preview-text" />
+      </div>
+    </div>
   );
 }
 
@@ -157,7 +180,14 @@ function PartialResult({ result }: { result: LookupResult }) {
   );
 }
 
-function NotYetReleased({ result }: { result: LookupResult }) {
+function NotYetReleased({
+  result,
+  publicBaseUrl,
+}: {
+  result: LookupResult;
+  publicBaseUrl: string;
+}) {
+  const perma = `${publicBaseUrl}${permalinkPathForInput(result.input, result.canonicalSha)}`;
   return (
     <div class="answer">
       <div class="answer-hero">
@@ -169,6 +199,11 @@ function NotYetReleased({ result }: { result: LookupResult }) {
         </div>
         <div class="answer-date">
           <b>On the default branch</b> · commit {result.canonicalSha.slice(0, 7)}
+        </div>
+        <CopyActions perma={perma} />
+        <div class="copy-hint">
+          Paste the badge into your PR/MR now — it flips to the version automatically once this
+          ships.
         </div>
       </div>
     </div>
@@ -188,7 +223,7 @@ export function PrereleaseHint({
   return (
     <div
       class="answer"
-      style="margin-bottom: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
+      style="margin-top: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
     >
       <div class="answer-hero" style="padding: 16px 22px;">
         <div class="answer-label" style="margin-bottom: 6px;">
@@ -250,7 +285,7 @@ export function StrictHint({
   return (
     <div
       class="answer"
-      style="margin-bottom: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
+      style="margin-top: 16px; border-color: var(--warn-dim); background: rgba(210,153,34,0.06);"
     >
       <div class="answer-hero" style="padding: 16px 22px;">
         <div class="answer-label" style="margin-bottom: 6px;">

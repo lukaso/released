@@ -96,13 +96,14 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
        *  (common on projects like GNOME/gimp that use FF merges) where no merge
        *  commit is created — `sha` IS the commit that ended up in the target branch. */
       sha: string | null;
+      title: string | null;
     }>(res);
     if (body.state !== 'merged') {
       throw new PrNotMergedError(n, body.state === 'closed' ? 'closed' : 'open', GITLAB_TERMS);
     }
     const sha = body.merge_commit_sha ?? body.squash_commit_sha ?? body.sha;
     if (sha == null) throw new PrMergeCommitUnavailableError(n, GITLAB_TERMS);
-    return { merged: true as const, mergeCommitSha: sha, rateLimit };
+    return { merged: true as const, mergeCommitSha: sha, title: body.title ?? null, rateLimit };
   }
 
   async function getCommit(repo: RepoRef, sha: string) {
@@ -111,8 +112,13 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     const rateLimit = parseRateLimit(res);
     if (res.status === 404) throw new CommitNotFoundError(sha);
     if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
-    const body = await readJson<{ id: string; committed_date: string }>(res);
-    return { fullSha: body.id, committedDate: body.committed_date, rateLimit };
+    const body = await readJson<{ id: string; committed_date: string; title?: string | null }>(res);
+    return {
+      fullSha: body.id,
+      committedDate: body.committed_date,
+      subject: body.title ?? null,
+      rateLimit,
+    };
   }
 
   async function listTagsWithDates(repo: RepoRef) {

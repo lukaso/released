@@ -103,6 +103,11 @@ export type RateLimitInfo = {
 export type LookupResult = {
   readonly input: LookupInput;
   readonly canonicalSha: string;
+  /** Human headline for the lookup: the PR/MR title for `pr` inputs, or the
+   *  commit subject (first message line) for `commit` inputs. null when the
+   *  provider didn't surface one. Used by the web copy formats to make pasted
+   *  badges / snippets self-describing. */
+  readonly subject?: string | null;
   readonly firstRelease: ReleaseHit | null;
   /** Subsequent releases (in date order) that also contain the commit. */
   readonly alsoIn: readonly ReleaseHit[];

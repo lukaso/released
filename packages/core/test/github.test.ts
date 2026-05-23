@@ -53,8 +53,10 @@ function queuedFetch(...responses: (Response | Error)[]): typeof fetch {
 afterEach(() => vi.restoreAllMocks());
 
 describe('getPullRequest', () => {
-  it('returns merge commit sha for a merged PR', async () => {
-    const fetch = queuedFetch(jsonResp({ merged: true, merge_commit_sha: 'abc123def456' }));
+  it('returns merge commit sha + PR title for a merged PR', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ merged: true, merge_commit_sha: 'abc123def456', title: 'Add dark mode toggle' }),
+    );
     const c = makeGithubClient({ fetch });
     const result = await c.getPullRequest(
       { host: 'github.com', projectPath: 'vercel/next.js' },
@@ -62,6 +64,7 @@ describe('getPullRequest', () => {
     );
     expect(result.merged).toBe(true);
     expect(result.mergeCommitSha).toBe('abc123def456');
+    expect(result.title).toBe('Add dark mode toggle');
   });
 
   it('throws PrNotMergedError when not merged', async () => {
@@ -106,11 +109,14 @@ describe('getPullRequest', () => {
 });
 
 describe('getCommit', () => {
-  it('returns full SHA + committed date', async () => {
+  it('returns full SHA + committed date + commit subject (first message line)', async () => {
     const fetch = queuedFetch(
       jsonResp({
         sha: 'abc1234567890abcdefabcdefabcdefabcdef1234',
-        commit: { committer: { date: '2024-03-01T12:00:00Z' } },
+        commit: {
+          committer: { date: '2024-03-01T12:00:00Z' },
+          message: 'fix: handle null user\n\nLonger body explaining the fix.',
+        },
       }),
     );
     const c = makeGithubClient({ fetch });
@@ -120,6 +126,7 @@ describe('getCommit', () => {
     );
     expect(result.fullSha).toBe('abc1234567890abcdefabcdefabcdefabcdef1234');
     expect(result.committedDate).toBe('2024-03-01T12:00:00Z');
+    expect(result.subject).toBe('fix: handle null user');
   });
 
   it('throws CommitNotFoundError on 404', async () => {

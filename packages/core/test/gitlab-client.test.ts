@@ -60,13 +60,19 @@ const NESTED: RepoRef = {
 };
 
 describe('GitlabProvider.getPullRequest (MR)', () => {
-  it('returns merge_commit_sha for a merged MR', async () => {
+  it('returns merge_commit_sha + MR title for a merged MR', async () => {
     const fetch = queuedFetch(
-      jsonResp({ state: 'merged', merge_commit_sha: 'abc123', squash_commit_sha: null }),
+      jsonResp({
+        state: 'merged',
+        merge_commit_sha: 'abc123',
+        squash_commit_sha: null,
+        title: 'Port build to macOS arm64',
+      }),
     );
     const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
     const result = await c.getPullRequest(GNOME_GIMP, 2466);
     expect(result.mergeCommitSha).toBe('abc123');
+    expect(result.title).toBe('Port build to macOS arm64');
   });
 
   it('falls back to squash_commit_sha when merge_commit_sha is null', async () => {
@@ -151,14 +157,19 @@ describe('GitlabProvider.getPullRequest (MR)', () => {
 });
 
 describe('GitlabProvider.getCommit', () => {
-  it('returns full SHA + committed_date', async () => {
+  it('returns full SHA + committed_date + commit subject (title)', async () => {
     const fetch = queuedFetch(
-      jsonResp({ id: 'abc1234567890abcdef', committed_date: '2024-03-01T12:00:00Z' }),
+      jsonResp({
+        id: 'abc1234567890abcdef',
+        committed_date: '2024-03-01T12:00:00Z',
+        title: 'build: bump gtk to 3.24',
+      }),
     );
     const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
     const result = await c.getCommit(GNOME_GIMP, 'abc1234');
     expect(result.fullSha).toBe('abc1234567890abcdef');
     expect(result.committedDate).toBe('2024-03-01T12:00:00Z');
+    expect(result.subject).toBe('build: bump gtk to 3.24');
   });
 
   it('throws CommitNotFoundError on 404', async () => {

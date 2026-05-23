@@ -248,6 +248,7 @@ function renderNotYetReleased(
   const synthetic: LookupResult = {
     input: { kind: 'commit', repo, sha: err.sha },
     canonicalSha: err.sha,
+    subject: err.subject,
     firstRelease: null,
     alsoIn: [],
     releaseNotesHtml: null,
@@ -257,6 +258,7 @@ function renderNotYetReleased(
       commit: provider.urls.commit(repo, err.sha),
     },
   };
+  const inlineData = JSON.stringify(synthetic).replace(/</g, '\\u003c');
   const page = (
     <Layout
       title={`not yet released — ${displayName}`}
@@ -267,12 +269,13 @@ function renderNotYetReleased(
     >
       <Nav />
       <main style="padding-top: 24px;">
+        <ResultCard result={synthetic} publicBaseUrl={pubBase} />
         {showPreHint && (
           <PrereleaseHint skipped={err.prereleasedSkippedCount} retryHref={prereleaseHref} />
         )}
         {showStrictHint && <StrictHint culled={err.culledTagCount} retryHref={strictHref} />}
-        <ResultCard result={synthetic} publicBaseUrl={pubBase} />
       </main>
+      <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
       <footer>
         <a href="/how-it-works">how it works</a>
         <a href="https://www.npmjs.com/package/git-released">CLI</a>

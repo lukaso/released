@@ -129,27 +129,80 @@ const CLIENT_JS = `
       var orig = t.textContent;
       t.textContent = 'Copied!';
       setTimeout(function(){ t.textContent = orig; }, 1200);
+      // Pin the preview to the format the user just copied.
+      pinnedFmt = fmt;
+      showPreview(fmt);
     });
   });
-  function formatForCopy(r, fmt){
+  // Host- AND kind-aware permalink path (mirrors permalinkPathForInput in
+  // paths.ts on the server). PR/MR results keep their /p/ permalink so the
+  // embedded badge tracks the merge request.
+  function permaPath(r){
     var repo = r.input.repo.projectPath;
     var host = r.input.repo.host;
+    if (r.input.kind === 'pr') {
+      var n = r.input.number;
+      return host === 'github.com'
+        ? '/p/' + repo + '/' + n
+        : '/h/' + host + '/p/' + encodeURIComponent(repo) + '/' + n;
+    }
     var sha = r.canonicalSha.slice(0,7);
-    // Build the host-aware permalink path (mirrors paths.ts on the server).
-    var permaPath = host === 'github.com'
+    return host === 'github.com'
       ? '/r/' + repo + '/c/' + sha
       : '/h/' + host + '/r/' + encodeURIComponent(repo) + '/c/' + sha;
-    var perma = window.location.origin + permaPath;
+  }
+  function formatForCopy(r, fmt){
+    var repo = r.input.repo.projectPath;
+    var sha = r.canonicalSha.slice(0,7);
+    var perma = window.location.origin + permaPath(r);
     var tag = r.firstRelease ? r.firstRelease.tag : null;
-    if (!tag) return null;
-    if (fmt === 'markdown') {
-      var url = r.firstRelease.url;
-      return '✅ \\\`' + sha + '\\\` in \\\`' + repo + '\\\` is first released in [**' + tag + '**](' + url + ') (' + r.firstRelease.date.slice(0,10) + '). [Permalink](' + perma + ').';
+    // The human headline (PR/MR title or commit subject). Woven into every
+    // format EXCEPT link-only, so a pasted badge/snippet says WHAT shipped.
+    var subject = r.subject || null;
+    // link works whether or not it's released yet; never carries the headline.
+    if (fmt === 'link') return perma;
+    if (fmt === 'badge') {
+      var badge = '[![released](' + perma + '/badge.svg)](' + perma + ')';
+      return subject ? badge + ' **' + subject + '**' : badge;
     }
     if (fmt === 'slack') {
-      return '*' + tag + '* shipped ' + r.firstRelease.date.slice(0,10) + ' contains \\\`' + sha + '\\\` in \\\`' + repo + '\\\` <' + perma + '|details>';
+      var slead = subject ? '*' + subject + '* — ' : '';
+      if (!tag) return slead + '\\\`' + sha + '\\\` in \\\`' + repo + '\\\` not yet released <' + perma + '|details>';
+      return slead + '*' + tag + '* shipped ' + r.firstRelease.date.slice(0,10) + ' contains \\\`' + sha + '\\\` in \\\`' + repo + '\\\` <' + perma + '|details>';
     }
     return perma;
+  }
+
+  // Live copy preview. Mirrors what each format produces: the rendered image
+  // for "as Badge", the literal copy string for the rest. Hover/focus previews
+  // without copying; click pins. Stays hidden when there's no result payload
+  // (e.g. the homepage EXAMPLE has the buttons but no window.__RELEASED_RESULT__).
+  var previewBox = document.querySelector('[data-copy-preview]');
+  var previewImg = previewBox && previewBox.querySelector('.copy-preview-badge');
+  var previewText = previewBox && previewBox.querySelector('.copy-preview-text');
+  var previewLabel = previewBox && previewBox.querySelector('[data-copy-preview-label]');
+  var pinnedFmt = 'badge';
+  function showPreview(fmt){
+    var data = window.__RELEASED_RESULT__;
+    if (!previewBox || !data) return;
+    var isBadge = fmt === 'badge';
+    if (previewImg){
+      if (isBadge){ previewImg.src = window.location.origin + permaPath(data) + '/badge.svg'; previewImg.hidden = false; }
+      else { previewImg.hidden = true; }
+    }
+    if (previewText) previewText.textContent = formatForCopy(data, fmt) || '';
+    if (previewLabel) previewLabel.textContent = isBadge ? 'Badge preview' : 'Copies';
+    previewBox.hidden = false;
+  }
+  if (previewBox && window.__RELEASED_RESULT__){
+    document.querySelectorAll('[data-copy]').forEach(function(btn){
+      var f = btn.getAttribute('data-copy');
+      btn.addEventListener('pointerenter', function(){ showPreview(f); });
+      btn.addEventListener('focus', function(){ showPreview(f); });
+      btn.addEventListener('pointerleave', function(){ showPreview(pinnedFmt); });
+      btn.addEventListener('blur', function(){ showPreview(pinnedFmt); });
+    });
+    showPreview(pinnedFmt);
   }
 })();
 `;

@@ -81,9 +81,13 @@ export async function findRelease(
 
   // Step 1: resolve to a canonical commit SHA
   let canonicalSha: string;
+  // Human headline: the PR/MR title for `pr` inputs (more meaningful than the
+  // merge commit's auto-generated message); the commit subject otherwise.
+  let subject: string | null = null;
   if (input.kind === 'pr') {
     const pr = await client.getPullRequest(repo, input.number);
     canonicalSha = pr.mergeCommitSha;
+    subject = pr.title ?? null;
   } else {
     canonicalSha = input.sha;
   }
@@ -91,6 +95,7 @@ export async function findRelease(
   const commit = await client.getCommit(repo, canonicalSha);
   canonicalSha = commit.fullSha;
   const committedDate = commit.committedDate;
+  if (input.kind !== 'pr') subject = commit.subject ?? null;
 
   // Step 2: list tags
   const tagList = await client.listTagsWithDates(repo);
@@ -209,6 +214,7 @@ export async function findRelease(
       return {
         input,
         canonicalSha,
+        subject,
         firstRelease: toHit(client, repo, hit),
         alsoIn: [],
         releaseNotesHtml: null,
@@ -225,6 +231,7 @@ export async function findRelease(
     return {
       input,
       canonicalSha,
+      subject,
       firstRelease: null,
       alsoIn: [],
       releaseNotesHtml: null,
@@ -235,7 +242,13 @@ export async function findRelease(
   }
 
   if (locateResult.hitIdx === null) {
-    throw new NotYetReleasedError(canonicalSha, committedDate, culledTagCount, prereleasedCount);
+    throw new NotYetReleasedError(
+      canonicalSha,
+      committedDate,
+      culledTagCount,
+      prereleasedCount,
+      subject,
+    );
   }
 
   const firstHit = at(candidates, locateResult.hitIdx);
@@ -293,6 +306,7 @@ export async function findRelease(
   return {
     input,
     canonicalSha,
+    subject,
     firstRelease: toHit(client, repo, firstHit),
     alsoIn,
     releaseNotesHtml,

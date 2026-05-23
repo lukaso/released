@@ -35,16 +35,28 @@ export interface Provider {
   };
   /** Resolve a PR/MR number to its merge commit SHA. Throws PrNotMergedError if
    *  the PR is not yet merged, PrMergeCommitUnavailableError if merged but the
-   *  merge SHA isn't recorded, PrNotFoundError on 404. */
+   *  merge SHA isn't recorded, PrNotFoundError on 404. `title` is the human
+   *  headline (PR/MR title) when the provider returns it. */
   getPullRequest(
     repo: RepoRef,
     n: number,
-  ): Promise<{ merged: true; mergeCommitSha: string; rateLimit: RateLimitInfo | null }>;
-  /** Resolve a commit (possibly a short SHA) to its full SHA + committed date. */
+  ): Promise<{
+    merged: true;
+    mergeCommitSha: string;
+    title?: string | null;
+    rateLimit: RateLimitInfo | null;
+  }>;
+  /** Resolve a commit (possibly a short SHA) to its full SHA + committed date.
+   *  `subject` is the first line of the commit message when available. */
   getCommit(
     repo: RepoRef,
     sha: string,
-  ): Promise<{ fullSha: string; committedDate: string; rateLimit: RateLimitInfo | null }>;
+  ): Promise<{
+    fullSha: string;
+    committedDate: string;
+    subject?: string | null;
+    rateLimit: RateLimitInfo | null;
+  }>;
   /** List repository tags newest-first, with their best-available release date. */
   listTagsWithDates(
     repo: RepoRef,

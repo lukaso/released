@@ -148,6 +148,9 @@ export class NotYetReleasedError extends ReleasedError {
      *  When > 0 with a not-yet-released answer, the UI hints "this might be in
      *  a prerelease — try Include prereleases." */
     public readonly prereleasedSkippedCount: number = 0,
+    /** Human headline (PR/MR title or commit subject) so the not-yet UI and the
+     *  copy formats can stay self-describing even before a release exists. */
+    public readonly subject: string | null = null,
   ) {
     super(`Commit ${sha} is on the default branch (since ${commitDate}) but not yet released.`);
     this.name = 'NotYetReleasedError';

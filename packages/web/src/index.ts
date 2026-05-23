@@ -7,6 +7,7 @@
 //   GET  /p/:owner/:repo/:number                 → PR permalink (GitHub)
 //   GET  /h/:host/r/:projectPath/c/:sha          → permalink result page (federated, any host)
 //   GET  /h/:host/p/:projectPath/:number         → PR/MR permalink (federated)
+//   GET  /<permalink>/badge.svg                  → auto-updating SVG status badge
 //   POST /api/lookup                             → JSON single lookup (client-side fetch)
 //   POST /api/lookup-bulk                        → JSON bulk lookup
 //   GET  /internal/result/:owner/:repo/:sha      → Service Binding only; for web-og
@@ -16,6 +17,7 @@ import { parseInput } from '@released/core';
 import { Hono } from 'hono';
 import type { Env } from './env.js';
 import { commitPermalinkPath, prPermalinkPath } from './paths.js';
+import { badgeRoute } from './routes/badge.js';
 import { homeRoute } from './routes/home.js';
 import { internalResultRoute } from './routes/internal.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
@@ -56,6 +58,12 @@ app.get('/p/:owner/:repo/:number', prRoute);
 // Federated permalinks (any non-GitHub provider). projectPath URL-encoded.
 app.get('/h/:host/r/:projectPath/c/:sha', resultRoute);
 app.get('/h/:host/p/:projectPath/:number', prRoute);
+
+// Auto-updating status badges (one extra `/badge.svg` segment per permalink).
+app.get('/r/:owner/:repo/c/:sha/badge.svg', badgeRoute);
+app.get('/p/:owner/:repo/:number/badge.svg', badgeRoute);
+app.get('/h/:host/r/:projectPath/c/:sha/badge.svg', badgeRoute);
+app.get('/h/:host/p/:projectPath/:number/badge.svg', badgeRoute);
 
 app.post('/api/lookup', lookupRoute);
 app.post('/api/lookup-bulk', lookupBulkRoute);

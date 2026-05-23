@@ -146,6 +146,28 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
 .btn-fmt.primary { background: var(--white); color: #0a0a0a; border-color: var(--white); font-weight: 600; }
 .btn-fmt.primary:hover { background: #fff; border-color: #fff; }
 .perma { margin-left: auto; font-family: 'Geist Mono', monospace; font-size: 11.5px; color: var(--text-3); }
+/* Live copy preview: shows what each format produces — the rendered image for
+ * "as Badge", the literal string for slack/link. Updates on hover/
+ * focus/click of the copy buttons; hidden until populated client-side. */
+.copy-preview {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+}
+.copy-preview-label {
+  font-size: 11px; font-weight: 500; color: var(--text-3);
+  text-transform: uppercase; letter-spacing: .05em; flex-shrink: 0;
+}
+.copy-preview-badge { display: block; height: 20px; border-radius: 3px; }
+.copy-preview-text {
+  font-family: 'Geist Mono', monospace; font-size: 12px; color: var(--text-2);
+  white-space: pre-wrap; word-break: break-all; line-height: 1.5; min-width: 0;
+}
+/* The display rules above outrank the UA [hidden]{display:none}, so restore it
+ * explicitly — otherwise hidden elements (empty preview, swapped-out badge img)
+ * stay visible. */
+.copy-preview[hidden], .copy-preview-badge[hidden] { display: none; }
+.copy-hint { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
 .answer-meta {
   padding: 12px 22px; border-top: 1px solid var(--border);
   background: rgba(0,0,0,.18);
@@ -171,6 +193,20 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
 }
 .sec-label a:hover { color: var(--accent); text-decoration-color: var(--accent); }
 .sec-label a:visited { color: var(--text); }
+/* PR/MR resolution banner ("Resolved <MR !N> → merge commit <sha>"). Bare
+ * <a> tags here would fall back to #0000EE — illegible on the dark surface. */
+.pr-banner {
+  margin-bottom: 16px; padding: 12px 16px;
+  background: var(--bg-raised); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 13.5px; color: var(--text-2);
+}
+.pr-banner a {
+  color: var(--text); text-decoration: underline;
+  text-decoration-color: var(--border-bright); text-underline-offset: 2px;
+}
+.pr-banner a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.pr-banner a:visited { color: var(--text); }
+.pr-banner .sha { font-family: 'Geist Mono', monospace; }
 /* The hero version is a link — make it discoverable on hover with a subtle
  * underline, but stay clean at rest. */
 a.v {

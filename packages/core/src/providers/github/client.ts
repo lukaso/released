@@ -25,6 +25,13 @@ const DEFAULT_GQL_ENDPOINT = 'https://api.github.com/graphql';
 
 const GITHUB_TERMS = { mergeRequest: 'Pull request', mergeRequestPrefix: '#' } as const;
 
+/** First non-empty line of a commit message (the "subject"), trimmed. */
+function firstLine(message: string | undefined | null): string | null {
+  if (!message) return null;
+  const line = message.split('\n', 1)[0]?.trim();
+  return line ? line : null;
+}
+
 const TAGS_QUERY = `
   query($owner:String!,$name:String!,$cursor:String){
     repository(owner:$owner,name:$name){
@@ -98,12 +105,18 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
       merged: boolean;
       state: string;
       merge_commit_sha: string | null;
+      title: string | null;
     }>(res);
     if (!body.merged) {
       throw new PrNotMergedError(n, body.state === 'closed' ? 'closed' : 'open', GITHUB_TERMS);
     }
     if (body.merge_commit_sha == null) throw new PrMergeCommitUnavailableError(n, GITHUB_TERMS);
-    return { merged: true as const, mergeCommitSha: body.merge_commit_sha, rateLimit };
+    return {
+      merged: true as const,
+      mergeCommitSha: body.merge_commit_sha,
+      title: body.title ?? null,
+      rateLimit,
+    };
   }
 
   async function getCommit(repo: RepoRef, sha: string) {
@@ -114,8 +127,16 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
     if (res.status === 404) throw new CommitNotFoundError(sha);
     if (res.status === 422) throw new AmbiguousShaError(sha);
     if (!res.ok) throw new GitHubServerError(res.status, res.statusText);
-    const body = await readJson<{ sha: string; commit: { committer: { date: string } } }>(res);
-    return { fullSha: body.sha, committedDate: body.commit.committer.date, rateLimit };
+    const body = await readJson<{
+      sha: string;
+      commit: { committer: { date: string }; message?: string };
+    }>(res);
+    return {
+      fullSha: body.sha,
+      committedDate: body.commit.committer.date,
+      subject: firstLine(body.commit.message),
+      rateLimit,
+    };
   }
 
   async function listTagsWithDates(repo: RepoRef) {

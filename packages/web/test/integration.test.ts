@@ -454,6 +454,366 @@ describe('homepage CSP', () => {
   });
 });
 
+// Copy UI: a paste-able link / auto-updating badge, available even before a
+// release lands. The badge URL is the permalink with `/badge.svg` appended.
+describe('permalink copy UI + badge embed', () => {
+  it('exposes the "as Badge" copy button and the client builds a badge.svg snippet', async () => {
+    const res = await app.fetch(new Request('https://released.example/'));
+    const body = await res.text();
+    // The button is present (in the shared CopyActions row)…
+    expect(body).toContain('data-copy="badge"');
+    // …and the client copy handler builds the `…/badge.svg` markdown…
+    expect(body).toContain("'/badge.svg)](' + perma + ')'");
+    // …and weaves the human headline (subject) into the non-link formats.
+    expect(body).toContain('r.subject');
+  });
+
+  it('released MR page: readable .pr-banner links + a live badge preview', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/601')) {
+          return new Response(
+            JSON.stringify({
+              state: 'merged',
+              sha: 'ffheadsha1234567890abcdef1234567890abcdef',
+              title: 'Port build to macOS arm64',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([{ type: 'tag', name: 'GIMP_3_2_0' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-01-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'GIMP_3_2_0',
+                commit: { id: 'tagsha', committed_date: '2024-06-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/releases/')) {
+          return new Response('{}', {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgimp/601'),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // The "Resolved …" banner now uses a class with explicit link colors.
+      expect(body).toContain('class="pr-banner"');
+      expect(body).toContain('.pr-banner a {'); // the readable-link CSS shipped
+      // Badge button + the live copy-preview panel (populated client-side).
+      expect(body).toContain('data-copy="badge"');
+      expect(body).toContain('data-copy-preview');
+      expect(body).toContain('copy-preview-badge');
+      // The MR title flows into the inline result payload (subject), so the
+      // copy formats can be self-describing.
+      expect(body).toContain('Port build to macOS arm64');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('not-yet-released MR page: copy actions + auto-update hint + inline result data', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/602')) {
+          return new Response(
+            JSON.stringify({
+              state: 'merged',
+              sha: 'ffheadsha1234567890abcdef1234567890abcdef',
+              title: 'Add experimental cache layer',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-06-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'GIMP_3_0_0',
+                commit: { id: 'tagsha', committed_date: '2024-05-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgimp/602'),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain('Not yet released');
+      // Copy affordances work even when unreleased.
+      expect(body).toContain('data-copy="badge"');
+      expect(body).toContain('flips to the version automatically');
+      // The client copy handler needs the result payload injected…
+      expect(body).toContain('window.__RELEASED_RESULT__ =');
+      // …and the MR title rides along (via NotYetReleasedError.subject).
+      expect(body).toContain('Add experimental cache layer');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// Hint placement: the "broaden the search" hint (strict / prereleases) is a
+// next-step, so it renders BELOW the "Not yet released" answer, not above it.
+describe('not-yet hint placement', () => {
+  it('renders the StrictHint AFTER the "Not yet released" card', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/603')) {
+          return new Response(
+            JSON.stringify({ state: 'merged', sha: 'ffheadsha1234567890abcdef1234567890abcdef' }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-06-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          // A 2020 tag, >90 days before the 2024 commit → culled by the date
+          // margin → NotYetReleasedError carries culledTagCount > 0 → StrictHint.
+          return new Response(
+            JSON.stringify([
+              { name: 'OLD_1_0', commit: { id: 'oldsha', committed_date: '2020-01-01T00:00:00Z' } },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgimp/603'),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      const answerAt = body.indexOf('Not yet released');
+      const hintAt = body.indexOf('skipped by the 90-day date cull');
+      expect(answerAt).toBeGreaterThan(-1);
+      expect(hintAt).toBeGreaterThan(-1);
+      // The answer must come before the hint in document order.
+      expect(answerAt).toBeLessThan(hintAt);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// Status badges: an auto-updating SVG embeddable in MR/PR markdown. Shares the
+// permalink's lookup + cache; released answers cache long, everything else short
+// so the badge flips once a release lands.
+describe('status badge — /…/badge.svg', () => {
+  it('renders an SVG with the version tag + green color, long cache, when released', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/501')) {
+          return new Response(
+            JSON.stringify({
+              state: 'merged',
+              merge_commit_sha: null,
+              squash_commit_sha: null,
+              sha: 'ffheadsha1234567890abcdef1234567890abcdef',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([{ type: 'tag', name: 'GIMP_3_2_0' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-01-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'GIMP_3_2_0',
+                commit: { id: 'tagsha', committed_date: '2024-06-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/releases/')) {
+          return new Response(JSON.stringify({}), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgimp/501/badge.svg'),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      const body = await res.text();
+      expect(body).toContain('<svg');
+      expect(body).toContain('GIMP_3_2_0');
+      expect(body).toContain('#3fb950'); // --ship green
+      // Released is terminal → long cache.
+      expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('renders a "not yet" gold badge with short cache when merged but unreleased', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/502')) {
+          return new Response(
+            JSON.stringify({
+              state: 'merged',
+              merge_commit_sha: null,
+              squash_commit_sha: null,
+              sha: 'ffheadsha1234567890abcdef1234567890abcdef',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/refs?type=tag')) {
+          // No tag contains the merge commit → "not yet released".
+          return new Response(JSON.stringify([]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-06-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'GIMP_3_0_0',
+                commit: { id: 'tagsha', committed_date: '2024-05-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgimp/502/badge.svg'),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      const body = await res.text();
+      expect(body).toContain('not yet');
+      expect(body).toContain('#d29922'); // --warn gold
+      // Non-terminal → short cache so the proxy re-fetches and the badge flips.
+      expect(res.headers.get('cache-control')).toMatch(/max-age=300/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('renders an "unknown" badge (no network) for a malformed SHA', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/r/facebook/react/c/not-a-sha/badge.svg'),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('image/svg+xml');
+    const body = await res.text();
+    expect(body).toContain('unknown');
+    expect(res.headers.get('cache-control')).toMatch(/max-age=300/);
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;

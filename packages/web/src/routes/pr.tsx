@@ -208,14 +208,14 @@ function PrBanner({
   const label = provider.terms.mergeRequest;
   const prefix = provider.terms.mergeRequestPrefix;
   return (
-    <div style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);">
+    <div class="pr-banner">
       Resolved{' '}
       <a href={prUrl}>
         {label} {prefix}
         {prNumber}
       </a>{' '}
       → merge commit{' '}
-      <a href={commitUrl} style="font-family: 'Geist Mono', monospace;">
+      <a href={commitUrl} class="sha">
         {mergeSha.slice(0, 7)}
       </a>
     </div>
@@ -358,6 +358,7 @@ function renderPrNotYetReleased(
   const synthetic: LookupResult = {
     input: { kind: 'pr', repo, number: prNumber },
     canonicalSha: err.sha,
+    subject: err.subject,
     firstRelease: null,
     alsoIn: [],
     releaseNotesHtml: null,
@@ -368,9 +369,7 @@ function renderPrNotYetReleased(
       pullRequest: provider.urls.pullRequest(repo, prNumber),
     },
   };
-  const prUrl = provider.urls.pullRequest(repo, prNumber);
-  const mergeUrl = provider.urls.commit(repo, err.sha);
-  const label = provider.terms.mergeRequest;
+  const inlineData = JSON.stringify(synthetic).replace(/</g, '\\u003c');
   const page = (
     <Layout
       title={`not yet released — ${displayName}${prefix}${prNumber}`}
@@ -381,20 +380,11 @@ function renderPrNotYetReleased(
     >
       <Nav />
       <main style="padding-top: 24px;">
-        <div style="margin-bottom: 16px; padding: 12px 16px; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 8px; font-size: 13.5px; color: var(--text-2);">
-          Resolved{' '}
-          <a href={prUrl}>
-            {label} {prefix}
-            {prNumber}
-          </a>{' '}
-          → merge commit{' '}
-          <a href={mergeUrl} style="font-family: 'Geist Mono', monospace;">
-            {err.sha.slice(0, 7)}
-          </a>
-        </div>
-        {showHint && <StrictHint culled={err.culledTagCount} retryHref={strictHref} />}
+        <PrBanner provider={provider} repo={repo} prNumber={prNumber} mergeSha={err.sha} />
         <ResultCard result={synthetic} publicBaseUrl={pubBase} />
+        {showHint && <StrictHint culled={err.culledTagCount} retryHref={strictHref} />}
       </main>
+      <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
     </Layout>
   );
   return new Response(`<!DOCTYPE html>${page.toString()}`, {

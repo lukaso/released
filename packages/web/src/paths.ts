@@ -15,7 +15,7 @@
 // GitHub URLs stay identical to the pre-federation scheme so cached unfurls,
 // Slack messages, and bookmarks keep working.
 
-import type { RepoRef } from '@released/core';
+import type { LookupInput, RepoRef } from '@released/core';
 
 const GITHUB_HOST = 'github.com';
 
@@ -33,4 +33,12 @@ export function prPermalinkPath(repo: RepoRef, n: number): string {
     return `/p/${owner}/${name}/${n}`;
   }
   return `/h/${repo.host}/p/${encodeURIComponent(repo.projectPath)}/${n}`;
+}
+
+/** The canonical permalink for a result, regardless of whether the lookup was a
+ *  commit or a PR/MR. PR results keep the /p/ permalink so the embedded badge
+ *  tracks the merge request; commits use the short-SHA /r/ form. */
+export function permalinkPathForInput(input: LookupInput, canonicalSha: string): string {
+  if (input.kind === 'pr') return prPermalinkPath(input.repo, input.number);
+  return commitPermalinkPath(input.repo, canonicalSha.slice(0, 7));
 }

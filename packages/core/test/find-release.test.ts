@@ -20,9 +20,9 @@ function fakeClient(spec: {
   /** Which tags CONTAIN the input commit (truth — by tag name). */
   contains?: Set<string>;
   /** Override commit resolution. */
-  commits?: Record<string, { fullSha: string; committedDate: string }>;
+  commits?: Record<string, { fullSha: string; committedDate: string; subject?: string | null }>;
   /** Override PR resolution. */
-  prs?: Record<number, { merged: boolean; mergeCommitSha: string | null }>;
+  prs?: Record<number, { merged: boolean; mergeCommitSha: string | null; title?: string | null }>;
   /** Release notes by tag. */
   releaseNotes?: Record<string, string | null>;
   /** Tags the PROVIDER (e.g. GitHub) flags as prerelease via its API, regardless
@@ -63,7 +63,12 @@ function fakeClient(spec: {
       if (!pr) throw new Error(`fake: no PR ${n}`);
       if (!pr.merged) throw new PrNotMergedError(n);
       if (pr.mergeCommitSha == null) throw new Error('not merged');
-      return { merged: true, mergeCommitSha: pr.mergeCommitSha, rateLimit };
+      return {
+        merged: true,
+        mergeCommitSha: pr.mergeCommitSha,
+        title: pr.title ?? null,
+        rateLimit,
+      };
     },
     async listTagsWithDates() {
       return { tags: spec.tags ?? [], rateLimit };
@@ -756,5 +761,61 @@ describe('findRelease — containingTags shortcut (GitLab-only optimization)', (
     expect(result.firstRelease?.tag).toBe('v1.0');
     expect(client.stats.compareCalls).toBeGreaterThan(0);
     expect(client.stats.containingTagsCalls).toBe(0);
+  });
+});
+
+describe('findRelease — subject (human headline)', () => {
+  const tags: TagWithDate[] = [{ name: 'v1.0', sha: 's1', date: '2024-02-01T00:00:00Z' }];
+
+  it('uses the commit subject for commit inputs', async () => {
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0']),
+      commits: {
+        [COMMIT_SHA]: {
+          fullSha: COMMIT_SHA,
+          committedDate: '2024-01-01T00:00:00Z',
+          subject: 'fix: handle null user in auth middleware',
+        },
+      },
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.subject).toBe('fix: handle null user in auth middleware');
+  });
+
+  it('prefers the PR/MR title over the merge commit subject for pr inputs', async () => {
+    const mergeSha = 'b'.repeat(40);
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v1.0']),
+      prs: { 42: { merged: true, mergeCommitSha: mergeSha, title: 'Add dark mode toggle' } },
+      commits: {
+        [mergeSha]: {
+          fullSha: mergeSha,
+          committedDate: '2024-01-01T00:00:00Z',
+          subject: 'Merge pull request #42 from foo/bar',
+        },
+      },
+    });
+    const result = await findRelease({ kind: 'pr', repo: REPO, number: 42 }, { client });
+    expect(result.subject).toBe('Add dark mode toggle');
+  });
+
+  it('carries the subject on NotYetReleasedError so the not-yet UI stays descriptive', async () => {
+    const client = fakeClient({
+      tags,
+      contains: new Set(), // no tag contains the commit
+      commits: {
+        [COMMIT_SHA]: {
+          fullSha: COMMIT_SHA,
+          committedDate: '2024-03-01T00:00:00Z',
+          subject: 'perf: cache the thing',
+        },
+      },
+    });
+    await expect(findRelease(COMMIT, { client })).rejects.toMatchObject({
+      name: 'NotYetReleasedError',
+      subject: 'perf: cache the thing',
+    });
   });
 });
