@@ -20,7 +20,7 @@ if [ -n "${CI:-}" ]; then
   exit 0
 fi
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 1
 
 echo "→ build"
 pnpm -r build
@@ -33,6 +33,29 @@ pnpm -r test
 
 echo "→ lint"
 pnpm lint
+
+# Lint the bash scripts + git hooks (hand-written for bash 3.2, easy to
+# regress). Graceful skip if shellcheck isn't installed (CI gates it).
+echo "→ shellcheck"
+if command -v shellcheck >/dev/null 2>&1; then
+  shellcheck scripts/*.sh .githooks/*
+else
+  echo "  shellcheck not installed — skipping (CI gates it). brew install shellcheck"
+fi
+
+# actionlint: lint the GitHub workflow YAML (expressions, shell, deprecations).
+echo "→ actionlint"
+if command -v actionlint >/dev/null 2>&1; then
+  actionlint
+else
+  echo "  actionlint not installed — skipping (CI gates it). brew install actionlint"
+fi
+
+# secrets: gitleaks history scan. Hard-fails if a token/key is found; self-skips
+# when gitleaks isn't installed (CI is the authoritative gate). The pre-commit
+# hook additionally blocks staged secrets on every commit.
+echo "→ secrets (gitleaks)"
+scripts/secrets-scan.sh
 
 # publint: structural lint of the published CLI package. npm-provided (every
 # clone has it after pnpm install), so it hard-fails like the checks above.

@@ -8,7 +8,7 @@
 #
 # Bash 3.2 + BSD-tool friendly (macOS default shell).
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 1
 
 ok() { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 warn() { printf '  \033[33m⚠\033[0m %s\n' "$1"; }
@@ -29,11 +29,20 @@ else
   miss "pnpm not found — 'npm i -g pnpm' or 'corepack enable'"
   FAIL=1
 fi
-if command -v osv-scanner >/dev/null 2>&1; then
-  ok "osv-scanner $(osv-scanner --version 2>/dev/null | head -1 | awk '{print $NF}')"
-else
-  warn "osv-scanner not installed — local dependency CVE scan is skipped (CI still scans every PR). Install: brew install osv-scanner | https://google.github.io/osv-scanner/installation/"
-fi
+
+echo
+echo "Sharper local loop (optional — each warns and continues; CI gates every PR):"
+check_opt() { # $1=binary  $2=purpose  $3=install hint
+  if command -v "$1" >/dev/null 2>&1; then
+    ok "$1 present — $2"
+  else
+    warn "$1 not installed — $2 skipped locally. $3"
+  fi
+}
+check_opt osv-scanner "dependency CVE scan" "brew install osv-scanner | https://google.github.io/osv-scanner/installation/"
+check_opt gitleaks "secret scan" "brew install gitleaks | https://github.com/gitleaks/gitleaks#installing"
+check_opt shellcheck "shell-script lint" "brew install shellcheck"
+check_opt actionlint "workflow lint" "brew install actionlint"
 
 echo
 echo "Optional — to run the CLI against live hosts (the test suite uses mocks, so this is NOT needed for dev):"

@@ -23,7 +23,7 @@ export const STYLES = `
   --bg-hover: #1a1a1a;
   --text: #ededed;
   --text-2: #a1a1a1;
-  --text-3: #6e6e6e;
+  --text-3: #8a8a8a;
   --border: #262626;
   --border-bright: #383838;
   --white: #fafafa;

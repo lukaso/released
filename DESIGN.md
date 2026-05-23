@@ -91,7 +91,7 @@ fallback during load.
 | `--bg-hover`       | `#1a1a1a` | Chip hover, button hover.                         |
 | `--text`           | `#ededed` | Primary body text.                                |
 | `--text-2`         | `#a1a1a1` | Secondary text, captions, link rest.              |
-| `--text-3`         | `#6e6e6e` | Tertiary / muted — labels, metadata, footer.     |
+| `--text-3`         | `#8a8a8a` | Tertiary / muted — labels, metadata, footer. Meets WCAG AA on `--bg`. |
 | `--border`         | `#262626` | Default 1px borders.                              |
 | `--border-bright`  | `#383838` | Border on hover / focus / inputs.                 |
 | `--white`          | `#fafafa` | Primary CTA background. Reads as pure white.      |
@@ -195,9 +195,14 @@ sub-component tweaks above.
   `#0000EE` / `#551A8B` visited-purple are unreadable on `--bg-raised` — see
   the `.answer-meta a`, `.sec-label a`, and `a.v` rules.
 - Tap targets on mobile are ≥ ~40px (project chips).
-- Color contrast: `--text` on `--bg` is well above WCAG AA. `--text-3` on
-  `--bg` is intentionally muted (for metadata) and not used for primary
-  content.
+- Color contrast: all text meets **WCAG AA** on its surface. `--text-3`
+  (`#8a8a8a`) is the muted floor — still clearly tertiary, but ≥ 4.5:1 on
+  `--bg` / `--bg-raised` / the example tint. Keep new muted text at `--text-3`
+  or lighter; don't reintroduce a sub-AA gray.
+- Automated guards: `packages/web/test/a11y.test.ts` runs axe (jsdom) for
+  structural issues on every `pnpm test`; `a11y-contrast.test.ts` runs axe's
+  color-contrast rule in headless chromium in CI as a **full WCAG AA gate**
+  (with a positive control proving it catches a bare default-blue link).
 
 ## What this design is NOT
 

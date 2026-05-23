@@ -11,7 +11,7 @@
 # (a contributor may not have it, especially on Windows), and CI installs it and
 # runs this same script as the authoritative gate on every PR. See README.
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" || exit 1
 
 if ! command -v osv-scanner >/dev/null 2>&1; then
   echo "⚠ osv-scanner not installed — skipping local dependency CVE scan."

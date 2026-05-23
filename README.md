@@ -35,14 +35,17 @@ Three tiers — you only need the first to contribute:
 
 | Tier | What | Needed for |
 |---|---|---|
-| **Contribute** | Node 20+, `pnpm`, [`osv-scanner`](https://google.github.io/osv-scanner/installation/) | build, test, lint, push, open PRs |
+| **Contribute** | Node 20+, `pnpm` | build, test, lint, push, open PRs |
+| **Sharper local loop** *(optional)* | [`osv-scanner`](https://google.github.io/osv-scanner/installation/), [`gitleaks`](https://github.com/gitleaks/gitleaks#installing), `shellcheck`, `actionlint` | dependency CVE scan, secret scan, shell + workflow lint in your own loop |
 | **Run the CLI live** *(optional)* | `GITHUB_TOKEN` / `GITLAB_TOKEN` env vars | running `git-released` against rate-limited hosts. The test suite uses mocks, so this is **not** needed for dev |
 | **Publish / deploy** *(maintainer only)* | npm publish rights, Cloudflare API token + account, `gh` | only used by `release.yml`; contributors never touch this |
 
-`osv-scanner` is the one non-npm prerequisite. It's optional locally (the
-pre-push hook warns and continues without it; CI scans every PR regardless),
-but installing it gives you the dependency CVE scan in your own loop. Run
-`pnpm doctor` to check your setup and get exact install commands:
+The tier-2 binaries (`osv-scanner`, `gitleaks`, `shellcheck`, `actionlint`) are
+the non-npm tools. All are **optional locally** — the hooks warn and continue
+without them, and CI runs every one as the authoritative gate on every PR — but
+installing them brings those checks into your own loop (`brew install
+osv-scanner gitleaks shellcheck actionlint`). Run `pnpm doctor` to check your
+setup and get exact install commands:
 
 ```bash
 pnpm install      # also wires git hooks via the prepare script
@@ -53,7 +56,7 @@ pnpm doctor       # one-shot prerequisite check
 
 ```bash
 # edit ...
-pnpm validate     # build · typecheck · test · lint · publint · osv  (~8-10s; also the pre-push hook)
+pnpm validate     # build · typecheck · test · lint · shellcheck · actionlint · secrets · publint · osv  (also the pre-push hook)
 git push          # pre-push runs pnpm validate automatically
 pnpm ci:status    # poll CI for your pushed commit (pass/fail + failed-step logs)
 ```
@@ -70,10 +73,17 @@ pnpm --filter git-released dev -- <input>    # tsx-run the CLI in place
 
 | Command | What it does | Gate? |
 |---|---|---|
-| `pnpm validate` | build, typecheck, test, lint, publint (hard-fail); osv (warn-only locally) | pre-push hook |
+| `pnpm validate` | build, typecheck, test, lint, shellcheck, actionlint, secrets, publint (hard-fail when the tool is present); osv (warn-only locally) | pre-push hook |
 | `pnpm check:publish` | publint + pack the CLI, install the tarball in a clean dir, run `git-released --help` | pre-publish gate in `release.yml`; run on demand |
 | `pnpm ci:status` | shows CI runs for HEAD (`ci.yml` + `release.yml`) + failed-step logs | read-only |
 | `pnpm doctor` | prerequisite check with fixes | read-only |
+
+CI mirrors these across jobs: **test** (lint/build/typecheck/test, incl. the
+jsdom+axe structural a11y test), **osv** (dependency CVEs), **secrets**
+(gitleaks, full history), **meta-lint** (shellcheck + actionlint), and **a11y**
+(chromium + axe color-contrast regression guard). The pre-commit hook also runs
+a staged gitleaks scan so a stray `git add` of a `.dev.vars` / token is blocked
+before it ever lands in a commit.
 
 Two independent hook systems live here, by design:
 

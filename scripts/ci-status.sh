@@ -4,7 +4,7 @@
 # relay a red build. Reports BOTH workflows (ci.yml + release.yml) for HEAD, and
 # for any failed run dumps the failed-step logs. Read-only.
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 1
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "gh (GitHub CLI) not installed — needed to read CI status."

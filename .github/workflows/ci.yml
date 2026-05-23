@@ -79,3 +79,75 @@ jobs:
 
       - name: Scan dependencies (gate High/Critical)
         run: bash scripts/osv-check.sh
+
+  # Authoritative secret scan. Runs the SAME scripts/secrets-scan.sh the
+  # pre-commit (staged) + pre-push (history) hooks run locally. Here it scans
+  # the FULL history (fetch-depth: 0) and gates the PR. Real .dev.vars secrets
+  # are gitignored + never committed, so this is clean unless a token actually
+  # lands in a tracked file.
+  secrets:
+    name: secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          VERSION=8.30.1
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan history for secrets
+        run: bash scripts/secrets-scan.sh
+
+  # Lint the shell scripts + git hooks and the workflow YAML itself. shellcheck
+  # ships on GitHub's ubuntu runners; actionlint is fetched per-run (it also
+  # runs shellcheck on the `run:` blocks below, so keep them tidy).
+  meta-lint:
+    name: shell + workflow lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh .githooks/*
+
+      - name: actionlint
+        run: |
+          VERSION=1.7.12
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v${VERSION}/actionlint_${VERSION}_linux_amd64.tar.gz" | tar -xz actionlint
+          ./actionlint -color
+
+  # Contrast a11y pass in a real browser (chromium). Structural a11y runs in the
+  # normal test job (jsdom + axe, no browser); this is the contrast layer jsdom
+  # can't do. Gated by A11Y_BROWSER so it only runs here, not in the inner loop.
+  a11y:
+    name: a11y contrast (chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # web's tests import @released/core, whose .d.ts/dist comes from the build.
+      - name: Build core
+        run: pnpm --filter @released/core build
+
+      - name: Install chromium
+        run: pnpm --filter @released/web exec playwright install --with-deps chromium
+
+      - name: Contrast scan
+        env:
+          A11Y_BROWSER: "1"
+        run: pnpm --filter @released/web exec vitest run test/a11y-contrast.test.ts

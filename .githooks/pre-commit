@@ -18,7 +18,12 @@ if [ -n "${CI:-}" ]; then
   exit 0
 fi
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Secret scan FIRST, on all staged files (not just JS) — a stray `git add` of a
+# .dev.vars / .env is the highest-blast-radius mistake. Blocks the commit if a
+# token/key is staged; no-ops if gitleaks isn't installed (CI is the gate).
+scripts/secrets-scan.sh --staged
 
 # Newline-separated list of staged files. --diff-filter=ACM = Added, Copied,
 # Modified (skips Deletions, which can't be linted). Filenames with embedded
