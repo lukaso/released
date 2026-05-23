@@ -15,12 +15,17 @@ directory = "./public"
 # This is the SHARED server-side token. PAT-paste is per-user via X-User-Github-Token header.
 
 # GitLab federation secrets (set via `wrangler secret put`):
-#   GITLAB_TOKEN                       — default GitLab PAT (gitlab.com)
+#   GITLAB_TOKEN                       — gitlab.com PAT. Used for gitlab.com ONLY;
+#                                        it is never sent to other instances
+#                                        (GitLab PATs are instance-scoped — a
+#                                        gitlab.com token 401s elsewhere and
+#                                        leaks the secret to a third-party host).
 #   GITLAB_TOKEN_GITLAB_GNOME_ORG      — per-host PAT (host uppercased, '.' '-' → '_')
 #   GITLAB_TOKEN_GITLAB_FREEDESKTOP_ORG
 #   ...etc
-# Anonymous calls from Workers share the edge IP's budget and exhaust quickly,
-# so a token is effectively required for any meaningful federation traffic.
+# A host with no matching per-host secret falls back to anonymous. Anonymous
+# calls from Workers share the edge IP's budget and exhaust quickly, so set a
+# per-host PAT for any instance you expect meaningful federation traffic to.
 
 # Optional: extend the known-GitLab-hosts allowlist with self-hosted instances.
 # [vars]

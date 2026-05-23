@@ -7,8 +7,10 @@
 //
 //   GitLab (host !== 'github.com'):
 //     1. --token <t> CLI flag
-//     2. GITLAB_TOKEN_<HOST> / GITLAB_TOKEN env vars (host-specific takes precedence)
-//     3. `glab auth token --hostname <host>` shellout
+//     2. GITLAB_TOKEN_<HOST> env var (host-specific)
+//     3. GITLAB_TOKEN env var — ONLY for gitlab.com (it is gitlab.com's PAT; a
+//        per-instance PAT must never be sent to a different GitLab host)
+//     4. `glab auth token --hostname <host>` shellout
 //
 // Returns undefined when no token is available — CLI then runs unauthenticated.
 
@@ -30,12 +32,16 @@ export async function resolveToken(opts: AuthOpts = {}): Promise<string | undefi
     if (envToken?.trim()) return envToken.trim();
     return await tryShellAuth('gh', 'github.com');
   }
-  // GitLab path: host-specific env var first, then generic GITLAB_TOKEN.
+  // GitLab path: host-specific env var first. The generic GITLAB_TOKEN is
+  // gitlab.com's PAT — only send it to gitlab.com, never to another instance
+  // (PATs are instance-scoped; forwarding leaks the secret and 401s).
   const hostKey = `GITLAB_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}`;
   const hostToken = env[hostKey];
   if (hostToken?.trim()) return hostToken.trim();
-  const generic = env.GITLAB_TOKEN;
-  if (generic?.trim()) return generic.trim();
+  if (host === 'gitlab.com') {
+    const generic = env.GITLAB_TOKEN;
+    if (generic?.trim()) return generic.trim();
+  }
   return await tryShellAuth('glab', host);
 }
 

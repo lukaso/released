@@ -1,7 +1,9 @@
 // Web auth: resolves the provider API token used for an outbound API call.
 // Precedence per provider:
 //   GitHub: X-User-Github-Token header > GITHUB_TOKEN secret > none
-//   GitLab: X-User-Gitlab-Token header > GITLAB_TOKEN_<HOST> secret > GITLAB_TOKEN secret > none
+//   GitLab: X-User-Gitlab-Token header > GITLAB_TOKEN_<HOST> secret > none
+//           (GITLAB_TOKEN is gitlab.com's PAT and is ONLY used for gitlab.com —
+//            a per-instance PAT must never be sent to a different GitLab host)
 // Also implements same-origin Origin-header check as defense-in-depth on /api/*.
 
 import type { Env } from './env.js';
@@ -30,7 +32,9 @@ export function resolveProviderToken(
     const hostKey = `GITLAB_TOKEN_${host.toUpperCase().replace(/[.-]/g, '_')}` as const;
     const hostSecret = (env as Record<string, string | undefined>)[hostKey];
     if (hostSecret?.trim()) return hostSecret.trim();
-    if (env.GITLAB_TOKEN?.trim()) return env.GITLAB_TOKEN.trim();
+    // GITLAB_TOKEN is gitlab.com's PAT. Only send it to gitlab.com — forwarding
+    // it to another instance leaks the secret and 401s (PATs are instance-scoped).
+    if (host === 'gitlab.com' && env.GITLAB_TOKEN?.trim()) return env.GITLAB_TOKEN.trim();
   }
   return undefined;
 }
