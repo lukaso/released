@@ -202,7 +202,14 @@ const CLIENT_JS = `
       btn.addEventListener('pointerleave', function(){ showPreview(pinnedFmt); });
       btn.addEventListener('blur', function(){ showPreview(pinnedFmt); });
     });
-    showPreview(pinnedFmt);
+    // Populate only when the share disclosure is first opened — a clean
+    // permalink visit (disclosure closed) then triggers no badge fetch.
+    var share = document.querySelector('details.share');
+    if (share) {
+      share.addEventListener('toggle', function(){ if (share.open) showPreview(pinnedFmt); });
+    } else {
+      showPreview(pinnedFmt);
+    }
   }
 })();
 `;

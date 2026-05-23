@@ -87,19 +87,21 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
   );
 }
 
-/** The "Copy" row: badge markdown (primary, live image), Slack mrkdwn, raw link.
- *  The client handler in layout.tsx (formatForCopy) builds each format. All
- *  three work even when not yet released.
+/** Share/embed tools, collapsed behind a native <details> disclosure so the
+ *  permalink reads clean for a visitor who just wants the answer; the sharer
+ *  clicks "Copy & embed badge" to reveal them. Works without JS (native
+ *  <details>); the clipboard + live preview are progressive enhancements.
  *
- *  Below the buttons sits a live preview that mirrors what each format copies —
- *  the rendered image for "as Badge", the literal string for the rest. It's
- *  populated client-side (the exact strings are built in formatForCopy) and
- *  stays hidden when there's no result payload (e.g. the homepage EXAMPLE). */
-function CopyActions({ perma }: { perma: string }) {
+ *  Formats (built client-side in layout.tsx → formatForCopy): badge markdown
+ *  (primary, live image), Slack mrkdwn, raw link — all work pre-release. The
+ *  preview mirrors what each copies and is populated only once the disclosure
+ *  is opened (so a clean visit triggers zero extra lookups). `hint` renders
+ *  inside the disclosure (used by the not-yet card). */
+function CopyActions({ perma, hint }: { perma: string; hint?: string }) {
   return (
-    <div class="copy">
+    <details class="share">
+      <summary class="share-summary">Copy &amp; embed badge</summary>
       <div class="answer-actions">
-        <span class="share-lbl">Copy</span>
         <button type="button" class="btn-fmt primary" data-copy="badge">
           as Badge
         </button>
@@ -107,7 +109,7 @@ function CopyActions({ perma }: { perma: string }) {
           for Slack
         </button>
         <button type="button" class="btn-fmt" data-copy="link">
-          link only
+          link
         </button>
         <span class="perma">{perma.replace(/^https?:\/\//, '')}</span>
       </div>
@@ -118,7 +120,8 @@ function CopyActions({ perma }: { perma: string }) {
         <img class="copy-preview-badge" alt="status badge preview" height="20" hidden />
         <code class="copy-preview-text" />
       </div>
-    </div>
+      {hint && <div class="copy-hint">{hint}</div>}
+    </details>
   );
 }
 
@@ -200,11 +203,10 @@ function NotYetReleased({
         <div class="answer-date">
           <b>On the default branch</b> · commit {result.canonicalSha.slice(0, 7)}
         </div>
-        <CopyActions perma={perma} />
-        <div class="copy-hint">
-          Paste the badge into your PR/MR now — it flips to the version automatically once this
-          ships.
-        </div>
+        <CopyActions
+          perma={perma}
+          hint="Paste the badge into your PR/MR now — it flips to the version automatically once this ships."
+        />
       </div>
     </div>
   );

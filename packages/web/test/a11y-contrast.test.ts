@@ -67,6 +67,12 @@ describe.runIf(RUN)('a11y — contrast (chromium + axe)', () => {
     // Inlined CSS in <head> applies; fonts are relative and simply fall back —
     // contrast is independent of font face. setContent gives real layout.
     await page.setContent(html, { waitUntil: 'load' });
+    // Expand the share disclosure so the copy tools are contrast-checked too.
+    await page.evaluate(() => {
+      for (const d of document.querySelectorAll('details.share')) {
+        (d as HTMLDetailsElement).open = true;
+      }
+    });
     const results = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
     await page.close();
     const fails: Fail[] = [];

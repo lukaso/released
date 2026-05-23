@@ -42,6 +42,10 @@ async function axeViolations(html: string): Promise<Violation[]> {
     runScripts: 'dangerously',
   });
   const { window } = dom;
+  // Expand the share disclosure so its collapsed tools are checked too.
+  for (const d of window.document.querySelectorAll('details.share')) {
+    (d as unknown as { open: boolean }).open = true;
+  }
   const s = window.document.createElement('script');
   s.textContent = axe.source;
   window.document.head.appendChild(s);

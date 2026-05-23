@@ -132,10 +132,27 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
 .answer-date { font-size: 15px; color: var(--text-2); margin-bottom: 18px; }
 .answer-date b { color: var(--text); font-weight: 500; }
 .answer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.share-lbl {
-  font-size: 12px; font-weight: 500; color: var(--text-3);
-  text-transform: uppercase; letter-spacing: .05em; margin-right: 2px;
+/* Share/embed disclosure — collapsed by default so the permalink reads clean.
+ * The summary is the only thing a visitor sees; clicking reveals the tools. */
+.share { margin-top: 4px; }
+.share > summary {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  font-size: 13px; font-weight: 500; color: var(--text-2);
+  list-style: none; user-select: none; width: fit-content;
 }
+.share > summary::-webkit-details-marker { display: none; }
+.share > summary::before {
+  content: ''; width: 6px; height: 6px; border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor; transform: rotate(-45deg);
+  transition: transform .12s ease; margin-left: 1px;
+}
+.share[open] > summary::before { transform: rotate(45deg); }
+.share > summary:hover { color: var(--text); }
+.share[open] > summary { margin-bottom: 14px; }
+/* The tools' author display (e.g. .answer-actions is display:flex) outranks the
+ * UA rule that hides closed-details content, so force the collapse explicitly
+ * — otherwise the permalink isn't clean. */
+.share:not([open]) > *:not(summary) { display: none; }
 .btn-fmt {
   font-family: 'Geist', sans-serif; font-size: 13px; font-weight: 500;
   background: transparent; color: var(--text-2);
