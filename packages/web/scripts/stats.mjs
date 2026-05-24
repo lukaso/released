@@ -8,22 +8,67 @@
 //   2. API token: dashboard → My Profile → API Tokens → Create Token →
 //      "Create Custom Token" with permission **Account · Account Analytics · Read**.
 //
+// Credentials are read from the environment OR from packages/web/.dev.vars
+// (env wins). Put these two lines in .dev.vars so `pnpm stats` just works:
+//   CLOUDFLARE_ACCOUNT_ID=...
+//   CLOUDFLARE_ANALYTICS_TOKEN=...
+//
 // Run:
-//   CLOUDFLARE_ACCOUNT_ID=xxx CLOUDFLARE_API_TOKEN=yyy node scripts/stats.mjs
-//   pnpm --filter @released/web stats        # if the env vars are already exported
+//   pnpm --filter @released/web stats
+//   CLOUDFLARE_ACCOUNT_ID=xxx CLOUDFLARE_ANALYTICS_TOKEN=yyy node scripts/stats.mjs
 //
 // Counts use sum(_sample_interval) (NOT count()) because Analytics Engine
 // samples at high write rates and that column reconstructs true totals.
 
-const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID || process.env.CF_ACCOUNT_ID;
-const API_TOKEN = process.env.CLOUDFLARE_API_TOKEN || process.env.CF_API_TOKEN;
-const DATASET = process.env.RELEASED_DATASET || 'released_events';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Parse packages/web/.dev.vars (dotenv-style KEY=value) so credentials don't
+// have to be exported. The Worker reads this file via wrangler; we reuse it as a
+// convenient local secret store. Real environment variables take precedence.
+function loadDevVars() {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const text = readFileSync(join(here, '..', '.dev.vars'), 'utf8');
+    const out = {};
+    for (const line of text.split('\n')) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!m) continue;
+      let v = m[2];
+      if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+        v = v.slice(1, -1);
+      }
+      out[m[1]] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+const devVars = loadDevVars();
+const cred = (...names) => {
+  for (const n of names) {
+    if (process.env[n]) return process.env[n];
+    if (devVars[n]) return devVars[n];
+  }
+  return undefined;
+};
+
+const ACCOUNT_ID = cred('CLOUDFLARE_ACCOUNT_ID', 'CF_ACCOUNT_ID');
+const API_TOKEN = cred('CLOUDFLARE_ANALYTICS_TOKEN', 'CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN');
+const DATASET = cred('RELEASED_DATASET') || 'released_events';
 
 if (!ACCOUNT_ID || !API_TOKEN) {
+  const missing = [
+    ACCOUNT_ID ? null : 'CLOUDFLARE_ACCOUNT_ID',
+    API_TOKEN ? null : 'CLOUDFLARE_ANALYTICS_TOKEN',
+  ].filter(Boolean);
   console.error(
-    'Missing credentials. Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN.\n' +
-      'The token needs the "Account Analytics: Read" permission.\n' +
-      'See the header of this file for setup steps.',
+    `Missing credentials: ${missing.join(', ')}.\n` +
+      'Add them to packages/web/.dev.vars (or export them). The token needs the\n' +
+      '"Account · Account Analytics · Read" permission. See this file’s header.',
   );
   process.exit(1);
 }
