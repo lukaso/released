@@ -812,6 +812,103 @@ describe('status badge — /…/badge.svg', () => {
     expect(body).toContain('unknown');
     expect(res.headers.get('cache-control')).toMatch(/max-age=300/);
   });
+
+  it('renders "checking…" (NOT "unknown") when upstream is down and nothing is cached', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () => new Response('upstream down', { status: 503 }),
+    ) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9951/badge.svg'),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // A transient outage must not look like a permanent failure.
+      expect(body).toContain('checking');
+      expect(body).not.toContain('unknown');
+      // Short cache so the proxy re-fetches and the badge recovers.
+      expect(res.headers.get('cache-control')).toMatch(/max-age=300/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// The recovery UX: a down upstream with no cached answer must NOT dead-end the
+// user on a 404 whose only action throws away their lookup.
+describe('upstream-down recovery UX (the bug)', () => {
+  it('MR permalink during an outage shows a "Try again" card that reloads the SAME permalink', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(
+      async () => new Response('upstream down', { status: 503 }),
+    ) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9952'),
+      );
+      const body = await res.text();
+      expect(res.status).toBe(503);
+      // Names the host and offers retry…
+      expect(body).toContain('gitlab.gnome.org');
+      expect(body).toMatch(/Try again/i);
+      // …on the SAME permalink (so the lookup isn't lost).
+      expect(body).toContain('/h/gitlab.gnome.org/p/GNOME%2Fgtk/9952');
+      // Short cache so a refresh after recovery actually re-checks.
+      expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('a genuine error page offers BOTH "Try again" and "Start over"', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org')) {
+        // 404 on the MR → PrNotFoundError → a real (permanent) error page.
+        return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9953'),
+      );
+      const body = await res.text();
+      expect(res.status).toBe(404);
+      expect(body).toMatch(/Try again/i);
+      expect(body).toContain('Start over');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('GET /lookup recognizes our own pasted permalink fragment and redirects to it', async () => {
+    // The exact thing the user did: copy the tail of the URL into the box.
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/lookup?q=' +
+          encodeURIComponent('gitlab.gnome.org/p/GNOME%2Fgtk/9951'),
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/h/gitlab.gnome.org/p/GNOME%2Fgtk/9951');
+  });
+
+  it('GET /lookup recognizes a full pasted permalink URL and redirects to it', async () => {
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/lookup?q=' +
+          encodeURIComponent('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9951'),
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/h/gitlab.gnome.org/p/GNOME%2Fgtk/9951');
+  });
 });
 
 afterEachClear();

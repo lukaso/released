@@ -79,4 +79,53 @@ describe('makeWorkerCache', () => {
     const [, putRes] = fake.put.mock.calls[0] as [Request, Response];
     expect(putRes.headers.get('cache-control')).toBe('public, max-age=60');
   });
+
+  // Stale-if-error needs to know HOW OLD a cached entry is, independent of the
+  // HTTP max-age (which is the long "hard" TTL that keeps the entry physically
+  // alive so we can still serve it during an upstream outage). put() stamps a
+  // wall-clock x-cached-at; getEntry() reads it back as an age.
+  it('put stamps an x-cached-at header with the current time', async () => {
+    const fake = installFakeCache();
+    const req = new Request('https://released-web.lukaso.workers.dev/');
+    const cache = makeWorkerCache(req);
+    const before = Date.now();
+    await cache.put('k', { x: 1 }, 100);
+    const [, putRes] = fake.put.mock.calls[0] as [Request, Response];
+    const stamp = Number(putRes.headers.get('x-cached-at'));
+    expect(stamp).toBeGreaterThanOrEqual(before);
+    expect(stamp).toBeLessThanOrEqual(Date.now());
+  });
+
+  it('getEntry returns the value plus an ageSeconds derived from x-cached-at', async () => {
+    const fake = installFakeCache();
+    const cachedAt = Date.now() - 42_000; // 42s ago
+    fake.match.mockResolvedValueOnce(
+      new Response(JSON.stringify({ x: 7 }), {
+        headers: { 'content-type': 'application/json', 'x-cached-at': String(cachedAt) },
+      }),
+    );
+    const cache = makeWorkerCache(new Request('https://released-web.lukaso.workers.dev/'));
+    const entry = await cache.getEntry<{ x: number }>('k');
+    expect(entry?.value).toEqual({ x: 7 });
+    expect(entry?.ageSeconds).toBeGreaterThanOrEqual(41);
+    expect(entry?.ageSeconds).toBeLessThanOrEqual(44);
+  });
+
+  it('getEntry returns null when there is no cached entry', async () => {
+    installFakeCache(); // default match → undefined
+    const cache = makeWorkerCache(new Request('https://released-web.lukaso.workers.dev/'));
+    expect(await cache.getEntry('nope')).toBeNull();
+  });
+
+  it('getEntry treats a missing x-cached-at as age 0 (entry written by a prior version)', async () => {
+    const fake = installFakeCache();
+    fake.match.mockResolvedValueOnce(
+      new Response(JSON.stringify({ x: 1 }), {
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const cache = makeWorkerCache(new Request('https://released-web.lukaso.workers.dev/'));
+    const entry = await cache.getEntry('k');
+    expect(entry?.ageSeconds).toBe(0);
+  });
 });

@@ -7,9 +7,7 @@
 
 import {
   type LookupResult,
-  NotYetReleasedError,
-  PrMergeCommitUnavailableError,
-  PrNotFoundError,
+  type NotYetReleasedError,
   PrNotMergedError,
   type Provider,
   ReleasedError,
@@ -25,10 +23,10 @@ import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../a
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
 import { prPermalinkPath } from '../paths.js';
+import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
-import { singleFlight } from '../single-flight.js';
 import { Layout } from '../ui/layout.js';
-import { ResultCard, StrictHint } from '../ui/result-card.js';
+import { ResultCard, StaleNotice, StrictHint } from '../ui/result-card.js';
 
 function repoFromParams(c: Context): RepoRef | null {
   const host = c.req.param('host');
@@ -87,50 +85,57 @@ export async function prRoute(c: Context): Promise<Response> {
     includePrereleases ? 'pre' : 'nopre',
   );
   const cache = makeWorkerCache(req);
-  let result: LookupResult | null = await cache.get<LookupResult>(k);
-  setTrack(req, { cache: result ? 'hit' : 'miss' });
 
-  if (!result && isBot) {
-    return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
-  }
-
-  if (!result) {
-    try {
-      result = await singleFlight(k, async () => {
-        const re = await cache.get<LookupResult>(k);
-        if (re) return re;
-        const r = await findRelease(
+  // Unfurl bots never trigger a compute: serve a cached answer (stale is fine)
+  // or a short-lived deferred card so they re-fetch.
+  let result: LookupResult;
+  let stale = false;
+  let staleAsOf: number | null = null;
+  if (isBot) {
+    const cached = await cache.get<LookupResult>(k);
+    if (!cached) return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
+    setTrack(req, { cache: 'hit' });
+    result = cached;
+  } else {
+    const resolved = await resolveLookup({
+      cache,
+      key: k,
+      load: () =>
+        findRelease(
           { kind: 'pr', repo, number: prNumber },
           { client: provider, strict, includePrereleases },
-        );
-        await cache.put(k, r, r.partial ? 60 : 30 * 60);
-        return r;
+        ),
+    });
+    if (resolved.status === 'not_yet') {
+      setTrack(req, { cache: 'miss', outcome: 'not_yet' });
+      return renderPrNotYetReleased(resolved.error, {
+        pubBase,
+        ogBase,
+        nonce,
+        repo,
+        prNumber,
+        strict,
+        provider,
       });
-    } catch (err) {
-      if (isBot) return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
+    }
+    if (resolved.status === 'transient') {
+      // Upstream unreachable with nothing cached — offer a retry on this exact
+      // MR rather than a dead-end error.
+      setTrack(req, { cache: 'miss', outcome: 'error', errorType: resolved.kind });
+      return renderPrTransient({ pubBase, ogBase, nonce, repo, prNumber, provider });
+    }
+    if (resolved.status === 'error') {
+      const err = resolved.error;
+      setTrack(req, { cache: 'miss', outcome: 'error', errorType: (err as Error)?.name });
       if (err instanceof PrNotMergedError) {
-        setTrack(req, { outcome: 'error', errorType: (err as Error).name });
         return renderPrNotMerged(err, { pubBase, ogBase, nonce, repo, prNumber, provider });
       }
-      if (err instanceof PrNotFoundError || err instanceof PrMergeCommitUnavailableError) {
-        setTrack(req, { outcome: 'error', errorType: (err as Error).name });
-        return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
-      }
-      if (err instanceof NotYetReleasedError) {
-        setTrack(req, { outcome: 'not_yet' });
-        return renderPrNotYetReleased(err, {
-          pubBase,
-          ogBase,
-          nonce,
-          repo,
-          prNumber,
-          strict,
-          provider,
-        });
-      }
-      setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
       return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
     }
+    setTrack(req, { cache: resolved.cached ? 'hit' : 'miss' });
+    result = resolved.result;
+    stale = resolved.stale;
+    staleAsOf = resolved.staleAsOf;
   }
 
   // Successful result. The merge commit's full SHA is in canonicalSha.
@@ -175,6 +180,7 @@ export async function prRoute(c: Context): Promise<Response> {
         </form>
       </div>
       <main style="padding-top: 24px;">
+        {stale && <StaleNotice asOf={staleAsOf} host={repo.host} />}
         <PrBanner
           provider={provider}
           repo={repo}
@@ -420,7 +426,8 @@ function renderPrError(
   const { pubBase, ogBase, nonce, repo, prNumber } = args;
   const msg = err instanceof ReleasedError ? err.message : 'Something went wrong.';
   const status = err instanceof ReleasedError ? 404 : 500;
-  const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
+  const permalinkPath = prPermalinkPath(repo, prNumber);
+  const permalink = `${pubBase}${permalinkPath}`;
   const page = (
     <Layout
       title="released — error"
@@ -435,8 +442,12 @@ function renderPrError(
           <div class="answer-hero">
             <div class="answer-label">Error</div>
             <div class="answer-date">{msg}</div>
-            <div class="answer-actions">
-              <a class="btn-fmt primary" href="/" style="text-decoration: none;">
+            <div class="answer-actions" style="margin-top: 16px;">
+              {/* Try again re-runs THIS lookup; Start over goes home. */}
+              <a class="btn-fmt primary" href={permalinkPath} style="text-decoration: none;">
+                Try again
+              </a>
+              <a class="btn-fmt" href="/" style="text-decoration: none;">
                 Start over
               </a>
             </div>
@@ -449,6 +460,69 @@ function renderPrError(
     status,
     headers: {
       'content-type': 'text/html; charset=utf-8',
+      ...securityHeaders(nonce, ogBase),
+    },
+  });
+}
+
+/** Upstream is unreachable and we have nothing cached. This is transient, so the
+ *  page is honest about it and keeps the user's lookup: "Try again" reloads the
+ *  same permalink (which re-checks once the host is back). Short cache + 503 so
+ *  proxies and the browser don't pin this state. */
+function renderPrTransient(args: {
+  pubBase: string;
+  ogBase: string;
+  nonce: string;
+  repo: RepoRef;
+  prNumber: number;
+  provider: Provider;
+}): Response {
+  const { pubBase, ogBase, nonce, repo, prNumber, provider } = args;
+  const displayName = repo.projectPath;
+  const prefix = provider.terms.mergeRequestPrefix;
+  const permalinkPath = prPermalinkPath(repo, prNumber);
+  const permalink = `${pubBase}${permalinkPath}`;
+  const page = (
+    <Layout
+      title={`temporarily unavailable — ${displayName}${prefix}${prNumber}`}
+      nonce={nonce}
+      ogBaseUrl={ogBase}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — ${repo.host} is temporarily unreachable`}
+    >
+      <Nav />
+      <main>
+        <div class="answer">
+          <div class="answer-hero">
+            <div class="answer-label">Status</div>
+            <div class="answer-version">
+              <span class="v" style="font-size: 32px; color: var(--warn);">
+                Can’t reach {repo.host}
+              </span>
+            </div>
+            <div class="answer-date">
+              <b>{repo.host}</b> isn’t responding right now (it returned a temporary error). This is
+              almost always a brief upstream blip — your lookup hasn’t gone anywhere.
+            </div>
+            <div class="answer-actions" style="margin-top: 16px;">
+              <a class="btn-fmt primary" href={permalinkPath} style="text-decoration: none;">
+                Try again
+              </a>
+              <a class="btn-fmt" href="/" style="text-decoration: none;">
+                Start over
+              </a>
+            </div>
+          </div>
+        </div>
+      </main>
+    </Layout>
+  );
+  return new Response(`<!DOCTYPE html>${page.toString()}`, {
+    status: 503,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'public, max-age=60',
+      'retry-after': '60',
       ...securityHeaders(nonce, ogBase),
     },
   });

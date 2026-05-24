@@ -306,6 +306,41 @@ export function StrictHint({
   );
 }
 
+/** Shown above a result that was served from cache because the upstream host is
+ *  unreachable right now (stale-if-error). Reassures the visitor the answer is
+ *  the last-known-good and will refresh once the host recovers. */
+export function StaleNotice({ asOf, host }: { asOf: number | null; host: string }) {
+  const when = asOf ? relativeAge(asOf) : null;
+  return (
+    <div
+      style="
+        margin-bottom: 14px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        background: rgba(210,153,34,0.07);
+        border: 1px solid var(--warn-dim);
+        color: var(--warn);
+        font-size: 13.5px;
+        line-height: 1.5;
+      "
+    >
+      <b style="color: var(--text);">Showing last known result.</b> {host} is unreachable right now
+      {when ? ` (checked ${when})` : ''}, so this is the most recent answer we have. It refreshes
+      automatically once {host} is back.
+    </div>
+  );
+}
+
+function relativeAge(ms: number): string {
+  const secs = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (secs < 90) return 'moments ago';
+  const mins = Math.round(secs / 60);
+  if (mins < 90) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 36) return `${hrs} h ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
 function formatDate(iso: string): string {
   // "March 15, 2024"
   const d = new Date(iso);
