@@ -80,4 +80,11 @@ describe('formatResult — not-yet-released', () => {
     expect(formatResult(r, 'slack')).toMatch(/not yet released/i);
     expect(formatResult(r, 'markdown')).toMatch(/not yet released/i);
   });
+
+  it('does not claim the commit is on the default branch (we never verify that)', () => {
+    const r: LookupResult = { ...RESULT, firstRelease: null, alsoIn: [] };
+    for (const fmt of ['human', 'slack', 'markdown'] as const) {
+      expect(formatResult(r, fmt)).not.toMatch(/default branch/i);
+    }
+  });
 });

@@ -152,7 +152,7 @@ export class NotYetReleasedError extends ReleasedError {
      *  copy formats can stay self-describing even before a release exists. */
     public readonly subject: string | null = null,
   ) {
-    super(`Commit ${sha} is on the default branch (since ${commitDate}) but not yet released.`);
+    super(`Commit ${sha} has landed (committed ${commitDate}) but isn't in a release yet.`);
     this.name = 'NotYetReleasedError';
   }
 }

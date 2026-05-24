@@ -27,7 +27,7 @@ function formatHuman(r: LookupResult): string {
     return `(taking longer than usual — try again, or use --json for partial state)`;
   }
   if (!r.firstRelease) {
-    return 'Not yet released — on the default branch.';
+    return 'Not yet released — not in a tagged release yet.';
   }
   const lines: string[] = [];
   lines.push('');
@@ -51,7 +51,7 @@ function formatHuman(r: LookupResult): string {
 }
 
 function formatSlack(r: LookupResult): string {
-  if (!r.firstRelease) return 'Not yet released — on the default branch.';
+  if (!r.firstRelease) return 'Not yet released — not in a tagged release yet.';
   // Slack mrkdwn dialect: *bold*, _italic_, <url|text>
   const repo = r.input.repo.projectPath;
   return [
@@ -61,7 +61,7 @@ function formatSlack(r: LookupResult): string {
 }
 
 function formatMarkdown(r: LookupResult): string {
-  if (!r.firstRelease) return '⏳ **Not yet released** — on the default branch.';
+  if (!r.firstRelease) return '⏳ **Not yet released** — not in a tagged release yet.';
   const lines: string[] = [];
   lines.push(
     `✅ \`${shortSha(r.canonicalSha)}\` is first released in [**${r.firstRelease.tag}**](${r.firstRelease.url}) (${formatDate(

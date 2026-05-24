@@ -201,7 +201,10 @@ function NotYetReleased({
           </span>
         </div>
         <div class="answer-date">
-          <b>On the default branch</b> · commit {result.canonicalSha.slice(0, 7)}
+          <b>
+            {result.input.kind === 'pr' ? 'Merged, not yet in a release' : 'Not yet in a release'}
+          </b>{' '}
+          · commit {result.canonicalSha.slice(0, 7)}
         </div>
         <CopyActions
           perma={perma}
