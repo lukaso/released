@@ -42,13 +42,14 @@ describe('cacheKey — stability + isolation', () => {
   });
 
   // Snapshot for stability — if these change in a future edit, cross-Worker
-  // cache sharing breaks silently. Caught at CI time. CACHE_NS=v2 here (federation bump).
+  // cache sharing breaks silently. Caught at CI time. CACHE_NS=v4 here (bumped to
+  // flush stale "not yet released" answers after the containing-tag pagination fix).
   it('SNAPSHOT — known fixed keys', async () => {
     expect(await cacheKey('res', 'github.com/facebook/react', 'abc')).toMatchInlineSnapshot(
-      `"ddae69cbd72da1df99a5b8e07b10f712e830bba8d0fa48732a1c89453c07e849"`,
+      `"64dd27bd029047e70855fd1031f42e3e840deb08c05c4228f536e367fd2b9b1d"`,
     );
     expect(await cacheKey('tags', 'github.com/facebook/react')).toMatchInlineSnapshot(
-      `"d0b1e249cf801414663e24da1b87eedc223ec3a5d61fd2db6db6523e27ae4e5e"`,
+      `"c9bdf968d54d62051d817710535223ad5b7a901480b56aaf5113dcc0b391526e"`,
     );
   });
 });

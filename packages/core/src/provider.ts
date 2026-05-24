@@ -93,6 +93,16 @@ export interface Provider {
     repo: RepoRef,
     sha: string,
   ): Promise<{ tags: readonly string[]; rateLimit: RateLimitInfo | null }>;
+  /** Optional: fetch ONE tag's date (and prerelease heuristic) by name. Paired
+   *  with `containingTags`: the tag list is capped (MAX_TAG_PAGES), so a containing
+   *  tag can fall outside the fetched window; this fetches its date directly so the
+   *  shortcut can still order it. GitLab maps to `GET /repository/tags/:tag_name`;
+   *  GitHub leaves it unset (no containingTags → never needed; the cap is a
+   *  documented strict-mode limitation there). Returns null tag if it 404s. */
+  getTagDate?(
+    repo: RepoRef,
+    name: string,
+  ): Promise<{ tag: TagWithDate | null; rateLimit: RateLimitInfo | null }>;
   /** URL builders. Algorithm and UI consume these instead of templating strings.
    *  The PR/MR URL uses the provider's own conventions (/pull/N on GitHub,
    *  /-/merge_requests/N on GitLab). */

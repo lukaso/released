@@ -6,6 +6,7 @@ import {
   NoReleasesError,
   NotYetReleasedError,
   PrNotMergedError,
+  ProviderServerError,
   RateLimitError,
 } from '../src/errors.js';
 import { findRelease } from '../src/find-release.js';
@@ -17,6 +18,17 @@ import type { LookupInput, RateLimitInfo, RepoRef, TagWithDate } from '../src/ty
 /** Build a deterministic fake Provider for tests. */
 function fakeClient(spec: {
   tags?: TagWithDate[];
+  /** The CAPPED window returned by listTagsWithDates (mimics MAX_TAG_PAGES). When
+   *  set, `tags` is the full universe used by containingTags/getTagDate/compare
+   *  truth, while listTagsWithDates returns only this subset — letting tests model
+   *  a containing tag that fell outside the fetched window. Defaults to `tags`. */
+  fetchedTags?: TagWithDate[];
+  /** Tag names whose getTagDate should 404 (deleted-between-calls race). */
+  tagDate404?: Set<string>;
+  /** Tag names whose getTagDate should throw ProviderServerError (transient 5xx). */
+  tagDate5xx?: Set<string>;
+  /** Tag names whose getTagDate should throw RateLimitError. */
+  tagDateRateLimit?: Set<string>;
   /** Which tags CONTAIN the input commit (truth — by tag name). */
   contains?: Set<string>;
   /** Override commit resolution. */
@@ -38,8 +50,13 @@ function fakeClient(spec: {
    *  The set passed is treated as the authoritative "which tags contain this commit?".
    *  Pass `undefined` (default) to NOT expose the method — algorithm falls back to gallop. */
   exposeContainingTags?: boolean;
-}): Provider & { stats: { compareCalls: number; containingTagsCalls: number } } {
-  const stats = { compareCalls: 0, containingTagsCalls: 0 };
+  /** Expose getTagDate. Defaults to exposeContainingTags (GitLab has both). Set
+   *  false to test the "containingTags present but getTagDate absent" fallback. */
+  exposeGetTagDate?: boolean;
+}): Provider & {
+  stats: { compareCalls: number; containingTagsCalls: number; getTagDateCalls: number };
+} {
+  const stats = { compareCalls: 0, containingTagsCalls: 0, getTagDateCalls: 0 };
   const rateLimit: RateLimitInfo = {
     remaining: 4999,
     limit: 5000,
@@ -71,7 +88,7 @@ function fakeClient(spec: {
       };
     },
     async listTagsWithDates() {
-      return { tags: spec.tags ?? [], rateLimit };
+      return { tags: spec.fetchedTags ?? spec.tags ?? [], rateLimit };
     },
     async compareCommits(_repo, base, _head) {
       stats.compareCalls += 1;
@@ -102,6 +119,18 @@ function fakeClient(spec: {
               .filter((t) => spec.contains?.has(t.name))
               .map((t) => t.name);
             return { tags: tagNames, rateLimit };
+          },
+        }
+      : {}),
+    ...((spec.exposeGetTagDate ?? spec.exposeContainingTags)
+      ? {
+          async getTagDate(_repo: RepoRef, name: string) {
+            stats.getTagDateCalls += 1;
+            if (spec.tagDateRateLimit?.has(name)) throw new RateLimitError(rateLimit.resetAt);
+            if (spec.tagDate5xx?.has(name)) throw new ProviderServerError('fake.host', 503, 'x');
+            if (spec.tagDate404?.has(name)) return { tag: null, rateLimit };
+            const tag = (spec.tags ?? []).find((t) => t.name === name) ?? null;
+            return { tag, rateLimit };
           },
         }
       : {}),
@@ -711,6 +740,23 @@ describe('findRelease — containingTags shortcut (GitLab-only optimization)', (
     expect(client.stats.containingTagsCalls).toBe(1);
   });
 
+  it('NotYetReleasedError message is branch-neutral (we never verify the default branch)', async () => {
+    const client = fakeClient({
+      tags: [{ name: 'v1.0', sha: 's1', date: '2024-01-01T00:00:00Z' }],
+      contains: new Set(),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-03-01T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    await expect(findRelease(COMMIT, { client })).rejects.toMatchObject({
+      name: 'NotYetReleasedError',
+    });
+    try {
+      await findRelease(COMMIT, { client });
+    } catch (err) {
+      expect((err as Error).message).not.toMatch(/default branch/i);
+    }
+  });
+
   it('respects the prerelease filter — does NOT pick a containing prerelease tag when user opts out', async () => {
     const tags: TagWithDate[] = [
       { name: 'v1.0-rc1', sha: 's1', date: '2024-01-01T00:00:00Z', isPrerelease: true },
@@ -761,6 +807,168 @@ describe('findRelease — containingTags shortcut (GitLab-only optimization)', (
     expect(result.firstRelease?.tag).toBe('v1.0');
     expect(client.stats.compareCalls).toBeGreaterThan(0);
     expect(client.stats.containingTagsCalls).toBe(0);
+  });
+
+  // The maintenance-branch bug: the earliest CONTAINING tag (e.g. a 3.24.x release)
+  // can fall OUTSIDE the capped tag-list window (MAX_TAG_PAGES) because it's
+  // interleaved among many newer 4.x tags. The shortcut must still find + order it
+  // by fetching its date individually via getTagDate.
+  const OUT_OF_WINDOW = {
+    // Full universe: an older containing maintenance tag + newer tags.
+    tags: [
+      { name: 'v3.24.5', sha: 's324', date: '2024-05-01T00:00:00Z' },
+      { name: 'v4.8.0', sha: 's48', date: '2024-06-01T00:00:00Z' },
+      { name: 'v4.10.0', sha: 's410', date: '2024-07-01T00:00:00Z' },
+    ] as TagWithDate[],
+    // Fetched window EXCLUDES the maintenance tag.
+    fetchedTags: [
+      { name: 'v4.8.0', sha: 's48', date: '2024-06-01T00:00:00Z' },
+      { name: 'v4.10.0', sha: 's410', date: '2024-07-01T00:00:00Z' },
+    ] as TagWithDate[],
+    commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-04-01T00:00:00Z' } },
+  };
+
+  it('finds a containing tag OUTSIDE the fetched window and orders it as firstRelease', async () => {
+    const client = fakeClient({
+      ...OUT_OF_WINDOW,
+      contains: new Set(['v3.24.5', 'v4.10.0']),
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v3.24.5');
+    expect(result.alsoIn.map((h) => h.tag)).toContain('v4.10.0');
+    expect(client.stats.compareCalls).toBe(0); // shortcut, never gallops
+    expect(client.stats.getTagDateCalls).toBe(1); // only the out-of-window tag fetched
+  });
+
+  it('makes NO extra getTagDate calls when every containing tag is in the window', async () => {
+    const client = fakeClient({
+      tags: OUT_OF_WINDOW.tags,
+      // window includes everything
+      contains: new Set(['v4.8.0', 'v4.10.0']),
+      commits: OUT_OF_WINDOW.commits,
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v4.8.0');
+    expect(client.stats.getTagDateCalls).toBe(0);
+  });
+
+  it('builds alsoIn from the full containing set, date-ordered and capped at alsoInLimit', async () => {
+    const client = fakeClient({
+      ...OUT_OF_WINDOW,
+      contains: new Set(['v3.24.5', 'v4.8.0', 'v4.10.0']),
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client, alsoInLimit: 1 });
+    expect(result.firstRelease?.tag).toBe('v3.24.5');
+    // alsoIn is the NEXT tag by date, capped at 1.
+    expect(result.alsoIn.map((h) => h.tag)).toEqual(['v4.8.0']);
+  });
+
+  it('applies the prerelease filter to out-of-window containing tags', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v3.24.0-rc1', sha: 'srrc', date: '2024-05-01T00:00:00Z', isPrerelease: true },
+      { name: 'v4.10.0', sha: 's410', date: '2024-07-01T00:00:00Z', isPrerelease: false },
+    ];
+    const base = {
+      tags,
+      fetchedTags: [tags[1] as TagWithDate], // rc1 out of window
+      contains: new Set(['v3.24.0-rc1', 'v4.10.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-04-01T00:00:00Z' } },
+      exposeContainingTags: true,
+    };
+    // Default: prerelease excluded even though it's the earliest containing tag.
+    expect((await findRelease(COMMIT, { client: fakeClient(base) })).firstRelease?.tag).toBe(
+      'v4.10.0',
+    );
+    // Opt in: the out-of-window rc is now eligible and wins on date.
+    expect(
+      (await findRelease(COMMIT, { client: fakeClient(base), includePrereleases: true }))
+        .firstRelease?.tag,
+    ).toBe('v3.24.0-rc1');
+  });
+
+  it('still date-culls a containing tag dated implausibly before the commit (clock-skew defense)', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'ancient', sha: 's0', date: '2001-01-01T00:00:00Z' },
+      { name: 'recent', sha: 's1', date: '2024-04-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      fetchedTags: [tags[1] as TagWithDate], // ancient is out of window AND will be culled
+      contains: new Set(['ancient', 'recent']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-03-15T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('recent');
+  });
+
+  it('includes a containing tag whose getTagDate 404s, via commit-date fallback', async () => {
+    const client = fakeClient({
+      ...OUT_OF_WINDOW,
+      contains: new Set(['v3.24.5', 'v4.10.0']),
+      tagDate404: new Set(['v3.24.5']), // deleted between calls
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    // Fallback date = commit date (2024-04-01), earliest → still firstRelease.
+    expect(result.firstRelease?.tag).toBe('v3.24.5');
+  });
+
+  it('a transient 5xx on ONE tag fetch does not fail the whole lookup', async () => {
+    // Resilience: one bad getTagDate must not reject the entire Promise batch.
+    const client = fakeClient({
+      ...OUT_OF_WINDOW,
+      contains: new Set(['v3.24.5', 'v4.10.0']),
+      tagDate5xx: new Set(['v3.24.5']), // transient upstream error on this one tag
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    // Lookup still resolves — v3.24.5 degrades to a placeholder, others are real.
+    expect(result.firstRelease).not.toBeNull();
+    expect(result.alsoIn.map((h) => h.tag)).toContain('v4.10.0');
+  });
+
+  it('a rate-limit during the tag-date backfill propagates (not silently degraded)', async () => {
+    const client = fakeClient({
+      ...OUT_OF_WINDOW,
+      contains: new Set(['v3.24.5', 'v4.10.0']),
+      tagDateRateLimit: new Set(['v3.24.5']),
+      exposeContainingTags: true,
+    });
+    await expect(findRelease(COMMIT, { client })).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it('a placeholder with an unparseable date sorts LAST, never hijacking firstRelease', async () => {
+    // Out-of-window containing tag with NO date (provider omitted committed_date).
+    const tags: TagWithDate[] = [
+      { name: 'NODATE', sha: 'snd', date: '', isPrerelease: false },
+      { name: 'v4.10.0', sha: 's410', date: '2024-07-01T00:00:00Z', isPrerelease: false },
+    ];
+    const client = fakeClient({
+      tags,
+      fetchedTags: [tags[1] as TagWithDate], // NODATE out of window
+      contains: new Set(['NODATE', 'v4.10.0']),
+      commits: { [COMMIT_SHA]: { fullSha: COMMIT_SHA, committedDate: '2024-04-01T00:00:00Z' } },
+      exposeContainingTags: true,
+    });
+    const result = await findRelease(COMMIT, { client });
+    expect(result.firstRelease?.tag).toBe('v4.10.0'); // real-dated tag wins
+  });
+
+  it('strict mode bypasses the shortcut entirely (no containingTags / getTagDate calls)', async () => {
+    const client = fakeClient({
+      tags: OUT_OF_WINDOW.tags,
+      contains: new Set(['v4.8.0', 'v4.10.0']),
+      commits: OUT_OF_WINDOW.commits,
+      exposeContainingTags: true,
+    });
+    await findRelease(COMMIT, { client, strict: true });
+    expect(client.stats.containingTagsCalls).toBe(0);
+    expect(client.stats.getTagDateCalls).toBe(0);
+    expect(client.stats.compareCalls).toBeGreaterThan(0);
   });
 });
 

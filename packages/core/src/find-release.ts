@@ -30,6 +30,7 @@ import {
   type ReleaseHit,
   type RepoRef,
   type TagWithDate,
+  isPrereleaseTag,
 } from './types.js';
 
 /** Index into an array, throwing a descriptive error if out of bounds. For the
@@ -170,14 +171,87 @@ export async function findRelease(
   if (!strict && client.containingTags) {
     const shortcut = await client.containingTags(repo, canonicalSha);
     if (shortcut.rateLimit) rateLimit = shortcut.rateLimit;
-    const set = new Set(shortcut.tags);
-    containingSet = set;
-    // candidates is sorted ascending by date; first containing one is firstHit.
-    // Capture `set` (const) so the closure narrows it — `containingSet` is a
-    // reassignable `let`, which TS won't narrow inside a callback.
-    const idx = candidates.findIndex((t) => set.has(t.name));
+
+    // The containing tags are authoritative, but listTagsWithDates is capped
+    // (MAX_TAG_PAGES) — a containing tag (e.g. an older 3.24.x maintenance release
+    // interleaved among newer 4.x tags) can fall OUTSIDE the fetched window. Build
+    // the answer from the FULL containing set: reuse dates we already fetched, and
+    // fetch the rest individually via getTagDate. This is the only set that matters
+    // for the answer (firstRelease + alsoIn).
+    const pool = new Map(sorted.map((t) => [t.name, t] as const));
+    const present: TagWithDate[] = [];
+    const missing: string[] = [];
+    for (const name of shortcut.tags) {
+      const t = pool.get(name);
+      if (t) present.push(t);
+      else missing.push(name);
+    }
+    const getTagDate = client.getTagDate;
+    const fetched: TagWithDate[] = [];
+    if (missing.length > 0 && getTagDate) {
+      // Bounded concurrency: Cloudflare Workers cap outbound at ~6 connections
+      // (see PARALLEL_BISECT_K). A single tag's transient failure (or a 404 from a
+      // tag deleted between calls) must NOT sink the whole lookup — degrade that
+      // one tag to a placeholder like the 404 path, rather than rejecting the
+      // Promise.all. Rate-limit exhaustion still surfaces, consistent with the
+      // rest of the algorithm (the bulk worker catches it).
+      for (let i = 0; i < missing.length; i += GETTAGDATE_CONCURRENCY) {
+        const batch = missing.slice(i, i + GETTAGDATE_CONCURRENCY);
+        const settled = await Promise.all(
+          batch.map(async (name) => {
+            try {
+              const r = await getTagDate(repo, name);
+              if (r.rateLimit) rateLimit = r.rateLimit;
+              return r.tag ?? fallbackTag(name, committedDate);
+            } catch (err) {
+              if (err instanceof RateLimitError) throw err;
+              return fallbackTag(name, committedDate);
+            }
+          }),
+        );
+        fetched.push(...settled);
+      }
+    } else if (missing.length > 0) {
+      for (const n of missing) fetched.push(fallbackTag(n, committedDate));
+    }
+
+    // Apply the SAME date-cull + prerelease filters as the main candidate pass, so
+    // the shortcut answer matches gallop semantics. The cull still defends against
+    // clock-skewed / backdated tags; a legitimate containing tag is dated >= the
+    // commit, so it's never wrongly dropped.
+    const commitMs = Date.parse(committedDate);
+    const cutoff = Number.isNaN(commitMs) ? null : commitMs - dateMarginMs;
+    let shortcutCulled = 0;
+    let shortcutPre = 0;
+    const containingDated = [...present, ...fetched].filter((t) => {
+      if (cutoff !== null) {
+        const tagMs = Date.parse(t.date);
+        if (!Number.isNaN(tagMs) && tagMs < cutoff) {
+          shortcutCulled++;
+          return false;
+        }
+      }
+      if (!includePrereleases && t.isPrerelease) {
+        shortcutPre++;
+        return false;
+      }
+      return true;
+    });
+    // Sort ascending by date; unparseable/empty dates (e.g. a placeholder from a
+    // failed fetch, or a commit GitLab returned without committed_date) sort LAST
+    // so they can never hijack firstRelease over a real, correctly-dated tag.
+    containingDated.sort((a, b) => dateKey(a.date) - dateKey(b.date));
+
+    // Fold the containing set's skip counts into the main-pass counts so the
+    // not-yet hints stay accurate: the main pass already counted tags culled /
+    // prerelease-skipped from the fetched window ("try strict"); add the ones we
+    // skipped from the containing set too.
+    culledTagCount += shortcutCulled;
+    prereleasedCount += shortcutPre;
+    candidates = containingDated;
+    containingSet = new Set(containingDated.map((t) => t.name));
     locateResult = {
-      hitIdx: idx === -1 ? null : idx,
+      hitIdx: containingDated.length > 0 ? 0 : null,
       timedOut: null,
       candidatesTried: 1,
       rateLimit: shortcut.rateLimit,
@@ -590,6 +664,27 @@ function toHit(client: Provider, repo: RepoRef, t: TagWithDate): ReleaseHit {
     date: t.date,
     url: client.urls.release(repo, t.name),
   };
+}
+
+/** Outbound-connection budget for the per-tag date backfill. Cloudflare Workers
+ *  cap concurrent outbound connections at ~6; stay at/under it so a commit found
+ *  in many out-of-window tags doesn't open a connection storm. */
+const GETTAGDATE_CONCURRENCY = 6;
+
+/** Date → sortable number. Unparseable/empty dates sort LAST (+Infinity). */
+function dateKey(date: string): number {
+  const t = Date.parse(date);
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : t;
+}
+
+/** Synthesize a TagWithDate for a containing tag whose individual date fetch
+ *  failed (404 race or transient error) or whose provider lacks getTagDate. Uses
+ *  the commit's date as a best-effort lower bound (a containing tag's real date
+ *  is >= the commit date); if that date is itself missing, the entry sorts last
+ *  via dateKey so it never hijacks firstRelease. The sha is unknown but unused:
+ *  the shortcut path makes no compares, and release URL/notes key off the name. */
+function fallbackTag(name: string, commitDate: string): TagWithDate {
+  return { name, sha: '', date: commitDate, isPrerelease: isPrereleaseTag(name) };
 }
 
 function buildResultUrls(

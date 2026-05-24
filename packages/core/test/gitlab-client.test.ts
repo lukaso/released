@@ -339,6 +339,79 @@ describe('GitlabProvider.containingTags', () => {
   });
 });
 
+describe('GitlabProvider.getTagDate', () => {
+  it('decodes a single tag (name, sha, date, prerelease=false)', async () => {
+    const fetch = queuedFetch(
+      jsonResp({
+        name: 'GIMP_3_2_0',
+        commit: { id: 'tagsha123', committed_date: '2024-06-01T00:00:00Z' },
+      }),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.getTagDate!(GNOME_GIMP, 'GIMP_3_2_0');
+    expect(result.tag).toEqual({
+      name: 'GIMP_3_2_0',
+      sha: 'tagsha123',
+      date: '2024-06-01T00:00:00Z',
+      isPrerelease: false,
+    });
+  });
+
+  it('flags prerelease tag names (underscore-style RC)', async () => {
+    const fetch = queuedFetch(
+      jsonResp({
+        name: 'GIMP_3_2_0_RC1',
+        commit: { id: 'rcsha', committed_date: '2024-05-01T00:00:00Z' },
+      }),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.getTagDate!(GNOME_GIMP, 'GIMP_3_2_0_RC1');
+    expect(result.tag?.isPrerelease).toBe(true);
+  });
+
+  it('returns { tag: null } on 404 (tag deleted between calls)', async () => {
+    const fetch = queuedFetch(errResp(404));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const result = await c.getTagDate!(GNOME_GIMP, 'gone');
+    expect(result.tag).toBeNull();
+  });
+
+  it('throws ProviderServerError on 5xx', async () => {
+    const fetch = queuedFetch(errResp(500));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch, retries: 0 });
+    await expect(c.getTagDate!(GNOME_GIMP, 'GIMP_3_2_0')).rejects.toBeInstanceOf(
+      ProviderServerError,
+    );
+  });
+
+  it('URL-encodes both the nested project path and a slash-containing tag name', async () => {
+    const calls: string[] = [];
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResp({
+        name: 'release/1.0',
+        commit: { id: 's', committed_date: '2024-01-01T00:00:00Z' },
+      });
+    }) as unknown as typeof fetch;
+    const c = makeGitlabProvider('gitlab.com', { fetch: mockFetch });
+    await c.getTagDate!(NESTED, 'release/1.0');
+    expect(calls[0]).toContain('gitlab-org%2Fsecurity-products%2Ffoo');
+    expect(calls[0]).toContain('release%2F1.0');
+  });
+
+  it('parses rate-limit headers', async () => {
+    const fetch = queuedFetch(
+      jsonResp(
+        { name: 'v1', commit: { id: 's', committed_date: '2024-01-01T00:00:00Z' } },
+        { remaining: 123, limit: 2000 },
+      ),
+    );
+    const c = makeGitlabProvider('gitlab.com', { fetch });
+    const result = await c.getTagDate!(GNOME_GIMP, 'v1');
+    expect(result.rateLimit?.remaining).toBe(123);
+  });
+});
+
 describe('GitlabProvider.getReleaseNotes', () => {
   it('returns the release description when one exists', async () => {
     const fetch = queuedFetch(jsonResp({ description: '## Changes\n\n* fix: thing' }));

@@ -911,6 +911,90 @@ describe('upstream-down recovery UX (the bug)', () => {
   });
 });
 
+// The pagination fix, end to end: a maintenance-branch MR whose containing tag is
+// NOT in the (capped) /repository/tags page, but IS resolvable via the single-tag
+// endpoint. The rendered page must report that tag as the first release.
+describe('containing tag outside the fetched window (pagination fix)', () => {
+  it('resolves a containing tag via /repository/tags/<name> and shows it as first release', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects')) {
+        if (url.includes('/merge_requests/9876')) {
+          return new Response(
+            JSON.stringify({
+              state: 'merged',
+              sha: 'ffheadsha1234567890abcdef1234567890abcdef',
+              title: 'macos: backport fix',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        // Containing-tags shortcut: the commit is in an OLD maintenance tag only.
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([{ type: 'tag', name: 'GTK_3_24_OLD' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/ffheadsha')) {
+          return new Response(
+            JSON.stringify({
+              id: 'ffheadsha1234567890abcdef1234567890abcdef',
+              committed_date: '2024-01-01T00:00:00Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        // Single-tag endpoint (must be checked before the list endpoint): the
+        // out-of-window maintenance tag, dated AFTER the commit so it isn't culled.
+        if (url.includes('/repository/tags/GTK_3_24_OLD')) {
+          return new Response(
+            JSON.stringify({
+              name: 'GTK_3_24_OLD',
+              commit: { id: 'oldsha', committed_date: '2024-02-01T00:00:00Z' },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        // Tag LIST (the capped window) — does NOT include GTK_3_24_OLD.
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'GTK_4_16_0',
+                commit: { id: 'newsha', committed_date: '2024-09-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/releases/')) {
+          return new Response('{}', {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9876'),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // The out-of-window maintenance tag is reported as the first release…
+      expect(body).toContain('GTK_3_24_OLD');
+      // …and the page is NOT the "not yet released" state.
+      expect(body).not.toContain('Not yet in a release');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;

@@ -189,6 +189,16 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     return { tags, rateLimit };
   }
 
+  async function getTagDate(repo: RepoRef, name: string) {
+    const url = `${restBase}/projects/${projectId(repo)}/repository/tags/${enc(name)}`;
+    const res = await call(url, { headers: baseHeaders() });
+    const rateLimit = parseRateLimit(res);
+    if (res.status === 404) return { tag: null, rateLimit };
+    if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
+    const body = await readJson<GitlabTag>(res);
+    return { tag: decodeTag(body), rateLimit };
+  }
+
   async function getReleaseNotes(repo: RepoRef, tag: string) {
     const url = `${restBase}/projects/${projectId(repo)}/releases/${enc(tag)}`;
     const res = await call(url, { headers: baseHeaders() });
@@ -211,6 +221,7 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     listTagsWithDates,
     compareCommits,
     containingTags,
+    getTagDate,
     getReleaseNotes,
     urls,
   };

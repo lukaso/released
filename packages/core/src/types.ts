@@ -14,7 +14,7 @@ export const OG_TEMPLATE_VERSION = 'og.v1';
  *  (it would say "not yet released" for commits backported to maintenance
  *  branches like GTK's gtk-3-24), so previously-cached "wrong" answers must
  *  not be served. */
-export const CACHE_NS = 'v3';
+export const CACHE_NS = 'v4';
 
 /** Default safety margin for date-based tag culling (ms). Tags whose commit-date
  *  is more than this far BEFORE the input commit's date are dropped as candidates.
