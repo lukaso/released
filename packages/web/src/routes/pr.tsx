@@ -20,6 +20,7 @@ import {
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
+import { setTrack } from '../analytics.js';
 import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
@@ -48,6 +49,7 @@ export async function prRoute(c: Context): Promise<Response> {
   const repo = repoFromParams(c);
   const numberStr = c.req.param('number');
   if (!repo || !numberStr) return new Response('not found', { status: 404 });
+  setTrack(req, { host: repo.host, repo: repo.projectPath, kind: 'pr' });
   const prNumber = Number.parseInt(numberStr, 10);
   if (!Number.isFinite(prNumber) || prNumber <= 0) {
     return new Response(null, {
@@ -72,6 +74,7 @@ export async function prRoute(c: Context): Promise<Response> {
     const token = resolveProviderToken(env, req, repo.host);
     provider = providerFor(repo.host, { token, extraGitlabHosts });
   } catch (err) {
+    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
     return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
   }
 
@@ -85,6 +88,7 @@ export async function prRoute(c: Context): Promise<Response> {
   );
   const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
+  setTrack(req, { cache: result ? 'hit' : 'miss' });
 
   if (!result && isBot) {
     return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
@@ -105,12 +109,15 @@ export async function prRoute(c: Context): Promise<Response> {
     } catch (err) {
       if (isBot) return renderDeferred({ pubBase, ogBase, nonce, repo, numberStr, provider });
       if (err instanceof PrNotMergedError) {
+        setTrack(req, { outcome: 'error', errorType: (err as Error).name });
         return renderPrNotMerged(err, { pubBase, ogBase, nonce, repo, prNumber, provider });
       }
       if (err instanceof PrNotFoundError || err instanceof PrMergeCommitUnavailableError) {
+        setTrack(req, { outcome: 'error', errorType: (err as Error).name });
         return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
       }
       if (err instanceof NotYetReleasedError) {
+        setTrack(req, { outcome: 'not_yet' });
         return renderPrNotYetReleased(err, {
           pubBase,
           ogBase,
@@ -121,11 +128,15 @@ export async function prRoute(c: Context): Promise<Response> {
           provider,
         });
       }
+      setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
       return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
     }
   }
 
   // Successful result. The merge commit's full SHA is in canonicalSha.
+  setTrack(req, {
+    outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
+  });
   const inlineData = JSON.stringify(result).replace(/</g, '\\u003c');
   const permalink = `${pubBase}${prPermalinkPath(repo, prNumber)}`;
   // Form pre-fill needs to round-trip through parseInput. GitHub's

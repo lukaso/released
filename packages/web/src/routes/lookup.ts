@@ -13,6 +13,7 @@ import {
   providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
+import { setTrack } from '../analytics.js';
 import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
@@ -44,8 +45,10 @@ export async function lookupRoute(c: Context): Promise<Response> {
   try {
     parsed = parseInput(body.input, body.ref);
   } catch (err) {
+    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
     return errorResponse(err);
   }
+  setTrack(req, { host: parsed.repo.host, repo: parsed.repo.projectPath, kind: parsed.kind });
 
   const token = resolveProviderToken(env, req, parsed.repo.host);
   const extraGitlabHosts = extraGitlabHostsFromEnv(env);
@@ -53,6 +56,7 @@ export async function lookupRoute(c: Context): Promise<Response> {
   try {
     client = providerFor(parsed.repo.host, { token, extraGitlabHosts });
   } catch (err) {
+    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
     return errorResponse(err);
   }
   const cache = makeWorkerCache(req);
@@ -68,10 +72,15 @@ export async function lookupRoute(c: Context): Promise<Response> {
 
   const cached = await cache.get<LookupResult>(k);
   if (cached) {
+    setTrack(req, {
+      cache: 'hit',
+      outcome: cached.partial ? 'partial' : cached.firstRelease ? 'released' : 'not_yet',
+    });
     return new Response(JSON.stringify({ result: cached, cacheHit: true }), {
       headers: { 'content-type': 'application/json' },
     });
   }
+  setTrack(req, { cache: 'miss' });
 
   try {
     const result = await singleFlight(k, async () => {
@@ -86,10 +95,14 @@ export async function lookupRoute(c: Context): Promise<Response> {
       await cache.put(k, r, ttl);
       return r;
     });
+    setTrack(req, {
+      outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
+    });
     return new Response(JSON.stringify({ result, cacheHit: false }), {
       headers: { 'content-type': 'application/json' },
     });
   } catch (err) {
+    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
     return errorResponse(err);
   }
 }

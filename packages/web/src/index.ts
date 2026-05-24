@@ -15,6 +15,8 @@
 
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
+import { eventForPath, takeTrack, track } from './analytics.js';
+import { isUnfurlBot } from './auth.js';
 import type { Env } from './env.js';
 import { commitPermalinkPath, prPermalinkPath } from './paths.js';
 import { badgeRoute } from './routes/badge.js';
@@ -26,6 +28,42 @@ import { prRoute } from './routes/pr.js';
 import { resultRoute } from './routes/result.js';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Usage tracking: one Analytics Engine data point per request. Routes enrich
+// the event (host/repo/cache/outcome) via setTrack(); we merge that here, add
+// request-derived fields, and write once. Analytics must never break a response,
+// so the whole write is best-effort. Skips the liveness probe and the internal
+// service-binding calls (web-og → web) which aren't user traffic.
+app.use('*', async (c, next) => {
+  const start = Date.now();
+  try {
+    await next();
+  } finally {
+    try {
+      const path = c.req.path;
+      if (path !== '/healthz' && !path.startsWith('/internal/')) {
+        const req = c.req.raw;
+        const enrich = takeTrack(req);
+        const cf = (req as Request & { cf?: { country?: string } }).cf;
+        track(c.env as Env | undefined, {
+          event: eventForPath(path),
+          host: enrich.host,
+          repo: enrich.repo,
+          outcome: enrich.outcome,
+          cache: enrich.cache,
+          kind: enrich.kind,
+          errorType: enrich.errorType,
+          audience: isUnfurlBot(req) ? 'bot' : 'human',
+          country: typeof cf?.country === 'string' ? cf.country : undefined,
+          status: c.res.status,
+          latencyMs: Date.now() - start,
+        });
+      }
+    } catch {
+      // Never let analytics failures surface to the client.
+    }
+  }
+});
 
 app.get('/', homeRoute);
 

@@ -20,6 +20,7 @@ import {
   providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
+import { setTrack } from '../analytics.js';
 import { extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { BADGE_COLORS, type BadgeState, badgeStateForResult, renderBadge } from '../badge.js';
 import { makeWorkerCache } from '../cache.js';
@@ -62,6 +63,7 @@ export async function badgeRoute(c: Context): Promise<Response> {
   const req = c.req.raw;
   const repo = repoFromParams(c);
   if (!repo) return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
+  setTrack(req, { host: repo.host, repo: repo.projectPath });
 
   // Decide commit vs PR from the params present on the matched route.
   const numberStr = c.req.param('number');
@@ -69,14 +71,18 @@ export async function badgeRoute(c: Context): Promise<Response> {
   let input: LookupInput;
   let keyPart: string;
   if (numberStr !== undefined) {
+    setTrack(req, { kind: 'pr' });
     const n = Number.parseInt(numberStr, 10);
     if (!Number.isFinite(n) || n <= 0) {
+      setTrack(req, { outcome: 'invalid' });
       return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
     }
     input = { kind: 'pr', repo, number: n };
     keyPart = `pr#${n}`;
   } else {
+    setTrack(req, { kind: 'commit' });
     if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) {
+      setTrack(req, { outcome: 'invalid' });
       return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
     }
     input = { kind: 'commit', repo, sha: sha.toLowerCase() };
@@ -88,9 +94,11 @@ export async function badgeRoute(c: Context): Promise<Response> {
   const cache = makeWorkerCache(req);
   const cached = await cache.get<LookupResult>(k);
   if (cached) {
+    setTrack(req, { cache: 'hit', outcome: outcomeFor(cached) });
     const state = badgeStateForResult(cached);
     return badge(state, cached.firstRelease ? LONG_CACHE : SHORT_CACHE);
   }
+  setTrack(req, { cache: 'miss' });
 
   // Cold: compute, but with a tight deadline so a slow repo returns a
   // short-cached "checking…" instead of hanging past the proxy's fetch timeout.
@@ -114,12 +122,21 @@ export async function badgeRoute(c: Context): Promise<Response> {
     });
   } catch (err) {
     if (err instanceof NotYetReleasedError) {
+      setTrack(req, { outcome: 'not_yet' });
       return badge({ message: 'not yet', color: BADGE_COLORS.notYet }, SHORT_CACHE);
     }
     // PR not merged, not found, timeout, rate-limit, unsupported host, etc.
+    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
     return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
   }
 
+  setTrack(req, { outcome: outcomeFor(result) });
   const state = badgeStateForResult(result);
   return badge(state, result.firstRelease ? LONG_CACHE : SHORT_CACHE);
+}
+
+/** Map a resolved lookup to a tracking outcome. */
+function outcomeFor(r: LookupResult): 'released' | 'partial' | 'not_yet' {
+  if (r.firstRelease) return 'released';
+  return r.partial ? 'partial' : 'not_yet';
 }

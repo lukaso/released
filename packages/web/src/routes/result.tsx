@@ -16,6 +16,7 @@ import {
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
+import { setTrack } from '../analytics.js';
 import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
@@ -46,6 +47,7 @@ export async function resultRoute(c: Context): Promise<Response> {
   const repo = repoFromParams(c);
   const sha = c.req.param('sha');
   if (!repo || !sha) return new Response('not found', { status: 404 });
+  setTrack(req, { host: repo.host, repo: repo.projectPath, kind: 'commit' });
   const strict = c.req.query('strict') === '1' || c.req.query('strict') === 'true';
   const includePrereleases =
     c.req.query('prereleases') === '1' || c.req.query('prereleases') === 'true';
@@ -78,6 +80,7 @@ export async function resultRoute(c: Context): Promise<Response> {
   );
   const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
+  setTrack(req, { cache: result ? 'hit' : 'miss' });
 
   // Slackbot/unfurl handling: if no cache + we'd need to compute, return a
   // deferred-render card with short TTL so Slack retries instead of caching an error.
@@ -93,6 +96,7 @@ export async function resultRoute(c: Context): Promise<Response> {
       const token = resolveProviderToken(env, req, repo.host);
       client = providerFor(repo.host, { token, extraGitlabHosts });
     } catch (err) {
+      setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
       return renderError(err, { pubBase, ogBase, nonce });
     }
     try {
@@ -107,6 +111,7 @@ export async function resultRoute(c: Context): Promise<Response> {
     } catch (err) {
       if (isBot) return renderDeferred({ pubBase, ogBase, nonce, repo, sha });
       if (err instanceof NotYetReleasedError) {
+        setTrack(req, { outcome: 'not_yet' });
         return renderNotYetReleased(err, {
           pubBase,
           ogBase,
@@ -117,9 +122,14 @@ export async function resultRoute(c: Context): Promise<Response> {
           includePrereleases,
         });
       }
+      setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
       return renderError(err, { pubBase, ogBase, nonce });
     }
   }
+
+  setTrack(req, {
+    outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
+  });
 
   // Form pre-fill needs to round-trip through parseInput. GitHub's shorthand
   // forms (`owner/repo#N`, `owner/repo@sha`) are GitHub-only — using them on

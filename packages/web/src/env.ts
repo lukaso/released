@@ -31,7 +31,7 @@ export type Env = {
   };
 };
 
-type AnalyticsEngineDataPoint = {
+export type AnalyticsEngineDataPoint = {
   indexes?: string[];
   blobs?: string[];
   doubles?: number[];
