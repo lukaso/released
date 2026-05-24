@@ -10,6 +10,7 @@ import {
   BareShaError,
   InvalidInputError,
   NonGithubUrlError,
+  type ReleasedError,
   UnsupportedHostError,
 } from './errors.js';
 import { type KnownProject, findProjectByAlias } from './known-projects.js';
@@ -235,7 +236,7 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   if (looksLikeUrl(trimmed)) {
     // Capture the host so the error message names it.
     const host = extractHost(trimmed);
-    if (host) throw unsupportedHost(host);
+    if (host) throw unknownShapeOrUnsupportedHost(host, input);
     throw new NonGithubUrlError(trimmed);
   }
   throw new InvalidInputError(input);
@@ -293,6 +294,21 @@ function isKnownGitlabHost(host: string): boolean {
 function unsupportedHost(host: string): UnsupportedHostError {
   const supported = ['github.com', ...KNOWN_GITLAB_HOSTS];
   return new UnsupportedHostError(host, supported);
+}
+
+/** Pick the honest error for a URL whose host we extracted but whose path shape
+ *  we couldn't parse. If the host IS one we support, "I don't recognize that
+ *  host" would be a lie (and self-contradictory — the message lists the host as
+ *  supported). Surface a shape problem instead. Otherwise it's a genuinely
+ *  unsupported host. */
+function unknownShapeOrUnsupportedHost(host: string, input: string): ReleasedError {
+  if (host === GITHUB_HOST || isKnownGitlabHost(host)) {
+    return new InvalidInputError(
+      `${input} — that's a ${host} URL but not a shape I recognize. ` +
+        `Paste the commit/MR URL itself, or a SHA / PR-MR number.`,
+    );
+  }
+  return unsupportedHost(host);
 }
 
 function extractHost(s: string): string | null {

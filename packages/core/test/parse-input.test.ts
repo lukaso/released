@@ -288,6 +288,26 @@ describe('parseInput — GitLab URL shapes (federation)', () => {
   it('does NOT match /-/commits/{branch-name} for non-SHA refs', () => {
     expect(() => parseInput('https://gitlab.com/x/y/-/blob/main/file.rb')).toThrow(/recognize/);
   });
+
+  it('a KNOWN gitlab host with an unrecognized URL shape is InvalidInput, NOT a self-contradictory UnsupportedHost', () => {
+    // Regression: pasting our own permalink-shaped path (e.g. the federated
+    // /h/<host>/p/... permalink with the prefix stripped) used to throw
+    // UnsupportedHostError("gitlab.gnome.org"), whose message LISTS
+    // gitlab.gnome.org as supported — a contradiction. A known host with a
+    // shape we can't read is an InvalidInput, not an unsupported host.
+    try {
+      parseInput('gitlab.gnome.org/p/GNOME%2Fgtk/9951');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidInputError);
+      expect(err).not.toBeInstanceOf(UnsupportedHostError);
+      // Names the host as a shape problem, not a recognition problem.
+      expect((err as InvalidInputError).message).toContain('gitlab.gnome.org');
+      expect((err as InvalidInputError).message).not.toMatch(
+        /I don't recognize "gitlab\.gnome\.org"/,
+      );
+    }
+  });
 });
 
 describe('parseInput — explicit two-arg form (repo, ref) — GitHub only', () => {
