@@ -47,5 +47,16 @@ export function publicBaseUrl(env: Env | undefined, req: Request): string {
 export function ogBaseUrl(env: Env | undefined, req: Request): string {
   if (env?.OG_BASE_URL) return env.OG_BASE_URL.replace(/\/$/, '');
   const u = new URL(req.url);
-  return `${u.protocol}//og.${u.host}`;
+  const candidate = `${u.protocol}//og.${u.host}`;
+  // `og.<host>` is an INVALID URL when host is an IP (e.g. og.127.0.0.1 — the
+  // trailing numeric label makes URL parsing attempt and fail an IPv4 parse).
+  // That 500s every Layout-rendered page under `wrangler dev` when the worker is
+  // hit via its IP form. Fall back to the origin: og images aren't reachable by
+  // crawlers on localhost anyway, so locally they only need to be a valid URL.
+  try {
+    new URL(candidate);
+    return candidate;
+  } catch {
+    return u.origin;
+  }
 }
