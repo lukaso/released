@@ -58,6 +58,13 @@ that have already cost us bugs:
 
 ## Secrets / deploy
 
+**Deploy = push to `main`.** `.github/workflows/release.yml` runs on every
+push to `main` and deploys the Workers for you (`web` first, then `web-og`).
+Do NOT run `wrangler deploy` by hand — CI owns the deploy order and holds the
+Cloudflare credentials. Manual fallback, only if CI is down:
+`pnpm --filter @released/web deploy && pnpm --filter @released/web-og deploy`.
+Full detail in README "Deploy (Cloudflare Workers)".
+
 Per-Worker secrets are set via `wrangler secret put`; see README "One-time
 setup". `web-og` and `web` share an `INTERNAL_SECRET` for the Service
 Binding handshake — they must match.
