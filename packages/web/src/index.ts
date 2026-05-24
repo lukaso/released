@@ -17,7 +17,8 @@ import { parseInput } from '@released/core';
 import { Hono } from 'hono';
 import { eventForPath, takeTrack, track } from './analytics.js';
 import { isUnfurlBot } from './auth.js';
-import type { Env } from './env.js';
+import { type Env, publicBaseUrl } from './env.js';
+import { recognizeOwnUrl } from './own-url.js';
 import { commitPermalinkPath, prPermalinkPath } from './paths.js';
 import { badgeRoute } from './routes/badge.js';
 import { homeRoute } from './routes/home.js';
@@ -71,6 +72,16 @@ app.get('/', homeRoute);
 app.get('/lookup', (c) => {
   const q = c.req.query('q');
   if (!q) return c.redirect('/', 302);
+  // If the user pasted one of OUR permalink/badge URLs (or a fragment like
+  // `gitlab.gnome.org/p/GNOME%2Fgtk/9951`), route straight back to its permalink
+  // instead of handing `released.*` to parseInput, which would reject our own
+  // host as "unsupported".
+  const req = c.req.raw;
+  const own = recognizeOwnUrl(q, [
+    new URL(publicBaseUrl(c.env as Env, req)).host,
+    new URL(req.url).host,
+  ]);
+  if (own) return c.redirect(own, 302);
   try {
     const p = parseInput(q);
     if (p.kind === 'pr') {
