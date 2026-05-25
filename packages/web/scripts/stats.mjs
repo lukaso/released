@@ -171,11 +171,15 @@ const SECTIONS = [
           GROUP BY outcome ORDER BY n DESC`,
   },
   {
-    title: 'Errors by type (last 7d)',
-    sql: `SELECT blob8 AS error, sum(_sample_interval) AS n
+    // upstream_status (double3) is the provider's HTTP status — distinguishes a
+    // 5xx outage from a 429 rate-limit from a 0 (no upstream call / pre-fix row).
+    // double1 (the worker→client status) hides this.
+    title: 'Errors by host + type + upstream status (last 7d)',
+    sql: `SELECT blob2 AS host, blob8 AS error, double3 AS upstream_status,
+                 sum(_sample_interval) AS n
           FROM ${DATASET}
           WHERE blob4 = 'error' AND blob8 != '' AND timestamp > NOW() - INTERVAL '7' DAY
-          GROUP BY error ORDER BY n DESC`,
+          GROUP BY host, error, upstream_status ORDER BY n DESC`,
   },
   {
     title: 'Audience — human vs unfurl bot (last 7d)',

@@ -19,6 +19,7 @@
 // to a transient ("checking…") rather than a hard error.
 
 import { type LookupResult, NotYetReleasedError, ReleasedError } from '@released/core';
+import { upstreamStatusOf } from './analytics.js';
 import type { CacheEntry, WorkerCache } from './cache.js';
 import { singleFlight } from './single-flight.js';
 
@@ -58,7 +59,7 @@ function isFresh(entry: CacheEntry<LookupResult>): boolean {
   return entry.ageSeconds < FRESH_WINDOW_PENDING;
 }
 
-type NegMarker = { transient: true; kind: string };
+type NegMarker = { transient: true; kind: string; status?: number };
 function negKey(key: string): string {
   return `${key}:neg`;
 }
@@ -72,7 +73,7 @@ export type Resolved =
       cached: boolean;
     }
   | { status: 'not_yet'; error: NotYetReleasedError }
-  | { status: 'transient'; kind: string }
+  | { status: 'transient'; kind: string; upstreamStatus?: number }
   | { status: 'error'; error: unknown };
 
 /**
@@ -109,7 +110,11 @@ export async function resolveLookup(args: {
     Boolean(neg?.value?.transient) && (neg?.ageSeconds ?? Number.POSITIVE_INFINITY) < NEG_TTL;
   if (backedOff) {
     if (prior) return staleHit();
-    return { status: 'transient', kind: neg?.value.kind ?? 'provider_server_error' };
+    return {
+      status: 'transient',
+      kind: neg?.value.kind ?? 'provider_server_error',
+      upstreamStatus: neg?.value.status,
+    };
   }
 
   try {
@@ -125,9 +130,14 @@ export async function resolveLookup(args: {
     if (err instanceof NotYetReleasedError) return { status: 'not_yet', error: err };
     if (isTransientError(err)) {
       // Throttle the next retry, then serve last-known-good if we have it.
-      await cache.put(negKey(key), { transient: true, kind: err.kind }, NEG_TTL);
+      const upstreamStatus = upstreamStatusOf(err);
+      await cache.put(
+        negKey(key),
+        { transient: true, kind: err.kind, status: upstreamStatus },
+        NEG_TTL,
+      );
       if (prior) return staleHit();
-      return { status: 'transient', kind: err.kind };
+      return { status: 'transient', kind: err.kind, upstreamStatus };
     }
     return { status: 'error', error: err };
   }

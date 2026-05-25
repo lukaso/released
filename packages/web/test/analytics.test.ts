@@ -24,7 +24,20 @@ const cacheStore = new Map<string, Response>();
   } as unknown as Cache,
 };
 
-import { type AnalyticsEvent, eventForPath, toDataPoint, track } from '../src/analytics.js';
+import {
+  GitHubServerError,
+  NotYetReleasedError,
+  ProviderJsonError,
+  ProviderServerError,
+  RateLimitError,
+} from '@released/core';
+import {
+  type AnalyticsEvent,
+  eventForPath,
+  toDataPoint,
+  track,
+  upstreamStatusOf,
+} from '../src/analytics.js';
 
 // Spy Env whose ANALYTICS binding records every data point written.
 function spyEnv() {
@@ -65,14 +78,28 @@ describe('toDataPoint — schema mapping', () => {
       '', // 8 errorType (unset → empty)
       'US', // 9 country
     ]);
-    expect(dp.doubles).toEqual([200, 12]);
+    expect(dp.doubles).toEqual([200, 12, 0]); // upstreamStatus unset → 0
+  });
+
+  it('records the upstream provider status as double3 (for error diagnosis)', () => {
+    const dp = toDataPoint({
+      event: 'pr',
+      host: 'gitlab.gnome.org',
+      repo: 'GNOME/gtk',
+      outcome: 'error',
+      errorType: 'ProviderServerError',
+      status: 404, // what the worker returned to the client
+      latencyMs: 2500,
+      upstreamStatus: 503, // what gitlab.gnome.org returned to us
+    });
+    expect(dp.doubles).toEqual([404, 2500, 503]);
   });
 
   it('falls back to the event name for the index when there is no repo', () => {
     const dp = toDataPoint({ event: 'home', status: 200 });
     expect(dp.indexes).toEqual(['home']);
     expect(dp.blobs?.[2]).toBe(''); // repo empty
-    expect(dp.doubles).toEqual([200, 0]); // latency defaults to 0
+    expect(dp.doubles).toEqual([200, 0, 0]); // latency + upstreamStatus default to 0
   });
 
   it('caps the index at 96 bytes (Analytics Engine limit)', () => {
@@ -83,6 +110,30 @@ describe('toDataPoint — schema mapping', () => {
       status: 200,
     });
     expect((dp.indexes?.[0] ?? '').length).toBeLessThanOrEqual(96);
+  });
+});
+
+describe('upstreamStatusOf — extract the provider HTTP status from a typed error', () => {
+  it('reads .status off provider server errors (5xx and unhandled 4xx)', () => {
+    expect(upstreamStatusOf(new ProviderServerError('gitlab.gnome.org', 503, 'x'))).toBe(503);
+    expect(upstreamStatusOf(new GitHubServerError(500, 'x'))).toBe(500);
+  });
+
+  it('reads .status off a JSON/anti-bot challenge error', () => {
+    expect(upstreamStatusOf(new ProviderJsonError(200, 'Just a moment…', new Error('bad')))).toBe(
+      200,
+    );
+  });
+
+  it('maps a rate-limit error to 429 (it carries resetAt, not a status)', () => {
+    expect(upstreamStatusOf(new RateLimitError(1779721200, 'gitlab.gnome.org'))).toBe(429);
+  });
+
+  it('returns undefined for errors that are not upstream HTTP failures', () => {
+    expect(upstreamStatusOf(new NotYetReleasedError('abc1234', '2026-01-01'))).toBeUndefined();
+    expect(upstreamStatusOf(new Error('boom'))).toBeUndefined();
+    expect(upstreamStatusOf(undefined)).toBeUndefined();
+    expect(upstreamStatusOf(null)).toBeUndefined();
   });
 });
 

@@ -13,7 +13,7 @@ import {
   providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
-import { setTrack } from '../analytics.js';
+import { setTrack, upstreamStatusOf } from '../analytics.js';
 import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
@@ -45,7 +45,11 @@ export async function lookupRoute(c: Context): Promise<Response> {
   try {
     parsed = parseInput(body.input, body.ref);
   } catch (err) {
-    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
+    setTrack(req, {
+      outcome: 'error',
+      errorType: (err as Error)?.name,
+      upstreamStatus: upstreamStatusOf(err),
+    });
     return errorResponse(err);
   }
   setTrack(req, { host: parsed.repo.host, repo: parsed.repo.projectPath, kind: parsed.kind });
@@ -56,7 +60,11 @@ export async function lookupRoute(c: Context): Promise<Response> {
   try {
     client = providerFor(parsed.repo.host, { token, extraGitlabHosts });
   } catch (err) {
-    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
+    setTrack(req, {
+      outcome: 'error',
+      errorType: (err as Error)?.name,
+      upstreamStatus: upstreamStatusOf(err),
+    });
     return errorResponse(err);
   }
   const cache = makeWorkerCache(req);
@@ -102,7 +110,11 @@ export async function lookupRoute(c: Context): Promise<Response> {
       headers: { 'content-type': 'application/json' },
     });
   } catch (err) {
-    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
+    setTrack(req, {
+      outcome: 'error',
+      errorType: (err as Error)?.name,
+      upstreamStatus: upstreamStatusOf(err),
+    });
     return errorResponse(err);
   }
 }

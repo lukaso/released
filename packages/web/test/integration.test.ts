@@ -863,6 +863,36 @@ describe('upstream-down recovery UX (the bug)', () => {
     }
   });
 
+  it('records the UPSTREAM status in analytics (double3) so an outage is diagnosable, not just visible', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    // Upstream returns 502; the worker renders its own 503 "try again" page. The
+    // worker→client status (502 vs 503) hides what the host actually did — double3
+    // is the only place the real upstream status survives.
+    globalThis.fetch = vi.fn(
+      async () => new Response('bad gateway', { status: 502 }),
+    ) as typeof fetch;
+    const points: { blobs?: string[]; doubles?: number[] }[] = [];
+    const env = {
+      ANALYTICS: { writeDataPoint: (dp: (typeof points)[number]) => points.push(dp) },
+    } as unknown as Parameters<typeof app.fetch>[1];
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/p/GNOME%2Fgtk/9954'),
+        env,
+      );
+      expect(res.status).toBe(503); // transient outage page
+      expect(points).toHaveLength(1);
+      const dp = points[0];
+      expect(dp?.blobs?.[1]).toBe('gitlab.gnome.org'); // host
+      expect(dp?.blobs?.[3]).toBe('error'); // outcome
+      expect(dp?.doubles?.[0]).toBe(503); // worker→client status
+      expect(dp?.doubles?.[2]).toBe(502); // UPSTREAM status — the diagnostic signal
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('a genuine error page offers BOTH "Try again" and "Start over"', async () => {
     cacheStore.clear();
     const originalFetch = globalThis.fetch;

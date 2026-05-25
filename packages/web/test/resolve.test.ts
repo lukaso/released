@@ -153,7 +153,12 @@ describe('resolveLookup — cold + upstream down', () => {
     });
     const r = await resolveLookup({ cache: f.cache, key: KEY, load });
     expect(r.status).toBe('transient');
-    if (r.status === 'transient') expect(r.kind).toBe('provider_server_error');
+    if (r.status === 'transient') {
+      expect(r.kind).toBe('provider_server_error');
+      // Carry the upstream HTTP status through to the route so analytics can
+      // record WHY the host failed (5xx vs 429 vs challenge), not just that it did.
+      expect(r.upstreamStatus).toBe(503);
+    }
     expect(f.has(negKey)).toBe(true);
   });
 

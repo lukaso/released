@@ -122,15 +122,24 @@ Order matters — `web-og` has a Service Binding to `web`, so `web` deploys firs
 
    For GitLab — anonymous calls from Workers exhaust the edge IP's shared
    budget almost immediately, so a token is effectively required for
-   federation:
+   federation. Each GitLab host is a separate instance with its own rate
+   budget, so **every curated host needs its own per-host token** — not just
+   gitlab.com. Without one, lookups for that host fail intermittently with a
+   `ProviderServerError` (GitLab throttles unauthenticated API traffic from
+   the shared Cloudflare egress IP), which surfaces to visitors as a
+   "Can't reach <host>" page:
 
    ```bash
    # gitlab.com (most common case):
    cd packages/web && wrangler secret put GITLAB_TOKEN
 
-   # Per-host PAT for a specific self-hosted instance. Name is uppercased
-   # with `.` and `-` → `_`. Example for gitlab.gnome.org:
+   # Per-host PAT — one per curated GitLab host. Name is the host uppercased
+   # with `.` and `-` → `_`. The curated hosts (see top of this README):
    wrangler secret put GITLAB_TOKEN_GITLAB_GNOME_ORG
+   wrangler secret put GITLAB_TOKEN_GITLAB_FREEDESKTOP_ORG
+   wrangler secret put GITLAB_TOKEN_SALSA_DEBIAN_ORG
+   wrangler secret put GITLAB_TOKEN_INVENT_KDE_ORG
+   wrangler secret put GITLAB_TOKEN_GITLAB_KITWARE_COM
 
    # To extend the known-hosts allowlist (so users can paste URLs from
    # additional self-hosted instances), set the env var in wrangler.toml:

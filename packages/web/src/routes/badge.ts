@@ -19,7 +19,7 @@ import {
   providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
-import { setTrack } from '../analytics.js';
+import { setTrack, upstreamStatusOf } from '../analytics.js';
 import { extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { BADGE_COLORS, type BadgeState, badgeStateForResult, renderBadge } from '../badge.js';
 import { makeWorkerCache } from '../cache.js';
@@ -130,11 +130,21 @@ export async function badgeRoute(c: Context): Promise<Response> {
     // Upstream unreachable with no prior answer: "checking…" is self-correcting
     // (the proxy re-fetches on the short cache and it recovers), whereas
     // "unknown" reads like a permanent failure.
-    setTrack(req, { cache: 'miss', outcome: 'error', errorType: resolved.kind });
+    setTrack(req, {
+      cache: 'miss',
+      outcome: 'error',
+      errorType: resolved.kind,
+      upstreamStatus: resolved.upstreamStatus,
+    });
     return badge({ message: 'checking…', color: BADGE_COLORS.neutral }, SHORT_CACHE);
   }
   // Permanent: PR not merged, not found, unsupported host, etc.
-  setTrack(req, { cache: 'miss', outcome: 'error', errorType: (resolved.error as Error)?.name });
+  setTrack(req, {
+    cache: 'miss',
+    outcome: 'error',
+    errorType: (resolved.error as Error)?.name,
+    upstreamStatus: upstreamStatusOf(resolved.error),
+  });
   return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
 }
 

@@ -54,6 +54,7 @@ app.use('*', async (c, next) => {
           cache: enrich.cache,
           kind: enrich.kind,
           errorType: enrich.errorType,
+          upstreamStatus: enrich.upstreamStatus,
           audience: isUnfurlBot(req) ? 'bot' : 'human',
           country: typeof cf?.country === 'string' ? cf.country : undefined,
           status: c.res.status,

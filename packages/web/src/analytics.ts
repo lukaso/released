@@ -18,8 +18,13 @@
 //   blob7   audience  human|bot (unfurl)
 //   blob8   errorType error class name, when outcome=error
 //   blob9   country   request.cf.country
-//   double1 status    HTTP status code
-//   double2 latencyMs end-to-end request time
+//   double1 status         HTTP status the worker returned to the client
+//   double2 latencyMs       end-to-end request time
+//   double3 upstreamStatus  provider HTTP status when outcome=error (5xx/429/…),
+//                           0 otherwise. The worker→client status (double1) hides
+//                           this — a GNOME 503 surfaces to the user as a 404/503,
+//                           so without this column you can't tell a rate-limit
+//                           from a real outage from an anti-bot challenge.
 //
 // Use sum(_sample_interval) (not count()) in queries — Analytics Engine samples
 // at high write rates and that column reconstructs true counts.
@@ -39,7 +44,22 @@ export type AnalyticsEvent = {
   country?: string;
   status: number;
   latencyMs?: number;
+  /** Provider HTTP status that caused an error outcome (e.g. gitlab.gnome.org 503).
+   *  Distinct from `status`, which is what the worker returned to the client. */
+  upstreamStatus?: number;
 };
+
+/** Pull the upstream provider's HTTP status out of a typed error so analytics can
+ *  record WHY a host failed, not just that it did. ProviderServerError /
+ *  GitHubServerError / ProviderJsonError all carry a numeric `.status`; a
+ *  RateLimitError carries `resetAt` instead, so map it to 429. Everything else
+ *  (network error, timeout, not-yet-released, parse errors) has no upstream
+ *  status. Duck-typed on purpose — avoids `instanceof` fragility across bundles. */
+export function upstreamStatusOf(err: unknown): number | undefined {
+  const e = err as { status?: unknown; kind?: unknown } | null | undefined;
+  if (e?.kind === 'rate_limit') return 429;
+  return typeof e?.status === 'number' ? e.status : undefined;
+}
 
 const INDEX_MAX_BYTES = 96; // Analytics Engine hard limit on index length.
 
@@ -58,7 +78,7 @@ export function toDataPoint(e: AnalyticsEvent): AnalyticsEngineDataPoint {
       e.errorType ?? '',
       e.country ?? '',
     ],
-    doubles: [e.status, e.latencyMs ?? 0],
+    doubles: [e.status, e.latencyMs ?? 0, e.upstreamStatus ?? 0],
   };
 }
 

@@ -18,7 +18,7 @@ import {
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
-import { setTrack } from '../analytics.js';
+import { setTrack, upstreamStatusOf } from '../analytics.js';
 import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
@@ -72,7 +72,11 @@ export async function prRoute(c: Context): Promise<Response> {
     const token = resolveProviderToken(env, req, repo.host);
     provider = providerFor(repo.host, { token, extraGitlabHosts });
   } catch (err) {
-    setTrack(req, { outcome: 'error', errorType: (err as Error)?.name });
+    setTrack(req, {
+      outcome: 'error',
+      errorType: (err as Error)?.name,
+      upstreamStatus: upstreamStatusOf(err),
+    });
     return renderPrError(err, { pubBase, ogBase, nonce, repo, prNumber });
   }
 
@@ -121,12 +125,22 @@ export async function prRoute(c: Context): Promise<Response> {
     if (resolved.status === 'transient') {
       // Upstream unreachable with nothing cached — offer a retry on this exact
       // MR rather than a dead-end error.
-      setTrack(req, { cache: 'miss', outcome: 'error', errorType: resolved.kind });
+      setTrack(req, {
+        cache: 'miss',
+        outcome: 'error',
+        errorType: resolved.kind,
+        upstreamStatus: resolved.upstreamStatus,
+      });
       return renderPrTransient({ pubBase, ogBase, nonce, repo, prNumber, provider });
     }
     if (resolved.status === 'error') {
       const err = resolved.error;
-      setTrack(req, { cache: 'miss', outcome: 'error', errorType: (err as Error)?.name });
+      setTrack(req, {
+        cache: 'miss',
+        outcome: 'error',
+        errorType: (err as Error)?.name,
+        upstreamStatus: upstreamStatusOf(err),
+      });
       if (err instanceof PrNotMergedError) {
         return renderPrNotMerged(err, { pubBase, ogBase, nonce, repo, prNumber, provider });
       }
