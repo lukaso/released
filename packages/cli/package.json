@@ -1,6 +1,6 @@
 {
   "name": "git-released",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Find the first release containing a git commit — CLI. (Published as `git-released` because the unscoped `released` name on npm was taken in 2014.)",
   "keywords": [
     "git",
