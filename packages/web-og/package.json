@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@released/core": "workspace:*",
-    "hono": "^4.6.13",
+    "hono": "^4.12.23",
     "workers-og": "^0.0.25"
   },
   "devDependencies": {
