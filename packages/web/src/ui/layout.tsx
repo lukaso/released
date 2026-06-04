@@ -167,7 +167,18 @@ const CLIENT_JS = `
     }
     if (fmt === 'slack') {
       var slead = subject ? '*' + subject + '* — ' : '';
-      if (!tag) return slead + '\\\`' + sha + '\\\` in \\\`' + repo + '\\\` not yet released <' + perma + '|details>';
+      if (!tag) {
+        // No tag yet (not merged / not released). Slack mrkdwn is plain text and
+        // won't auto-update, so we DON'T bake "not yet released" into the message —
+        // it would stale-lock once the commit ships. Point to the permalink with a
+        // live-status label instead. Unmerged PRs have no SHA (canonicalSha === ''):
+        // reference the PR/MR by number so the snippet still reads cleanly.
+        var ref = sha
+          ? '\\\`' + sha + '\\\`'
+          : (r.input.kind === 'pr' ? (r.input.repo.host === 'github.com' ? '#' : '!') + r.input.number : '');
+        var refIn = ref ? ref + ' in ' : '';
+        return slead + refIn + '\\\`' + repo + '\\\` — <' + perma + '|live release status>';
+      }
       return slead + '*' + tag + '* shipped ' + r.firstRelease.date.slice(0,10) + ' contains \\\`' + sha + '\\\` in \\\`' + repo + '\\\` <' + perma + '|details>';
     }
     return perma;

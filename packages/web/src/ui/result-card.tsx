@@ -97,7 +97,7 @@ export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps
  *  preview mirrors what each copies and is populated only once the disclosure
  *  is opened (so a clean visit triggers zero extra lookups). `hint` renders
  *  inside the disclosure (used by the not-yet card). */
-function CopyActions({ perma, hint }: { perma: string; hint?: string }) {
+export function CopyActions({ perma, hint }: { perma: string; hint?: string }) {
   return (
     <details class="share">
       <summary class="share-summary">Copy &amp; embed badge</summary>

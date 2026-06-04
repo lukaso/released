@@ -26,7 +26,7 @@ import { prPermalinkPath } from '../paths.js';
 import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
-import { ResultCard, StaleNotice, StrictHint } from '../ui/result-card.js';
+import { CopyActions, ResultCard, StaleNotice, StrictHint } from '../ui/result-card.js';
 
 function repoFromParams(c: Context): RepoRef | null {
   const host = c.req.param('host');
@@ -321,6 +321,25 @@ function renderPrNotMerged(
     repo.host === 'github.com'
       ? 'Open PR on GitHub'
       : `Open ${label.toLowerCase()} on ${repo.host}`;
+  // Open PRs are the most valuable place to embed a badge: the user can paste
+  // the markdown into the PR description now, and the badge auto-flips
+  // "not yet" → version-tag as the PR merges and ships. Closed-without-merging
+  // PRs never flip, so suppress the copy actions for them.
+  const isOpen = err.prState === 'open';
+  const synthetic: LookupResult | null = isOpen
+    ? {
+        input: { kind: 'pr', repo, number: prNumber },
+        // No merge commit yet — empty string. Client JS guards on this.
+        canonicalSha: '',
+        subject: null,
+        firstRelease: null,
+        alsoIn: [],
+        releaseNotesHtml: null,
+        rateLimit: null,
+        urls: { repo: provider.urls.repo(repo), commit: '', pullRequest: prUrl },
+      }
+    : null;
+  const inlineData = synthetic ? JSON.stringify(synthetic).replace(/</g, '\\u003c') : null;
   const page = (
     <Layout
       title={`${label} not merged — ${displayName}${prefix}${prNumber}`}
@@ -354,9 +373,18 @@ function renderPrNotMerged(
                 {linkLabel}
               </a>
             </div>
+            {synthetic && (
+              <CopyActions
+                perma={permalink}
+                hint="Paste the badge into your PR/MR description now — it flips from “not yet” to the version automatically once this merges and ships."
+              />
+            )}
           </div>
         </div>
       </main>
+      {inlineData && (
+        <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
+      )}
     </Layout>
   );
   return new Response(`<!DOCTYPE html>${page.toString()}`, {

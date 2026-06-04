@@ -1023,6 +1023,138 @@ describe('containing tag outside the fetched window (pagination fix)', () => {
       globalThis.fetch = originalFetch;
     }
   });
+  // ---- Unmerged-PR badge UX -------------------------------------------------
+  // An unmerged PR is the moment when an embeddable badge is most useful:
+  // paste it in the PR description, it auto-flips through "not yet" → the
+  // version tag as the PR merges and ships. The page must surface the badge
+  // copy actions, and the badge endpoint must say "not yet" (gold) rather
+  // than the generic "unknown" — otherwise the proxy locks a dead UI in.
+  // The slack format is plain text — Slack mrkdwn doesn't re-fetch. If we bake
+  // "not yet released" into the copied message it stale-locks forever once the
+  // commit eventually ships. The fix: the not-yet branch points to the
+  // permalink with a "live release status" label and never asserts a state.
+  it('slack copy snippet for not-yet results does NOT bake in transient state', async () => {
+    const res = await app.fetch(new Request('https://released.example/'));
+    const body = await res.text();
+    // The inlined CLIENT_JS is the source of truth for copy formats; we assert
+    // against the script string directly so the regression bites at build time
+    // rather than after a paste in production.
+    expect(body).not.toContain("'not yet released'");
+    expect(body).not.toContain('not yet released <');
+    // New phrasing: link label promises the user can click for current state.
+    expect(body).toContain('live release status');
+  });
+
+  it('open unmerged PR page surfaces the badge copy actions + inline result', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/repos/BerriA/litellm/pulls/29205')) {
+        return new Response(
+          JSON.stringify({
+            merged: false,
+            state: 'open',
+            merge_commit_sha: null,
+            title: 'feat: something',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(new Request('https://released.example/p/BerriA/litellm/29205'));
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // The "Copy & embed badge" disclosure with the three format buttons.
+      expect(body).toContain('Copy &amp; embed badge');
+      expect(body).toContain('data-copy="badge"');
+      expect(body).toContain('data-copy="slack"');
+      expect(body).toContain('data-copy="link"');
+      // The synthetic LookupResult must be inlined so the client JS picks
+      // it up (window.__RELEASED_RESULT__). canonicalSha is "" because the
+      // PR isn't merged — there is no merge commit yet.
+      expect(body).toContain('window.__RELEASED_RESULT__');
+      expect(body).toMatch(/"kind":"pr"/);
+      expect(body).toMatch(/"number":29205/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('closed-without-merging PR page does NOT show badge actions (will never flip)', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/repos/foo/bar/pulls/99')) {
+        return new Response(
+          JSON.stringify({ merged: false, state: 'closed', merge_commit_sha: null, title: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(new Request('https://released.example/p/foo/bar/99'));
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // No flip will ever happen — don't dangle a useless badge.
+      expect(body).not.toContain('Copy &amp; embed badge');
+      expect(body).not.toContain('data-copy="badge"');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('badge.svg for an open unmerged PR returns "not yet" gold (short-cached, auto-flips)', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/repos/foo/bar/pulls/42')) {
+        return new Response(
+          JSON.stringify({ merged: false, state: 'open', merge_commit_sha: null, title: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(new Request('https://released.example/p/foo/bar/42/badge.svg'));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      const body = await res.text();
+      expect(body).toContain('not yet');
+      // --warn gold (BADGE_COLORS.notYet)
+      expect(body).toContain('#d29922');
+      // Short cache so a merge+ship triggers re-fetch within minutes.
+      const cc = res.headers.get('cache-control') ?? '';
+      expect(cc).toContain('max-age=300');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('badge.svg for a closed (never-merged) PR stays "unknown" (no false promises)', async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/repos/foo/bar/pulls/77')) {
+        return new Response(
+          JSON.stringify({ merged: false, state: 'closed', merge_commit_sha: null, title: null }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(new Request('https://released.example/p/foo/bar/77/badge.svg'));
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      expect(body).toContain('unknown');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 afterEachClear();

@@ -13,6 +13,7 @@
 import {
   type LookupInput,
   type LookupResult,
+  PrNotMergedError,
   type RepoRef,
   cacheKey,
   findRelease,
@@ -145,6 +146,14 @@ export async function badgeRoute(c: Context): Promise<Response> {
     errorType: (resolved.error as Error)?.name,
     upstreamStatus: upstreamStatusOf(resolved.error),
   });
+  // Open-but-unmerged PRs are the most valuable place to embed a badge: a user
+  // can paste it in the PR description, and once the PR merges and ships the
+  // badge flips to the version tag. Return "not yet" (gold) with SHORT_CACHE
+  // so the proxy re-fetches and the badge updates within minutes of merge.
+  // Closed-without-merging stays "unknown" — it will never flip.
+  if (resolved.error instanceof PrNotMergedError && resolved.error.prState === 'open') {
+    return badge({ message: 'not yet', color: BADGE_COLORS.notYet }, SHORT_CACHE);
+  }
   return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
 }
 
