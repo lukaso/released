@@ -131,6 +131,16 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
 }
 .answer-date { font-size: 15px; color: var(--text-2); margin-bottom: 18px; }
 .answer-date b { color: var(--text); font-weight: 500; }
+/* Bare <a> here (e.g. the PR/MR ref on the not-merged page) would fall back
+ * to browser default #0000EE — illegible on the dark surface. */
+.answer-date a {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--border-bright);
+  text-underline-offset: 2px;
+}
+.answer-date a:hover { color: var(--accent); text-decoration-color: var(--accent); }
+.answer-date a:visited { color: var(--text); }
 .answer-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 /* Share/embed disclosure — collapsed by default so the permalink reads clean.
  * The summary is the only thing a visitor sees; clicking reveals the tools. */

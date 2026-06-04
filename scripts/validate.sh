@@ -31,6 +31,20 @@ pnpm -r typecheck
 echo "→ test"
 pnpm -r test
 
+# Contrast a11y in a real chromium. Structural a11y already ran above
+# (test/a11y.test.ts, jsdom + axe). This is the layout-aware layer jsdom
+# can't do. Skip with a notice when playwright's chromium isn't installed —
+# CI's dedicated `a11y` job is the authoritative gate. Run once locally with
+#   pnpm --filter @released/web exec playwright install chromium
+echo "→ a11y contrast (chromium)"
+if pnpm --filter @released/web exec node -e \
+  "const{chromium}=require('playwright');const fs=require('fs');const p=chromium.executablePath();process.exit(p&&fs.existsSync(p)?0:2);" \
+  >/dev/null 2>&1; then
+  A11Y_BROWSER=1 pnpm --filter @released/web test test/a11y-contrast.test.ts
+else
+  echo "  chromium not installed — skipping (CI gates it). pnpm --filter @released/web exec playwright install chromium"
+fi
+
 echo "→ lint"
 pnpm lint
 

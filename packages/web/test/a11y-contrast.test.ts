@@ -110,6 +110,36 @@ describe.runIf(RUN)('a11y — contrast (chromium + axe)', () => {
     expect(fails, `\n${fmt(fails)}`).toEqual([]);
   });
 
+  // Regression: bare <a> tags inside .answer-date fell back to browser-default
+  // #0000EE on the dark surface (the "BerriAI/litellm#29205" link in the
+  // unmerged-PR copy). Add explicit color in styles, gate it here.
+  it('unmerged (open) PR page passes WCAG AA color-contrast', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/repos/foo/bar/pulls/42')) {
+        return new Response(
+          JSON.stringify({
+            merged: false,
+            state: 'open',
+            merge_commit_sha: null,
+            title: 'add cache layer',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(new Request('https://released.example/p/foo/bar/42'));
+      const fails = await contrastFailures(await res.text());
+      expect(fails, `\n${fmt(fails)}`).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('not-yet-released MR page passes WCAG AA color-contrast (covers the Resolved banner)', async () => {
     cacheStore.clear();
     const originalFetch = globalThis.fetch;
