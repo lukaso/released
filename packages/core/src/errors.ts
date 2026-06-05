@@ -222,6 +222,10 @@ export class ProviderServerError extends ReleasedError {
  *    exempt, so the hint points at a provider token. */
 export class ProviderJsonError extends ReleasedError {
   readonly kind = 'provider_json_error' as const;
+  /** True when the snippet matches Anubis (techaro.lol) — workerd's TLS
+   *  fingerprint trips it; the CLI gets through. Exposed as a field so the
+   *  web UI can render a CLI-pointing hint without re-regexing the message. */
+  readonly looksLikeAnubis: boolean;
   constructor(
     public readonly status: number,
     public readonly snippet: string,
@@ -243,6 +247,7 @@ export class ProviderJsonError extends ReleasedError {
     super(base + detail);
     this.name = 'ProviderJsonError';
     this.cause = cause;
+    this.looksLikeAnubis = looksLikeAnubis;
   }
 }
 

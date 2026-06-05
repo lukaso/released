@@ -8,6 +8,7 @@ import {
   type LookupResult,
   NotYetReleasedError,
   PrNotFoundError,
+  ProviderJsonError,
   ProviderServerError,
   type RepoRef,
 } from '@released/core';
@@ -179,6 +180,56 @@ describe('resolveLookup — cold + upstream down', () => {
     const r = await resolveLookup({ cache: f.cache, key: KEY, load });
     expect(load).toHaveBeenCalledOnce();
     expect(r.status).toBe('ok');
+  });
+});
+
+describe('resolveLookup — Anubis surfacing', () => {
+  // gitlab.freedesktop.org sits behind Anubis: it returns 200 with an HTML
+  // interstitial. We classify this as transient (since the cause is upstream),
+  // but the UI needs to know it's Anubis so it can point users at the CLI
+  // instead of a futile "Try again" button — retrying never beats Anubis from
+  // a Cloudflare Worker (workerd's TLS fingerprint is the trigger).
+  it('threads anubis=true on the transient status when load throws an Anubis ProviderJsonError', async () => {
+    const f = makeFakeCache();
+    const load = vi.fn(async () => {
+      throw new ProviderJsonError(
+        200,
+        '<title>Making sure you are not a bot!</title>',
+        new Error('parse'),
+      );
+    });
+    const r = await resolveLookup({ cache: f.cache, key: KEY, load });
+    expect(r.status).toBe('transient');
+    if (r.status === 'transient') {
+      expect(r.kind).toBe('provider_json_error');
+      expect(r.anubis).toBe(true);
+    }
+  });
+
+  it('threads anubis=false on transient when the JSON error is NOT Anubis (e.g. Cloudflare CF)', async () => {
+    const f = makeFakeCache();
+    const load = vi.fn(async () => {
+      throw new ProviderJsonError(200, '<title>Just a moment...</title>', new Error('parse'));
+    });
+    const r = await resolveLookup({ cache: f.cache, key: KEY, load });
+    expect(r.status).toBe('transient');
+    if (r.status === 'transient') {
+      expect(r.anubis).toBeFalsy();
+    }
+  });
+
+  it('preserves the anubis flag through a backed-off negative cache hit', async () => {
+    // After the first Anubis failure the resolver writes a neg marker. The
+    // next request must STILL surface anubis=true so the UI keeps pointing at
+    // the CLI; otherwise the UX flips back to a misleading "Try again" during
+    // the throttle window.
+    const f = makeFakeCache();
+    f.seed(negKey, { transient: true, kind: 'provider_json_error', anubis: true }, 10);
+    const load = vi.fn();
+    const r = await resolveLookup({ cache: f.cache, key: KEY, load });
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('transient');
+    if (r.status === 'transient') expect(r.anubis).toBe(true);
   });
 });
 

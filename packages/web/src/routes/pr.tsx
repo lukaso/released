@@ -131,6 +131,11 @@ export async function prRoute(c: Context): Promise<Response> {
         errorType: resolved.kind,
         upstreamStatus: resolved.upstreamStatus,
       });
+      // Anubis blocks workerd specifically; "Try again" never works. See
+      // renderPrAnubis for why and what we show instead.
+      if (resolved.anubis) {
+        return renderPrAnubis({ pubBase, ogBase, nonce, repo, prNumber, provider });
+      }
       return renderPrTransient({ pubBase, ogBase, nonce, repo, prNumber, provider });
     }
     if (resolved.status === 'error') {
@@ -502,6 +507,73 @@ function renderPrError(
     status,
     headers: {
       'content-type': 'text/html; charset=utf-8',
+      ...securityHeaders(nonce, ogBase),
+    },
+  });
+}
+
+/** Anubis-blocked host on a PR/MR lookup. See renderAnubis in result.tsx for
+ *  the rationale — same UX, federation-aware label ("Merge request !N"). */
+function renderPrAnubis(args: {
+  pubBase: string;
+  ogBase: string;
+  nonce: string;
+  repo: RepoRef;
+  prNumber: number;
+  provider: Provider;
+}): Response {
+  const { pubBase, ogBase, nonce, repo, prNumber, provider } = args;
+  const upstreamUrl = provider.urls.pullRequest(repo, prNumber);
+  const label = provider.terms.mergeRequest;
+  const prefix = provider.terms.mergeRequestPrefix;
+  const cliCmd = `npx git-released ${upstreamUrl}`;
+  const permalinkPath = prPermalinkPath(repo, prNumber);
+  const page = (
+    <Layout
+      title={`${repo.host} needs the CLI — ${repo.projectPath}${prefix}${prNumber}`}
+      nonce={nonce}
+      ogBaseUrl={ogBase}
+      publicUrl={`${pubBase}${permalinkPath}`}
+      ogFallbackTitle={`released — ${repo.host} blocks server-to-server lookups (Anubis)`}
+    >
+      <Nav />
+      <main>
+        <div class="answer">
+          <div class="answer-hero">
+            <div class="answer-label">Use the CLI for this host</div>
+            <div class="answer-version">
+              <span class="v" style="font-size: 28px; color: var(--warn);">
+                {repo.host} blocks the web app
+              </span>
+            </div>
+            <div class="answer-date">
+              <b>{repo.host}</b> sits behind <a href="https://anubis.techaro.lol/">Anubis</a>, a
+              proof-of-work anti-bot system that fingerprints HTTP traffic from cloud providers. The
+              web app can't get through. The CLI can — Node's fetch has a different TLS fingerprint
+              that isn't challenged.
+            </div>
+            <div style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--text); word-break: break-all;">
+              {cliCmd}
+            </div>
+            <div class="answer-actions" style="margin-top: 16px;">
+              <a class="btn-fmt primary" href={upstreamUrl} style="text-decoration: none;">
+                Open {label.toLowerCase()} on {repo.host}
+              </a>
+              <a class="btn-fmt" href="/" style="text-decoration: none;">
+                Start over
+              </a>
+            </div>
+          </div>
+        </div>
+      </main>
+    </Layout>
+  );
+  return new Response(`<!DOCTYPE html>${page.toString()}`, {
+    status: 503,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'public, max-age=60',
+      'retry-after': '60',
       ...securityHeaders(nonce, ogBase),
     },
   });

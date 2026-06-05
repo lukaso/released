@@ -397,6 +397,9 @@ describe('rate-limit + network failure modes', () => {
       expect(msg).toMatch(/Anubis/i);
       expect(msg).toMatch(/CLI/i);
       expect(msg).not.toMatch(/setting.*token/i);
+      // Field — consumers branch on this (UI surfaces the CLI hint instead
+      // of a futile "Try again" button). Cheaper than re-regexing the message.
+      expect((err as InstanceType<typeof ProviderJsonError>).looksLikeAnubis).toBe(true);
     }
   });
 
@@ -420,6 +423,7 @@ describe('rate-limit + network failure modes', () => {
       expect(msg).toMatch(/Cloudflare|anti-bot/i);
       expect(msg).toMatch(/token/i);
       expect(msg).not.toMatch(/Anubis/i);
+      expect((err as InstanceType<typeof ProviderJsonError>).looksLikeAnubis).toBe(false);
     }
   });
 

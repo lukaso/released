@@ -1023,6 +1023,43 @@ describe('containing tag outside the fetched window (pagination fix)', () => {
       globalThis.fetch = originalFetch;
     }
   });
+  // ---- Anubis-protected host UX --------------------------------------------
+  // gitlab.freedesktop.org sits behind Anubis (techaro.lol): the API returns
+  // 200 + HTML interstitial. The generic "Can't reach … Try again" UI is wrong
+  // here — retrying never beats Anubis from workerd. The route must surface a
+  // CLI hint with the exact command to copy.
+  it('Anubis interstitial → page shows the CLI hint, no "Try again" button', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.freedesktop.org')) {
+        return new Response(
+          '<!doctype html><html lang="en"><head><title>Making sure you\'re not a bot!</title><link rel="stylesheet" href="/.within.website/x/xess/xess.min.css"></head></html>',
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request(
+          'https://released.example/h/gitlab.freedesktop.org/r/mesa%2Fmesa/c/6a16319133d3',
+        ),
+      );
+      const body = await res.text();
+      // Anubis-specific phrasing replaces the generic "Can't reach" headline.
+      expect(body).toContain('Anubis');
+      // The CLI command — exactly what users should run, with the upstream URL.
+      expect(body).toContain('npx git-released');
+      expect(body).toContain('gitlab.freedesktop.org/mesa/mesa/-/commit/6a16319133d3');
+      // No "Try again" button — retrying never works against Anubis.
+      expect(body).not.toContain('Try again');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   // ---- Unmerged-PR badge UX -------------------------------------------------
   // An unmerged PR is the moment when an embeddable badge is most useful:
   // paste it in the PR description, it auto-flips through "not yet" → the

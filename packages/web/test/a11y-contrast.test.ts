@@ -140,6 +140,30 @@ describe.runIf(RUN)('a11y — contrast (chromium + axe)', () => {
     }
   });
 
+  it('Anubis-blocked host page (CLI hint) passes WCAG AA color-contrast', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.freedesktop.org')) {
+        return new Response(
+          '<!doctype html><html><head><title>Making sure you are not a bot!</title></head></html>',
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.freedesktop.org/r/mesa%2Fmesa/c/abc1234'),
+      );
+      const fails = await contrastFailures(await res.text());
+      expect(fails, `\n${fmt(fails)}`).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('not-yet-released MR page passes WCAG AA color-contrast (covers the Resolved banner)', async () => {
     cacheStore.clear();
     const originalFetch = globalThis.fetch;

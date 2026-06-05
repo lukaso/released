@@ -131,6 +131,11 @@ export async function resultRoute(c: Context): Promise<Response> {
         errorType: resolved.kind,
         upstreamStatus: resolved.upstreamStatus,
       });
+      // Anubis blocks workerd specifically; "Try again" never works. Surface
+      // the CLI command (Node has a different TLS fingerprint) instead.
+      if (resolved.anubis) {
+        return renderAnubis({ pubBase, ogBase, nonce, repo, sha, provider: client });
+      }
       return renderTransient({ pubBase, ogBase, nonce, repo, sha });
     }
     if (resolved.status === 'error') {
@@ -364,6 +369,76 @@ function renderError(
     status,
     headers: {
       'content-type': 'text/html; charset=utf-8',
+      ...securityHeaders(nonce, ogBase),
+    },
+  });
+}
+
+/** Anubis-blocked host (gitlab.freedesktop.org and similar). Anubis fingerprints
+ *  the HTTP/2 + TLS stack BELOW the API auth layer, so workerd is challenged
+ *  and a provider token doesn't help. The CLI uses Node's fetch, which isn't
+ *  challenged. Show the exact command to copy, plus a link to the upstream URL
+ *  — but NOT a "Try again" button (retrying never beats Anubis from workerd). */
+function renderAnubis(args: {
+  pubBase: string;
+  ogBase: string;
+  nonce: string;
+  repo: RepoRef;
+  sha: string;
+  provider: Provider;
+}): Response {
+  const { pubBase, ogBase, nonce, repo, sha, provider } = args;
+  const permalinkPath = commitPermalinkPath(repo, sha);
+  const upstreamUrl = provider.urls.commit(repo, sha);
+  const cliCmd = `npx git-released ${upstreamUrl}`;
+  const page = (
+    <Layout
+      title={`${repo.host} needs the CLI — ${repo.projectPath}`}
+      nonce={nonce}
+      ogBaseUrl={ogBase}
+      publicUrl={`${pubBase}${permalinkPath}`}
+      ogFallbackTitle={`released — ${repo.host} blocks server-to-server lookups (Anubis)`}
+    >
+      <Nav />
+      <main>
+        <div class="answer">
+          <div class="answer-hero">
+            <div class="answer-label">Use the CLI for this host</div>
+            <div class="answer-version">
+              <span class="v" style="font-size: 28px; color: var(--warn);">
+                {repo.host} blocks the web app
+              </span>
+            </div>
+            <div class="answer-date">
+              <b>{repo.host}</b> sits behind <a href="https://anubis.techaro.lol/">Anubis</a>, a
+              proof-of-work anti-bot system that fingerprints HTTP traffic from cloud providers. The
+              web app can't get through. The CLI can — Node's fetch has a different TLS fingerprint
+              that isn't challenged.
+            </div>
+            <div style="margin-top: 14px; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; font-family: 'Geist Mono', monospace; font-size: 13px; color: var(--text); word-break: break-all;">
+              {cliCmd}
+            </div>
+            <div class="answer-actions" style="margin-top: 16px;">
+              <a class="btn-fmt primary" href={upstreamUrl} style="text-decoration: none;">
+                Open commit on {repo.host}
+              </a>
+              <a class="btn-fmt" href="/" style="text-decoration: none;">
+                Start over
+              </a>
+            </div>
+          </div>
+        </div>
+      </main>
+    </Layout>
+  );
+  return new Response(`<!DOCTYPE html>${page.toString()}`, {
+    // 503 keeps proxies / browsers from pinning this state. Short cache so a
+    // future workaround (proxy, header tweak) takes effect quickly.
+    status: 503,
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'public, max-age=60',
+      'retry-after': '60',
       ...securityHeaders(nonce, ogBase),
     },
   });
