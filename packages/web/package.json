@@ -14,7 +14,7 @@
   "dependencies": {
     "@cloudflare/containers": "^0.3.6",
     "@released/core": "workspace:*",
-    "hono": "^4.6.13"
+    "hono": "^4.12.23"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.1",
