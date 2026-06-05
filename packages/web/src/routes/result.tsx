@@ -17,10 +17,11 @@ import {
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
-import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
+import { isUnfurlBot } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
 import { commitPermalinkPath } from '../paths.js';
+import { makeProvider } from '../provider.js';
 import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
@@ -81,11 +82,10 @@ export async function resultRoute(c: Context): Promise<Response> {
   const cache = makeWorkerCache(req);
 
   // Provider construction can fail (unsupported host) — a permanent error.
-  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
+  // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
   let client: Provider;
   try {
-    const token = resolveProviderToken(env, req, repo.host);
-    client = providerFor(repo.host, { token, extraGitlabHosts });
+    client = makeProvider(env, req, repo.host);
   } catch (err) {
     setTrack(req, {
       outcome: 'error',

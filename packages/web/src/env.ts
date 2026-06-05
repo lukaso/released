@@ -29,6 +29,22 @@ export type Env = {
   ANALYTICS?: {
     writeDataPoint(dp: AnalyticsEngineDataPoint): void;
   };
+
+  /** Shared secret for the Worker↔relay-container handshake. The container
+   *  rejects any request whose `x-relay-secret` doesn't match. Set via
+   *  `wrangler secret put RELAY_SECRET`; the GitlabRelay DO mirrors it into the
+   *  container env. */
+  RELAY_SECRET?: string;
+
+  /** Comma-separated hosts to route through the relay container (Anubis-
+   *  protected). Defaults to gitlab.freedesktop.org,gitlab.gnome.org when unset;
+   *  an explicit empty string disables the relay. */
+  ANUBIS_HOSTS?: string;
+
+  /** Container binding (Durable Object) for the GitLab relay. Present only once
+   *  the [[containers]] block in wrangler.toml is deployed; absent in tests and
+   *  in `wrangler dev` without containers, in which case lookups go direct. */
+  RELAY?: DurableObjectNamespace<import('./relay.js').GitlabRelay>;
 };
 
 export type AnalyticsEngineDataPoint = {

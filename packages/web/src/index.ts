@@ -130,3 +130,7 @@ app.get('/healthz', (c) => c.text('ok'));
 app.notFound((c) => c.text('Not found — paste a commit at https://released.blabberate.com\n', 404));
 
 export default app;
+
+// Durable Object class backing the Anubis relay container. Must be exported
+// from the Worker entry so wrangler's [[containers]] / migration can bind it.
+export { GitlabRelay } from './relay.js';

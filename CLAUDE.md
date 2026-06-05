@@ -68,3 +68,25 @@ Full detail in README "Deploy (Cloudflare Workers)".
 Per-Worker secrets are set via `wrangler secret put`; see README "One-time
 setup". `web-og` and `web` share an `INTERNAL_SECRET` for the Service
 Binding handshake — they must match.
+
+## Anubis relay container
+
+`gitlab.freedesktop.org` / `gitlab.gnome.org` sit behind Anubis, which
+fingerprints workerd's TLS/HTTP2 stack and challenges it — a token doesn't
+help (Anubis runs before auth). Empirically the block is the *runtime
+fingerprint*, not the IP: from one machine, `curl`/Node pass while workerd is
+challenged, and a Cloudflare Container (Node) clears it. So for those hosts the
+`web` Worker routes provider fetches through a **container relay** (`container/`
++ `src/relay.ts`, the `GitlabRelay` Durable Object). The Worker still runs the
+whole algorithm; the container only ferries raw bytes, gated by `RELAY_SECRET`
++ an SSRF allowlist. Which hosts are relayed is the `ANUBIS_HOSTS` var
+(`wrangler.toml`); an empty string disables it and lookups fall back to the
+"use the CLI" card.
+
+Two deploy prerequisites beyond the usual:
+- `wrangler secret put RELAY_SECRET` on `web` (also propagated into the
+  container). If unset, relay fetch is skipped and blocked hosts degrade to the
+  CLI-hint card — no hard failure.
+- The CI Cloudflare API token (`release.yml`) must include **Containers /
+  Cloudchamber: Edit**, and the deploy runner needs Docker to build the image
+  (GitHub-hosted ubuntu runners have it).

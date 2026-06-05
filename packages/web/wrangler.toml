@@ -27,9 +27,45 @@ directory = "./public"
 # calls from Workers share the edge IP's budget and exhaust quickly, so set a
 # per-host PAT for any instance you expect meaningful federation traffic to.
 
-# Optional: extend the known-GitLab-hosts allowlist with self-hosted instances.
-# [vars]
+# Vars (non-secret config).
+#   ANUBIS_HOSTS       — hosts routed through the relay container (below). These
+#                        sit behind Anubis, which challenges workerd's TLS
+#                        fingerprint; the relay (Node) gets through. An empty
+#                        string disables the relay. Defaults are baked into
+#                        src/relay.ts; set here to make it auditable + adjustable.
+#   EXTRA_GITLAB_HOSTS — extend the known-GitLab-hosts allowlist with self-hosted
+#                        instances, e.g. "git.example.com,gitlab.acme.net".
+[vars]
+ANUBIS_HOSTS = "gitlab.freedesktop.org,gitlab.gnome.org"
 # EXTRA_GITLAB_HOSTS = "git.example.com,gitlab.acme.net"
+
+# Anubis-bypass relay container.
+# gitlab.freedesktop.org / gitlab.gnome.org sit behind Anubis (techaro.lol),
+# which fingerprints the caller's TLS/HTTP2 stack BELOW the API-auth layer and
+# challenges workerd. Node's fingerprint (the CLI) is not. This container runs
+# that same Node fetch, so the Worker can relay blocked-host API calls through
+# it. The Worker still runs the whole findRelease algorithm; the container only
+# ferries raw upstream bytes, gated by RELAY_SECRET + an SSRF allowlist.
+# Source: container/ + src/relay.ts.
+#
+# One-time setup:
+#   wrangler secret put RELAY_SECRET            # shared Worker↔container secret
+# CI note: the Cloudflare API token used by release.yml must include the
+#   Containers (Cloudchamber) edit permission, and the deploy runner needs Docker
+#   (GitHub-hosted ubuntu runners have it) to build the image.
+[[containers]]
+class_name = "GitlabRelay"
+image = "./Dockerfile"
+name = "released-gitlab-relay"
+max_instances = 1
+
+[[durable_objects.bindings]]
+class_name = "GitlabRelay"
+name = "RELAY"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GitlabRelay"]
 
 # Usage tracking (server-side, no client JS). One data point per request; see
 # src/analytics.ts for the schema and scripts/stats.mjs for the queries. The

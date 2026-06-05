@@ -14,11 +14,11 @@ import {
   type ReleasedError,
   findReleasesBulk,
   parseInput,
-  providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
-import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
+import { checkSameOrigin } from '../auth.js';
 import type { Env } from '../env.js';
+import { makeProvider } from '../provider.js';
 
 type BulkSubError = { kind: 'error'; errorName: string; message: string };
 
@@ -69,17 +69,15 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
     group.push({ input: p.v, originalIdx: idx });
   });
 
-  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
   const okResultsByIdx = new Map<number, LookupResult | BulkSubError>();
 
   // Run each host's bulk in parallel — different hosts have independent rate limits
   // and there's no cross-host shared state.
   await Promise.all(
     [...byHost.entries()].map(async ([host, group]) => {
-      const token = resolveProviderToken(env, req, host);
       let client: Provider;
       try {
-        client = providerFor(host, { token, extraGitlabHosts });
+        client = makeProvider(env, req, host);
       } catch (err) {
         // Host not supported — every input in this group fails the same way.
         const errAsReleased = err as ReleasedError;

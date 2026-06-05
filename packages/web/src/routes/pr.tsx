@@ -14,15 +14,15 @@ import {
   type RepoRef,
   cacheKey,
   findRelease,
-  providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
-import { extraGitlabHostsFromEnv, isUnfurlBot, resolveProviderToken } from '../auth.js';
+import { isUnfurlBot } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
 import { prPermalinkPath } from '../paths.js';
+import { makeProvider } from '../provider.js';
 import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
@@ -65,12 +65,10 @@ export async function prRoute(c: Context): Promise<Response> {
   const pubBase = publicBaseUrl(env, req);
   const ogBase = ogBaseUrl(env, req);
   const isBot = isUnfurlBot(req);
-  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
 
   let provider: Provider;
   try {
-    const token = resolveProviderToken(env, req, repo.host);
-    provider = providerFor(repo.host, { token, extraGitlabHosts });
+    provider = makeProvider(env, req, repo.host);
   } catch (err) {
     setTrack(req, {
       outcome: 'error',

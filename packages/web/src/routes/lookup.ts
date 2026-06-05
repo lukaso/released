@@ -10,13 +10,13 @@ import {
   cacheKey,
   findRelease,
   parseInput,
-  providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
-import { checkSameOrigin, extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
+import { checkSameOrigin } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
+import { makeProvider } from '../provider.js';
 import { singleFlight } from '../single-flight.js';
 
 export async function lookupRoute(c: Context): Promise<Response> {
@@ -54,11 +54,9 @@ export async function lookupRoute(c: Context): Promise<Response> {
   }
   setTrack(req, { host: parsed.repo.host, repo: parsed.repo.projectPath, kind: parsed.kind });
 
-  const token = resolveProviderToken(env, req, parsed.repo.host);
-  const extraGitlabHosts = extraGitlabHostsFromEnv(env);
   let client: Provider;
   try {
-    client = providerFor(parsed.repo.host, { token, extraGitlabHosts });
+    client = makeProvider(env, req, parsed.repo.host);
   } catch (err) {
     setTrack(req, {
       outcome: 'error',

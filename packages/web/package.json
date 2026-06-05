@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.6",
     "@released/core": "workspace:*",
     "hono": "^4.6.13"
   },
