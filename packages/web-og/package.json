@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@released/core": "workspace:*",
-    "hono": "^4.6.13",
+    "hono": "^4.12.25",
     "workers-og": "^0.0.25"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241218.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8",
+    "vitest": "^3.2.6",
     "wrangler": "^4.90.1"
   }
 }
