@@ -1195,6 +1195,40 @@ describe('containing tag outside the fetched window (pagination fix)', () => {
   });
 });
 
+// Cold-load UX: a cache-miss commit permalink must not blank-wait. It streams a
+// "Looking up…" shell first, then swaps in the fully-rendered page. (Warm/
+// terminal cache hits still render synchronously — covered by other tests.)
+describe('cold lookup streams a shell then swaps in the page', () => {
+  it('streams the Looking-up shell then appends the resolved page (progressive)', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    // Upstream down → resolves to the transient page; deterministic, no success
+    // mock needed. The point under test is the STREAMING wrapper, not the answer.
+    globalThis.fetch = vi.fn(
+      async () => new Response('upstream down', { status: 503 }),
+    ) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/r/GNOME%2Fgtk/c/6a16319133d3'),
+      );
+      // Streamed responses commit 200 before the outcome is known.
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('text/html');
+      const body = await res.text();
+      // (1) the instant shell is sent first
+      expect(body).toContain('data-lookup-shell');
+      expect(body).toContain('Looking up');
+      // (2) progressive append: a style hides the shell, no document.write
+      expect(body).toContain('[data-lookup-shell]{display:none}');
+      expect(body).not.toContain('document.write');
+      // (3) the resolved (transient) page is appended into the same document
+      expect(body).toContain('gitlab.gnome.org');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 describe('referer attribution (blob11)', () => {
   it('records the referring host on a request so traffic is attributable', async () => {
     const points: { blobs?: string[] }[] = [];

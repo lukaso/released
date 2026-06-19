@@ -18,7 +18,7 @@ import type { Context } from 'hono';
 import { raw } from 'hono/html';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
 import { isUnfurlBot } from '../auth.js';
-import { makeWorkerCache } from '../cache.js';
+import { type WorkerCache, makeWorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
 import { commitPermalinkPath } from '../paths.js';
 import { makeProvider } from '../provider.js';
@@ -95,9 +95,21 @@ export async function resultRoute(c: Context): Promise<Response> {
     return renderError(err, { pubBase, ogBase, nonce, repo, sha });
   }
 
-  let result: LookupResult;
-  let stale = false;
-  let staleAsOf: number | null = null;
+  const ctx: RenderCtx = {
+    req,
+    cache,
+    key: k,
+    parsed,
+    client,
+    strict,
+    includePrereleases,
+    pubBase,
+    ogBase,
+    nonce,
+    repo,
+    sha,
+    displayName,
+  };
 
   // Slackbot/unfurl handling: bots never trigger a compute — serve a cached
   // answer (stale is fine) or a short-TTL deferred card so they retry.
@@ -105,54 +117,112 @@ export async function resultRoute(c: Context): Promise<Response> {
     const cached = await cache.get<LookupResult>(k);
     if (!cached) return renderDeferred({ pubBase, ogBase, nonce, repo, sha });
     setTrack(req, { cache: 'hit' });
-    result = cached;
-  } else {
-    const resolved = await resolveLookup({
-      cache,
-      key: k,
-      load: () => findRelease(parsed, { client, strict, includePrereleases }),
-    });
-    if (resolved.status === 'not_yet') {
-      setTrack(req, { cache: 'miss', outcome: 'not_yet' });
-      return renderNotYetReleased(resolved.error, {
-        pubBase,
-        ogBase,
-        nonce,
-        repo,
-        sha,
-        strict,
-        includePrereleases,
-      });
-    }
-    if (resolved.status === 'transient') {
-      setTrack(req, {
-        cache: 'miss',
-        outcome: 'error',
-        errorType: resolved.kind,
-        upstreamStatus: resolved.upstreamStatus,
-      });
-      // Anubis blocks workerd specifically; "Try again" never works. Surface
-      // the CLI command (Node has a different TLS fingerprint) instead.
-      if (resolved.anubis) {
-        return renderAnubis({ pubBase, ogBase, nonce, repo, sha, provider: client });
-      }
-      return renderTransient({ pubBase, ogBase, nonce, repo, sha });
-    }
-    if (resolved.status === 'error') {
-      setTrack(req, {
-        cache: 'miss',
-        outcome: 'error',
-        errorType: (resolved.error as Error)?.name,
-        upstreamStatus: upstreamStatusOf(resolved.error),
-      });
-      return renderError(resolved.error, { pubBase, ogBase, nonce, repo, sha });
-    }
-    setTrack(req, { cache: resolved.cached ? 'hit' : 'miss' });
-    result = resolved.result;
-    stale = resolved.stale;
-    staleAsOf = resolved.staleAsOf;
+    return renderSuccessResponse(cached, false, null, ctx);
   }
 
+  // Fast path: a terminal (released) answer is cached → render synchronously.
+  // Instant, correct HTTP status, full SSR — best for crawlers and repeat hits,
+  // and the common case once a page is warm.
+  const cachedTerminal = await cache.get<LookupResult>(k);
+  if (cachedTerminal?.firstRelease) {
+    setTrack(req, { cache: 'hit' });
+    return renderSuccessResponse(cachedTerminal, false, null, ctx);
+  }
+
+  // Cold path: nothing terminal cached, so the compute can take several seconds
+  // (cache-miss p95 ~9s). Stream an instant "Looking up…" shell now, then swap
+  // in the real page when it's ready — no blank wait on shared links, the
+  // example, badge click-throughs, or the homepage form (which routes here).
+  return streamLookup(ctx);
+}
+
+// Everything resultRoute needs to resolve + render an answer, threaded through
+// the sync and streaming paths so they render identically.
+type RenderCtx = {
+  req: Request;
+  cache: WorkerCache;
+  key: string;
+  parsed: LookupInput;
+  client: Provider;
+  strict: boolean;
+  includePrereleases: boolean;
+  pubBase: string;
+  ogBase: string;
+  nonce: string;
+  repo: RepoRef;
+  sha: string;
+  displayName: string;
+};
+
+/** Resolve the lookup (stale-if-error) and render the matching Response. Used by
+ *  the streaming path; the sync fast path calls renderSuccessResponse directly. */
+async function resolveAndRenderResponse(ctx: RenderCtx): Promise<Response> {
+  const {
+    req,
+    cache,
+    key,
+    parsed,
+    client,
+    strict,
+    includePrereleases,
+    pubBase,
+    ogBase,
+    nonce,
+    repo,
+    sha,
+  } = ctx;
+  const resolved = await resolveLookup({
+    cache,
+    key,
+    load: () => findRelease(parsed, { client, strict, includePrereleases }),
+  });
+  if (resolved.status === 'not_yet') {
+    setTrack(req, { cache: 'miss', outcome: 'not_yet' });
+    return renderNotYetReleased(resolved.error, {
+      pubBase,
+      ogBase,
+      nonce,
+      repo,
+      sha,
+      strict,
+      includePrereleases,
+    });
+  }
+  if (resolved.status === 'transient') {
+    setTrack(req, {
+      cache: 'miss',
+      outcome: 'error',
+      errorType: resolved.kind,
+      upstreamStatus: resolved.upstreamStatus,
+    });
+    // Anubis blocks workerd specifically; "Try again" never works. Surface the
+    // CLI command (Node has a different TLS fingerprint) instead.
+    if (resolved.anubis) {
+      return renderAnubis({ pubBase, ogBase, nonce, repo, sha, provider: client });
+    }
+    return renderTransient({ pubBase, ogBase, nonce, repo, sha });
+  }
+  if (resolved.status === 'error') {
+    setTrack(req, {
+      cache: 'miss',
+      outcome: 'error',
+      errorType: (resolved.error as Error)?.name,
+      upstreamStatus: upstreamStatusOf(resolved.error),
+    });
+    return renderError(resolved.error, { pubBase, ogBase, nonce, repo, sha });
+  }
+  setTrack(req, { cache: resolved.cached ? 'hit' : 'miss' });
+  return renderSuccessResponse(resolved.result, resolved.stale, resolved.staleAsOf, ctx);
+}
+
+/** Render the resolved-answer page (the input form + the result card). */
+function renderSuccessResponse(
+  result: LookupResult,
+  stale: boolean,
+  staleAsOf: number | null,
+  ctx: RenderCtx,
+): Response {
+  const { req, pubBase, ogBase, nonce, repo, displayName } = ctx;
   setTrack(req, {
     outcome: result.partial ? 'partial' : result.firstRelease ? 'released' : 'not_yet',
   });
@@ -214,6 +284,108 @@ export async function resultRoute(c: Context): Promise<Response> {
     headers: {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'public, max-age=300',
+      ...securityHeaders(nonce, ogBase),
+    },
+  });
+}
+
+/** The instant "Looking up…" shell streamed first on a cold lookup. */
+// Marker Layout always emits; used to splice the shell open + the resolved
+// page's inner into one continuous streamed document (see streamLookup).
+const WRAP_OPEN = '<div class="wrap">';
+const WRAP_CLOSE_SCRIPT = '</div><script';
+
+/** The streamed-FIRST chunk: a normal, in-progress HTML document up to (but not
+ *  closing) the "Looking up…" shell. Because the document is left OPEN, the
+ *  browser renders it incrementally and the shell text paints immediately. (The
+ *  earlier document.write approach sent a *complete* doc then trailing bytes,
+ *  which breaks incremental paint — the card showed but its text didn't.) */
+function shellOpenChunk(ctx: RenderCtx): string {
+  const { pubBase, ogBase, nonce, repo, sha } = ctx;
+  const displayName = repo.projectPath;
+  const permalink = `${pubBase}${commitPermalinkPath(repo, sha)}`;
+  const page = (
+    <Layout
+      title={`looking up — ${displayName}`}
+      nonce={nonce}
+      ogBaseUrl={ogBase}
+      publicUrl={permalink}
+      ogFallbackTitle={`released — looking up ${displayName}@${sha}`}
+    >
+      {/* Whole shell wrapped so one style can hide it when the answer arrives. */}
+      <div data-lookup-shell>
+        <Nav />
+        <main>
+          <div class="answer">
+            <div class="answer-hero">
+              <div class="answer-label">
+                Looking up
+                <span class="dots" />
+              </div>
+              <div class="answer-version">
+                <span class="v" style="font-size: 28px;">
+                  {displayName}@{sha.slice(0, 7)}
+                </span>
+              </div>
+              <div class="answer-date">Checking every release for this commit…</div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </Layout>
+  );
+  // Everything up to the wrap's closing </div><script…> — i.e. leave the
+  // document open right after the shell block.
+  return `<!DOCTYPE html>${page.toString()}`.split(WRAP_CLOSE_SCRIPT)[0] ?? '';
+}
+
+/** Progressive HTML streaming: flush the shell immediately (open document), then
+ *  once the lookup resolves append a style that hides the shell + the resolved
+ *  page's inner markup + the document close. One continuous document the browser
+ *  paints incrementally — no document.write, no reload, no flash. The appended
+ *  result payload + shared client JS run as normal nonce'd inline scripts, so
+ *  the strict CSP is satisfied. */
+function streamLookup(ctx: RenderCtx): Response {
+  const { nonce, ogBase, pubBase, repo, sha } = ctx;
+  // Deployed Workers stream compressed responses fine; `wrangler dev` (miniflare)
+  // compress-buffers them so the shell never paints locally (workers-sdk
+  // #6577/#8004). Opt this one response out of compression ONLY in local dev, so
+  // prod keeps full gzip + native streaming and we can still dogfood the shell.
+  const isLocalDev = /^(localhost|127\.0\.0\.1|\[::1\])(:|$)/.test(new URL(ctx.req.url).host);
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(enc.encode(shellOpenChunk(ctx)));
+      let fullHtml: string;
+      try {
+        const resp = await resolveAndRenderResponse(ctx);
+        fullHtml = await resp.text();
+      } catch (err) {
+        const resp = renderError(err, { pubBase, ogBase, nonce, repo, sha });
+        fullHtml = await resp.text();
+      }
+      // The resolved page's inner = everything after Layout's wrap open. That
+      // tail also carries the wrap close + the client-JS script + </body></html>,
+      // so appending it completes the document we left open above.
+      const inner = fullHtml.split(WRAP_OPEN)[1];
+      const tail = inner
+        ? `<style>[data-lookup-shell]{display:none}</style>${inner}`
+        : // Defensive: marker missing → close the doc and reload to the answer.
+          `<script nonce="${nonce}">location.reload()</script></div></body></html>`;
+      controller.enqueue(enc.encode(tail));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      // Dynamic shell+answer page; the real answer is warmed into the Worker
+      // cache, so the NEXT load is a fast synchronous hit.
+      'cache-control': 'no-store',
+      // Dev-only: disable compression so wrangler dev streams the shell instead
+      // of buffering it (see isLocalDev above). Omitted in prod, where Cloudflare
+      // compresses AND streams natively.
+      ...(isLocalDev ? { 'content-encoding': 'identity' } : {}),
       ...securityHeaders(nonce, ogBase),
     },
   });

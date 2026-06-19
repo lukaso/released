@@ -112,6 +112,12 @@ form[data-loading-form].loading .searchbox input { color: var(--text-2); }
 
 .answer { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
 .answer.example { background: var(--example-tint); border-style: dashed; border-color: var(--border-bright); }
+/* Streaming "Looking up…" shell: stay invisible for the first 500ms so a FAST
+   cold lookup (most resolve sub-second) swaps straight to the answer with no
+   distracting grey flash. Only a genuinely slow lookup keeps the shell on
+   screen long enough to reveal it. */
+[data-lookup-shell] { opacity: 0; animation: shell-reveal .25s ease-out .5s forwards; }
+@keyframes shell-reveal { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .answer-hero { padding: 22px 22px 20px; }
 .answer-label {
   display: flex; align-items: center; gap: 7px;
