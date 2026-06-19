@@ -348,14 +348,15 @@ describe('web Worker — basic routing', () => {
   });
 });
 
-// Issue #1: nav + footer linked to /how-it-works but no route existed → every
-// click 404'd. Cheapest fix: redirect to the README's Architecture anchor,
-// where the content already lives.
-describe('/how-it-works redirect (issue #1)', () => {
-  it('redirects to the GitHub README Architecture anchor', async () => {
+// Issue #1: nav + footer linked to /how-it-works but no route existed. It was a
+// 301 to the README; now it's a real, indexable content page (an SEO usage-loop
+// entry point). Full coverage lives in seo.test.ts; this just locks in that it
+// is no longer a redirect.
+describe('/how-it-works is a content page (no longer a redirect)', () => {
+  it('serves a 200 HTML page, not a 301', async () => {
     const res = await app.fetch(new Request('https://released.example/how-it-works'));
-    expect(res.status).toBe(301);
-    expect(res.headers.get('location')).toBe('https://github.com/lukaso/released#architecture');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
   });
 });
 

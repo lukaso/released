@@ -23,11 +23,13 @@ import { commitPermalinkPath, prPermalinkPath } from './paths.js';
 import { badgeRoute } from './routes/badge.js';
 import { eventRoute } from './routes/event.js';
 import { homeRoute } from './routes/home.js';
+import { howItWorksRoute } from './routes/how-it-works.js';
 import { internalResultRoute } from './routes/internal.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
 import { lookupRoute } from './routes/lookup.js';
 import { prRoute } from './routes/pr.js';
 import { resultRoute } from './routes/result.js';
+import { robotsRoute, sitemapRoute } from './routes/seo.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -131,10 +133,14 @@ app.post('/api/event', eventRoute);
 
 app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
 
-// /how-it-works lived in the nav + footer of every page (issue #1) but never
-// had a route. The content already exists as the README's Architecture section;
-// rather than duplicate it, redirect there permanently.
-app.get('/how-it-works', (c) => c.redirect('https://github.com/lukaso/released#architecture', 301));
+// /how-it-works is a real, indexable content page (was a 301 to the README).
+// It's an SEO usage-loop entry point: targets "which release contains a commit"
+// and pre-answers "why not git describe?". See routes/how-it-works.tsx.
+app.get('/how-it-works', howItWorksRoute);
+
+// Crawl surface for the usage loop.
+app.get('/robots.txt', robotsRoute);
+app.get('/sitemap.xml', sitemapRoute);
 
 app.get('/healthz', (c) => c.text('ok'));
 

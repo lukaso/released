@@ -7,6 +7,10 @@ import { STYLES } from './styles.js';
 
 export type LayoutProps = {
   title: string;
+  /** Optional <meta name="description"> for search snippets. Omitted on pages
+   *  where a generic description would hurt more than help (e.g. result pages
+   *  carry their own OG description already). */
+  description?: string;
   /** Per-response nonce for CSP `script-src 'self' 'nonce-...'`. */
   nonce: string;
   ogBaseUrl: string;
@@ -24,6 +28,7 @@ export function Layout(props: LayoutProps) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{props.title}</title>
+        {props.description && <meta name="description" content={props.description} />}
         {/* Geist Sans + Mono are self-hosted under /fonts/ (Workers Assets).
             No googleapis/gstatic preconnects — visitor IPs stay on our edge. */}
         <link

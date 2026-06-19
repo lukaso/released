@@ -1,20 +1,65 @@
 # released
 
-Find the first release containing a git commit.
+**Is your commit shipped?** Paste a commit, SHA, or merged PR/MR — get back the
+first release tag that contains it.
 
-Paste a commit SHA, a merged PR/MR number, or a commit URL — get back the
-first release tag that contains it, plus a copy-pasteable permalink for Slack,
-PR/MR comments, or just a plain link.
+[![npm](https://img.shields.io/npm/v/git-released?label=git-released)](https://www.npmjs.com/package/git-released)
+[![CI](https://github.com/lukaso/released/actions/workflows/ci.yml/badge.svg)](https://github.com/lukaso/released/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+A bug was "fixed in commit `a1b2c3d`" — but which *release* actually contains it?
+Do you already have the fix, or do you wait? Git can answer this
+(`git describe --contains`) but only if you've cloned the repo with all its tags,
+the output is cryptic (`v1.2.3~4^2`), and it can't take a PR number. `released`
+takes a commit URL, a bare SHA, or a merged PR/MR — for any public **GitHub** repo
+or a curated set of **GitLab** hosts (GNOME, KDE, Debian, freedesktop, Kitware) —
+and gives you a clean answer, a shareable link, and an auto-updating badge. No
+clone needed. [How it works ›](https://released.blabberate.com/how-it-works)
+
+### Try it in 30 seconds
+
+```bash
+npx git-released github.com/honojs/hono/commit/f82aba8
+# → first released in v4.12.11
+```
+
+- **Web**: <https://released.blabberate.com> — paste a commit, SHA, or PR/MR.
+- **CLI**: `npx git-released <commit-url | owner/repo sha | PR/MR>` (published on
+  npm as `git-released` — `released` was taken in 2014). The package installs both
+  the `released` and `git-released` bins; `git released <sha>` works inside a repo.
+
+### Embed an auto-updating badge
+
+Drop this in a PR description or a README. It shows "not yet released" while the
+commit is unshipped and **flips to the version tag automatically** once a release
+contains it — no manual updates:
+
+```md
+[![released](https://released.blabberate.com/r/<owner>/<repo>/c/<sha>/badge.svg)](https://released.blabberate.com/r/<owner>/<repo>/c/<sha>)
+```
+
+Variants: PRs use `/p/<owner>/<repo>/<number>/badge.svg`; GitLab hosts use
+`/h/<host>/r/<projectPath>/c/<sha>/badge.svg` (and `/p/…` for MRs). The easiest
+way to get the exact snippet is to run a lookup on the web app and click
+**Copy → as Badge**.
+
+### released vs `git describe --contains`
+
+| | `git describe --contains` | `released` |
+|---|---|---|
+| Needs a local clone (with tags) | yes | no |
+| Works on any repo from a URL | no | yes |
+| Takes a PR / MR number | no | yes |
+| Output | `v1.2.3~4^2` | `first release: v1.2.3` + also-in |
+| Shareable link + auto-updating badge | no | yes |
+| Hosted GitLab (GNOME/KDE/Debian/…) | local only | yes |
 
 **Supported hosts:** GitHub plus a curated list of GitLab instances (gitlab.com,
 gitlab.gnome.org, gitlab.freedesktop.org, salsa.debian.org, invent.kde.org,
 gitlab.kitware.com). Self-hosted GitLab instances can be added via
 `EXTRA_GITLAB_HOSTS` env var (Worker) or `--gitlab-host` flag (CLI).
 
-- **Web**: <https://released.blabberate.com>
-- **CLI** (published on npm as `git-released` — `released` was taken):
-  - `npx git-released github.com/honojs/hono/commit/f82aba8` → first released in `v4.12.11`
-  - or `git released <sha>` for the current repo (uses the `git-released` bin)
+> If `released` saves you a clone, a ⭐ on the repo helps others find it.
 
 ## Packages
 

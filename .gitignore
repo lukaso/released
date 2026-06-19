@@ -14,3 +14,4 @@ coverage
 .claude/tasks/
 .claude/settings.local.json
 .gstack/
+internal/
