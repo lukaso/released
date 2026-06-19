@@ -38,7 +38,7 @@
     "dev": "tsx src/cli.ts"
   },
   "dependencies": {
-    "cac": "^6.7.14",
+    "cac": "^7.0.0",
     "micromark": "^4.0.1"
   },
   "devDependencies": {
