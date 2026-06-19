@@ -51,15 +51,20 @@ type Fail = { fg: string; bg?: string; ratio?: number; summary?: string };
 describe.runIf(RUN)('a11y — contrast (chromium + axe)', () => {
   let browser: Browser;
   let context: BrowserContext;
+  // Chromium launch/teardown can legitimately exceed vitest's default 10s hook
+  // timeout under load (e.g. right after the rest of the suite), which flaked
+  // this file's afterAll intermittently. Give the browser lifecycle hooks plenty
+  // of room — they're not asserting anything, just bringing the browser up/down.
+  const BROWSER_HOOK_TIMEOUT_MS = 60_000;
   beforeAll(async () => {
     browser = await chromium.launch();
     // @axe-core/playwright requires a page from an explicit context.
     context = await browser.newContext();
-  });
+  }, BROWSER_HOOK_TIMEOUT_MS);
   afterAll(async () => {
     await context?.close();
     await browser?.close();
-  });
+  }, BROWSER_HOOK_TIMEOUT_MS);
 
   /** Run the color-contrast rule and return every failing node (full WCAG AA). */
   async function contrastFailures(html: string): Promise<Fail[]> {
