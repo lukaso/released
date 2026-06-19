@@ -132,6 +132,22 @@ const CLIENT_JS = `
       // Pin the preview to the format the user just copied.
       pinnedFmt = fmt;
       showPreview(fmt);
+      // Fire-and-forget analytics beacon: copying a badge/link is the seeding
+      // action we can't see server-side (no request otherwise). sendBeacon is
+      // non-blocking and survives navigation; same-origin only (CSP connect-src
+      // 'self'), and a non-safelisted JSON body means cross-site beacons are
+      // blocked by the browser. Records action + already-public host/repo only.
+      try {
+        if (navigator.sendBeacon && data.input && data.input.repo) {
+          var payload = JSON.stringify({
+            type: 'copy',
+            format: fmt,
+            host: data.input.repo.host,
+            repo: data.input.repo.projectPath
+          });
+          navigator.sendBeacon('/api/event', new Blob([payload], { type: 'application/json' }));
+        }
+      } catch (e) { /* analytics must never break the copy UX */ }
     });
   });
   // Host- AND kind-aware permalink path (mirrors permalinkPathForInput in

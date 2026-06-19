@@ -157,6 +157,34 @@ const SECTIONS = [
           GROUP BY host, repo ORDER BY fetches DESC LIMIT 25`,
   },
   {
+    // Copying a badge/link is the seeding action behind the viral loop — someone
+    // grabbing the snippet to embed on a repo. Written by POST /api/event
+    // (src/routes/event.ts); blob10 is the share format.
+    title: 'Copies by format (last 30d)',
+    sql: `SELECT blob10 AS format, sum(_sample_interval) AS n
+          FROM ${DATASET}
+          WHERE blob1 = 'copy' AND timestamp > NOW() - INTERVAL '30' DAY
+          GROUP BY format ORDER BY n DESC`,
+  },
+  {
+    title: 'Top copied repos (last 30d)',
+    sql: `SELECT blob2 AS host, blob3 AS repo, blob10 AS format,
+                 sum(_sample_interval) AS copies
+          FROM ${DATASET}
+          WHERE blob1 = 'copy' AND blob3 != '' AND timestamp > NOW() - INTERVAL '30' DAY
+          GROUP BY host, repo, format ORDER BY copies DESC LIMIT 25`,
+  },
+  {
+    // UI searches ride the `redirect` event (the /lookup form round-trips us).
+    // A failed parse is tagged outcome=invalid; everything else resolved.
+    title: 'Searches — valid vs invalid (last 7d)',
+    sql: `SELECT if(blob4 = 'invalid', 'invalid', 'valid') AS search,
+                 sum(_sample_interval) AS n
+          FROM ${DATASET}
+          WHERE blob1 = 'redirect' AND timestamp > NOW() - INTERVAL '7' DAY
+          GROUP BY search ORDER BY n DESC`,
+  },
+  {
     title: 'Badge cache-hit rate (last 7d)',
     sql: `SELECT blob5 AS cache, sum(_sample_interval) AS n
           FROM ${DATASET}

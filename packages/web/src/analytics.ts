@@ -18,6 +18,7 @@
 //   blob7   audience  human|bot (unfurl)
 //   blob8   errorType error class name, when outcome=error
 //   blob9   country   request.cf.country
+//   blob10  format    badge|slack|link — what was copied (copy events only)
 //   double1 status         HTTP status the worker returned to the client
 //   double2 latencyMs       end-to-end request time
 //   double3 upstreamStatus  provider HTTP status when outcome=error (5xx/429/…),
@@ -32,7 +33,16 @@
 import type { AnalyticsEngineDataPoint, Env } from './env.js';
 
 export type AnalyticsEvent = {
-  event: 'home' | 'redirect' | 'result' | 'pr' | 'badge' | 'api_lookup' | 'api_bulk' | 'other';
+  event:
+    | 'home'
+    | 'redirect'
+    | 'result'
+    | 'pr'
+    | 'badge'
+    | 'api_lookup'
+    | 'api_bulk'
+    | 'copy'
+    | 'other';
   host?: string;
   /** projectPath, e.g. facebook/react or GNOME/gimp. */
   repo?: string;
@@ -42,6 +52,9 @@ export type AnalyticsEvent = {
   audience?: 'human' | 'bot';
   errorType?: string;
   country?: string;
+  /** For copy events: which share format the visitor copied. Copying a badge is
+   *  the seeding action behind the badge → README → click-through loop. */
+  format?: 'badge' | 'slack' | 'link';
   status: number;
   latencyMs?: number;
   /** Provider HTTP status that caused an error outcome (e.g. gitlab.gnome.org 503).
@@ -77,6 +90,7 @@ export function toDataPoint(e: AnalyticsEvent): AnalyticsEngineDataPoint {
       e.audience ?? '',
       e.errorType ?? '',
       e.country ?? '',
+      e.format ?? '',
     ],
     doubles: [e.status, e.latencyMs ?? 0, e.upstreamStatus ?? 0],
   };

@@ -77,8 +77,25 @@ describe('toDataPoint — schema mapping', () => {
       'human', // 7 audience
       '', // 8 errorType (unset → empty)
       'US', // 9 country
+      '', // 10 format (unset → empty; only copy events set it)
     ]);
     expect(dp.doubles).toEqual([200, 12, 0]); // upstreamStatus unset → 0
+  });
+
+  it('maps a copy event with its format to blob10 (the seeding signal)', () => {
+    const dp = toDataPoint({
+      event: 'copy',
+      host: 'github.com',
+      repo: 'facebook/zstd',
+      format: 'badge',
+      audience: 'human',
+      country: 'US',
+      status: 204,
+    });
+    expect(dp.blobs?.[0]).toBe('copy'); // event
+    expect(dp.blobs?.[9]).toBe('badge'); // format → blob10
+    // Indexed per-repo so "which repo's badge got copied" stays sampling-fair.
+    expect(dp.indexes).toEqual(['github.com/facebook/zstd']);
   });
 
   it('records the upstream provider status as double3 (for error diagnosis)', () => {
@@ -202,5 +219,35 @@ describe('middleware wiring (app.fetch with a spy ANALYTICS binding)', () => {
     const { env, points } = spyEnv();
     await app.fetch(new Request('https://released.example/healthz'), env);
     expect(points).toHaveLength(0);
+  });
+
+  it('enriches a UI search (/lookup) with host+repo+kind on a valid query', async () => {
+    const { default: app } = await import('../src/index.js');
+    const { env, points } = spyEnv();
+    const res = await app.fetch(
+      new Request(
+        `https://released.example/lookup?q=${encodeURIComponent('facebook/react@abc1234')}`,
+      ),
+      env,
+    );
+    expect(res.status).toBe(302); // redirect to the canonical permalink
+    expect(points).toHaveLength(1);
+    expect(points[0]?.blobs?.[0]).toBe('redirect'); // event
+    expect(points[0]?.blobs?.[1]).toBe('github.com'); // host
+    expect(points[0]?.blobs?.[2]).toBe('facebook/react'); // repo
+    expect(points[0]?.blobs?.[5]).toBe('commit'); // kind
+  });
+
+  it('marks an invalid UI search as outcome=invalid (failed-search funnel)', async () => {
+    const { default: app } = await import('../src/index.js');
+    const { env, points } = spyEnv();
+    const res = await app.fetch(
+      new Request(`https://released.example/lookup?q=${encodeURIComponent('not a real ref')}`),
+      env,
+    );
+    expect(res.status).toBe(302); // bounces back to /?bad=…
+    expect(points).toHaveLength(1);
+    expect(points[0]?.blobs?.[0]).toBe('redirect'); // event
+    expect(points[0]?.blobs?.[3]).toBe('invalid'); // outcome
   });
 });

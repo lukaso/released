@@ -15,12 +15,13 @@
 
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
-import { eventForPath, takeTrack, track } from './analytics.js';
+import { eventForPath, setTrack, takeTrack, track } from './analytics.js';
 import { isUnfurlBot } from './auth.js';
 import { type Env, publicBaseUrl } from './env.js';
 import { recognizeOwnUrl } from './own-url.js';
 import { commitPermalinkPath, prPermalinkPath } from './paths.js';
 import { badgeRoute } from './routes/badge.js';
+import { eventRoute } from './routes/event.js';
 import { homeRoute } from './routes/home.js';
 import { internalResultRoute } from './routes/internal.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
@@ -33,8 +34,9 @@ const app = new Hono<{ Bindings: Env }>();
 // Usage tracking: one Analytics Engine data point per request. Routes enrich
 // the event (host/repo/cache/outcome) via setTrack(); we merge that here, add
 // request-derived fields, and write once. Analytics must never break a response,
-// so the whole write is best-effort. Skips the liveness probe and the internal
-// service-binding calls (web-og → web) which aren't user traffic.
+// so the whole write is best-effort. Skips the liveness probe, the internal
+// service-binding calls (web-og → web), and the /api/event beacon (which writes
+// its OWN precise data point — logging it here too would double-count it).
 app.use('*', async (c, next) => {
   const start = Date.now();
   try {
@@ -42,7 +44,7 @@ app.use('*', async (c, next) => {
   } finally {
     try {
       const path = c.req.path;
-      if (path !== '/healthz' && !path.startsWith('/internal/')) {
+      if (path !== '/healthz' && path !== '/api/event' && !path.startsWith('/internal/')) {
         const req = c.req.raw;
         const enrich = takeTrack(req);
         const cf = (req as Request & { cf?: { country?: string } }).cf;
@@ -85,6 +87,10 @@ app.get('/lookup', (c) => {
   if (own) return c.redirect(own, 302);
   try {
     const p = parseInput(q);
+    // Enrich the existing `redirect` event so a UI search is a measurable funnel:
+    // which hosts/repos people search for (valid) vs how often parsing fails
+    // (outcome=invalid, below). No extra request — the form already round-trips us.
+    setTrack(req, { host: p.repo.host, repo: p.repo.projectPath, kind: p.kind });
     if (p.kind === 'pr') {
       return c.redirect(prPermalinkPath(p.repo, p.number), 302);
     }
@@ -97,6 +103,7 @@ app.get('/lookup', (c) => {
     // Bounce back to the form with the bad query AND the error reason preserved
     // so the homepage can surface a tailored message.
     const reason = (err as { kind?: string })?.kind ?? 'invalid';
+    setTrack(req, { outcome: 'invalid', errorType: reason });
     return c.redirect(`/?bad=${encodeURIComponent(q)}&reason=${encodeURIComponent(reason)}`, 302);
   }
 });
@@ -117,6 +124,10 @@ app.get('/h/:host/p/:projectPath/:number/badge.svg', badgeRoute);
 
 app.post('/api/lookup', lookupRoute);
 app.post('/api/lookup-bulk', lookupBulkRoute);
+
+// Client-side interaction beacon (clipboard copies). Same-origin gated; writes
+// its own Analytics Engine point and is skipped by the request logger above.
+app.post('/api/event', eventRoute);
 
 app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
 
