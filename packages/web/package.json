@@ -18,13 +18,13 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.1",
-    "@cloudflare/workers-types": "^4.20241218.0",
+    "@cloudflare/workers-types": "^4.20260619.1",
     "@types/jsdom": "^21.1.7",
-    "axe-core": "^4.10.2",
-    "jsdom": "^25.0.1",
-    "playwright": "^1.49.1",
-    "typescript": "^5.7.2",
-    "vitest": "^3.2.6",
-    "wrangler": "^4.90.1"
+    "axe-core": "^4.12.1",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.61.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.103.0"
   }
 }
