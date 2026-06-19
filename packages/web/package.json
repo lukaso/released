@@ -12,7 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.3.6",
+    "@cloudflare/containers": "^0.3.7",
     "@released/core": "workspace:*",
     "hono": "^4.12.25"
   },
