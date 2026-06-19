@@ -15,7 +15,7 @@
 
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
-import { eventForPath, setTrack, takeTrack, track } from './analytics.js';
+import { eventForPath, refererHost, setTrack, takeTrack, track } from './analytics.js';
 import { isUnfurlBot } from './auth.js';
 import { type Env, publicBaseUrl } from './env.js';
 import { recognizeOwnUrl } from './own-url.js';
@@ -29,7 +29,7 @@ import { lookupBulkRoute } from './routes/lookup-bulk.js';
 import { lookupRoute } from './routes/lookup.js';
 import { prRoute } from './routes/pr.js';
 import { resultRoute } from './routes/result.js';
-import { robotsRoute, sitemapRoute } from './routes/seo.js';
+import { llmsTxtRoute, robotsRoute, sitemapRoute } from './routes/seo.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -61,6 +61,7 @@ app.use('*', async (c, next) => {
           upstreamStatus: enrich.upstreamStatus,
           audience: isUnfurlBot(req) ? 'bot' : 'human',
           country: typeof cf?.country === 'string' ? cf.country : undefined,
+          referer: refererHost(req.headers.get('referer')),
           status: c.res.status,
           latencyMs: Date.now() - start,
         });
@@ -141,6 +142,8 @@ app.get('/how-it-works', howItWorksRoute);
 // Crawl surface for the usage loop.
 app.get('/robots.txt', robotsRoute);
 app.get('/sitemap.xml', sitemapRoute);
+// Agent/LLM discoverability (llmstxt.org convention).
+app.get('/llms.txt', llmsTxtRoute);
 
 app.get('/healthz', (c) => c.text('ok'));
 

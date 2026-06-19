@@ -34,6 +34,7 @@ import {
 import {
   type AnalyticsEvent,
   eventForPath,
+  refererHost,
   toDataPoint,
   track,
   upstreamStatusOf,
@@ -78,8 +79,20 @@ describe('toDataPoint — schema mapping', () => {
       '', // 8 errorType (unset → empty)
       'US', // 9 country
       '', // 10 format (unset → empty; only copy events set it)
+      '', // 11 referer (unset → empty)
     ]);
     expect(dp.doubles).toEqual([200, 12, 0]); // upstreamStatus unset → 0
+  });
+
+  it('maps the referring host to blob11 (organic-vs-self attribution)', () => {
+    const dp = toDataPoint({
+      event: 'result',
+      host: 'github.com',
+      repo: 'facebook/react',
+      referer: 'news.ycombinator.com',
+      status: 200,
+    });
+    expect(dp.blobs?.[10]).toBe('news.ycombinator.com'); // referer → blob11
   });
 
   it('maps a copy event with its format to blob10 (the seeding signal)', () => {
@@ -127,6 +140,22 @@ describe('toDataPoint — schema mapping', () => {
       status: 200,
     });
     expect((dp.indexes?.[0] ?? '').length).toBeLessThanOrEqual(96);
+  });
+});
+
+describe('refererHost — reduce a Referer header to a privacy-safe hostname', () => {
+  it('extracts only the hostname (no path, no query)', () => {
+    expect(refererHost('https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/1?tab=x')).toBe(
+      'gitlab.gnome.org',
+    );
+    expect(refererHost('https://www.google.com/search?q=foo')).toBe('www.google.com');
+  });
+
+  it('returns empty for missing / blank / unparseable referers', () => {
+    expect(refererHost(null)).toBe('');
+    expect(refererHost(undefined)).toBe('');
+    expect(refererHost('')).toBe('');
+    expect(refererHost('not a url')).toBe('');
   });
 });
 

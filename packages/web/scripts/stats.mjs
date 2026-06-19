@@ -210,6 +210,19 @@ const SECTIONS = [
           GROUP BY host, error, upstream_status ORDER BY n DESC`,
   },
   {
+    // blob11 is the referring host (hostname only). The honest read on
+    // organic-vs-self: a search engine / news.ycombinator.com / reddit referer
+    // is organic discovery; gitlab.gnome.org etc. is someone viewing a page
+    // where a link/badge lives; '' (excluded here) is direct / CLI / a proxy
+    // that stripped the referer. Partial signal — embedded badge images are
+    // often proxied — but result-page + search/HN referers come through clean.
+    title: 'Referrers — where traffic comes from (last 30d)',
+    sql: `SELECT blob11 AS referer, sum(_sample_interval) AS n
+          FROM ${DATASET}
+          WHERE blob11 != '' AND timestamp > NOW() - INTERVAL '30' DAY
+          GROUP BY referer ORDER BY n DESC LIMIT 25`,
+  },
+  {
     title: 'Audience — human vs unfurl bot (last 7d)',
     sql: `SELECT blob7 AS audience, sum(_sample_interval) AS n
           FROM ${DATASET}

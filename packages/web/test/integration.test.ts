@@ -1195,6 +1195,25 @@ describe('containing tag outside the fetched window (pagination fix)', () => {
   });
 });
 
+describe('referer attribution (blob11)', () => {
+  it('records the referring host on a request so traffic is attributable', async () => {
+    const points: { blobs?: string[] }[] = [];
+    const env = {
+      ANALYTICS: { writeDataPoint: (dp: (typeof points)[number]) => points.push(dp) },
+    } as unknown as Parameters<typeof app.fetch>[1];
+    const res = await app.fetch(
+      new Request('https://released.example/', {
+        headers: { referer: 'https://news.ycombinator.com/item?id=1' },
+      }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(points).toHaveLength(1);
+    // blob11 (index 10) is the referring host — hostname only, no path/query.
+    expect(points[0]?.blobs?.[10]).toBe('news.ycombinator.com');
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;

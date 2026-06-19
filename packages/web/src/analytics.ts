@@ -19,6 +19,10 @@
 //   blob8   errorType error class name, when outcome=error
 //   blob9   country   request.cf.country
 //   blob10  format    badge|slack|link — what was copied (copy events only)
+//   blob11  referer   referring HOSTNAME only (e.g. news.ycombinator.com,
+//                     gitlab.gnome.org, www.google.com), '' when absent. No
+//                     path/query — keeps the privacy posture while making
+//                     traffic attributable (organic vs self-seeded vs direct).
 //   double1 status         HTTP status the worker returned to the client
 //   double2 latencyMs       end-to-end request time
 //   double3 upstreamStatus  provider HTTP status when outcome=error (5xx/429/…),
@@ -55,6 +59,10 @@ export type AnalyticsEvent = {
   /** For copy events: which share format the visitor copied. Copying a badge is
    *  the seeding action behind the badge → README → click-through loop. */
   format?: 'badge' | 'slack' | 'link';
+  /** Referring HOSTNAME only (no path/query). Lets us tell where usage comes
+   *  from — a search engine / HN / Reddit (organic) vs a gitlab.gnome.org page
+   *  (a link/badge someone placed) vs '' (direct, CLI, or proxy-stripped). */
+  referer?: string;
   status: number;
   latencyMs?: number;
   /** Provider HTTP status that caused an error outcome (e.g. gitlab.gnome.org 503).
@@ -91,6 +99,7 @@ export function toDataPoint(e: AnalyticsEvent): AnalyticsEngineDataPoint {
       e.errorType ?? '',
       e.country ?? '',
       e.format ?? '',
+      e.referer ?? '',
     ],
     doubles: [e.status, e.latencyMs ?? 0, e.upstreamStatus ?? 0],
   };
@@ -115,6 +124,19 @@ export function takeTrack(req: Request): Partial<AnalyticsEvent> {
   const v = pending.get(req);
   pending.delete(req);
   return v ?? {};
+}
+
+/** Reduce a `Referer` header to a privacy-safe hostname for attribution.
+ *  Returns '' for missing/blank/unparseable values, and never includes the
+ *  path or query — we only want to know WHICH site sent the visitor, not what
+ *  they were reading there. */
+export function refererHost(referer: string | null | undefined): string {
+  if (!referer) return '';
+  try {
+    return new URL(referer).hostname;
+  } catch {
+    return '';
+  }
 }
 
 /** Derive the event name from the request path (the routes are deterministic). */

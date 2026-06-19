@@ -51,6 +51,22 @@ describe('sitemap.xml', () => {
   });
 });
 
+describe('llms.txt (agent/LLM discoverability)', () => {
+  it('serves a markdown brief that tells an agent what released does and how to call it', async () => {
+    const res = await app.fetch(new Request('https://released.example/llms.txt'));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    const body = await res.text();
+    // llms.txt convention: H1 name + a summary blockquote.
+    expect(body).toMatch(/^# released/m);
+    expect(body).toMatch(/^> /m);
+    // The concrete, agent-usable handles: the permalink shape, the CLI, source.
+    expect(body).toContain('/r/{owner}/{repo}/c/{sha}');
+    expect(body).toContain('npx git-released');
+    expect(body).toContain('github.com/lukaso/released');
+  });
+});
+
 describe('/how-it-works content page (replaces the old 301)', () => {
   it('serves an indexable HTML page, not a redirect', async () => {
     const res = await app.fetch(new Request('https://released.example/how-it-works'));
