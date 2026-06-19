@@ -31,6 +31,30 @@ Specifics that come up often:
   use them decoratively.
 - Primary CTA = `--white` background. One per surface.
 
+## Writing / voice
+
+Applies to all human-facing copy: README, web page text (home, `/how-it-works`,
+result cards, errors), blog and launch posts, release notes. Not code comments.
+
+Write like a developer wrote it quickly. Lead with the concrete thing. State the
+fact and skip the framing.
+
+Avoid these LLM tells (they are tedious to read):
+
+- Rhetorical section setups: "the question everyone eventually asks", "the part
+  that's easy to get wrong", "here's the thing".
+- Throat-clearing intros: "Is X annoying? Here's how Y fixes it." Just say what Y does.
+- Balanced antithetical parallelism: "Date picks the order; ancestry decides the
+  answer." Write it flat.
+- Filler adjectives: "surprisingly", "simply", "powerful", "seamless", "robust",
+  "comprehensive", "genuinely", "delightful".
+- Em dashes for dramatic pauses in copy. Use a period or a colon.
+- Headings that tease instead of describe. Prefer "Why it doesn't trust tag
+  dates" over "The part that's easy to get wrong".
+
+Quick test: if a sentence could open a blog post for any SaaS, cut it or rewrite
+it as a plain statement of fact.
+
 ## Tests
 
 ```bash

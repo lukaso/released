@@ -1,20 +1,19 @@
 # released
 
-**Is your commit shipped?** Paste a commit, SHA, or merged PR/MR — get back the
-first release tag that contains it.
+Find the first release tag that contains a git commit or merged PR/MR.
 
 [![npm](https://img.shields.io/npm/v/git-released?label=git-released)](https://www.npmjs.com/package/git-released)
 [![CI](https://github.com/lukaso/released/actions/workflows/ci.yml/badge.svg)](https://github.com/lukaso/released/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A bug was "fixed in commit `a1b2c3d`" — but which *release* actually contains it?
-Do you already have the fix, or do you wait? Git can answer this
-(`git describe --contains`) but only if you've cloned the repo with all its tags,
-the output is cryptic (`v1.2.3~4^2`), and it can't take a PR number. `released`
-takes a commit URL, a bare SHA, or a merged PR/MR — for any public **GitHub** repo
-or a curated set of **GitLab** hosts (GNOME, KDE, Debian, freedesktop, Kitware) —
-and gives you a clean answer, a shareable link, and an auto-updating badge. No
-clone needed. [How it works ›](https://released.blabberate.com/how-it-works)
+You have a commit SHA or a merged PR and you want the release it shipped in.
+`git describe --contains` answers that locally, but only against a cloned repo
+with every tag fetched, its output is `v1.2.3~4^2` instead of `v1.2.3`, and it
+won't take a PR number. `released` takes a commit URL, a bare SHA, or a PR/MR for
+any public **GitHub** repo or a curated set of **GitLab** hosts (gitlab.com,
+GNOME, KDE, Debian, freedesktop, Kitware) and returns the tag, a shareable link,
+and an auto-updating badge. No clone.
+[How it works](https://released.blabberate.com/how-it-works)
 
 ### Try it in 30 seconds
 
@@ -60,6 +59,29 @@ gitlab.kitware.com). Self-hosted GitLab instances can be added via
 `EXTRA_GITLAB_HOSTS` env var (Worker) or `--gitlab-host` flag (CLI).
 
 > If `released` saves you a clone, a ⭐ on the repo helps others find it.
+
+## Private repos
+
+The web app reads public repos only. For a private repo, use the CLI with a token
+that can read it:
+
+```bash
+# GitHub — classic PAT with `repo` scope, or a fine-grained token with Contents: read
+GITHUB_TOKEN=ghp_xxx npx git-released github.com/acme/app/commit/abc1234
+
+# GitLab — PAT with read_api scope
+GITLAB_TOKEN=glpat_xxx npx git-released https://gitlab.com/acme/app/-/commit/abc1234
+```
+
+Token resolution order:
+
+- **GitHub:** `--token <t>` → `GITHUB_TOKEN` / `GH_TOKEN` → `gh auth token`
+- **GitLab:** `--token <t>` → `GITLAB_TOKEN_<HOST>` (host uppercased, `.`/`-` → `_`,
+  e.g. `GITLAB_TOKEN_GITLAB_GNOME_ORG`) → `GITLAB_TOKEN` (gitlab.com only) →
+  `glab auth token`
+
+If you're already logged in with the `gh` or `glab` CLI, `released` picks up that
+token automatically and you don't need an env var.
 
 ## Packages
 
