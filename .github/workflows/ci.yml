@@ -20,7 +20,7 @@ jobs:
         node: [20, 22]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # pnpm version is read from package.json#packageManager — do not also
       # pass `version:` here, pnpm/action-setup errors on double-specification.
@@ -66,7 +66,7 @@ jobs:
     name: osv dependency scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v6
         with:
@@ -89,7 +89,7 @@ jobs:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -111,7 +111,7 @@ jobs:
     name: shell + workflow lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: shellcheck
         run: shellcheck scripts/*.sh .githooks/*
@@ -129,7 +129,7 @@ jobs:
     name: a11y contrast (chromium)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
 
