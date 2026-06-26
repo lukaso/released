@@ -35,7 +35,16 @@ fi
 # writes, versions deploy/upload — is refused.
 sub="${1:-}"
 case "$sub" in
-  deployments|tail|whoami)
+  tail|whoami)
+    ;;
+  deployments)
+    # `deployments` has carried a mutating `rollback` sub-form in older wrangler
+    # lines; permit only the read-only views (v4: list|status, v3: list|view) so
+    # the boundary doesn't silently widen if a future version reintroduces one.
+    case "${2:-}" in
+      list|status|view) ;;
+      *) echo "prod-wrangler.sh: refused 'deployments ${2:-}' — read-only wrapper allows only 'deployments list|status'." >&2; exit 2 ;;
+    esac
     ;;
   versions)
     # `versions` also carries mutating forms (deploy/upload/secret); permit only
@@ -46,11 +55,11 @@ case "$sub" in
     esac
     ;;
   "")
-    echo "prod-wrangler.sh: no subcommand. Read-only; allows: deployments, tail, versions list|view, whoami." >&2
+    echo "prod-wrangler.sh: no subcommand. Read-only; allows: deployments list|status, tail, versions list|view, whoami." >&2
     exit 2
     ;;
   *)
-    echo "prod-wrangler.sh: refused '$sub' — read-only wrapper. Allowed: deployments, tail, versions list|view, whoami." >&2
+    echo "prod-wrangler.sh: refused '$sub' — read-only wrapper. Allowed: deployments list|status, tail, versions list|view, whoami." >&2
     exit 2
     ;;
 esac
