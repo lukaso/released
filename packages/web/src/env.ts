@@ -41,6 +41,13 @@ export type Env = {
    *  an explicit empty string disables the relay. */
   ANUBIS_HOSTS?: string;
 
+  /** Cloudflare version-metadata binding: the deployed version's id, optional
+   *  tag, and deploy timestamp. Populated by the runtime on every deploy; absent
+   *  in `wrangler dev` and tests. Surfaced read-only at `GET /version` so the
+   *  maintaining loop can confirm which version is live. Configured in
+   *  wrangler.toml as `[version_metadata] binding = "CF_VERSION_METADATA"`. */
+  CF_VERSION_METADATA?: { id: string; tag?: string; timestamp?: string };
+
   /** Container binding (Durable Object) for the GitLab relay. Present only once
    *  the [[containers]] block in wrangler.toml is deployed; absent in tests and
    *  in `wrangler dev` without containers, in which case lookups go direct. */

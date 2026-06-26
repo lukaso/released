@@ -39,6 +39,13 @@ directory = "./public"
 ANUBIS_HOSTS = "gitlab.freedesktop.org,gitlab.gnome.org"
 # EXTRA_GITLAB_HOSTS = "git.example.com,gitlab.acme.net"
 
+# Version metadata: exposes the deployed version's id/tag/timestamp at runtime
+# (env.CF_VERSION_METADATA), surfaced read-only at GET /version so the
+# maintaining loop can confirm which version is live. Populated automatically on
+# every deploy; absent in `wrangler dev` and tests (the route degrades to nulls).
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 # Anubis-bypass relay container.
 # gitlab.freedesktop.org / gitlab.gnome.org sit behind Anubis (techaro.lol),
 # which fingerprints the caller's TLS/HTTP2 stack BELOW the API-auth layer and
