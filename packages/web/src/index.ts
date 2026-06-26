@@ -12,6 +12,7 @@
 //   POST /api/lookup-bulk                        → JSON bulk lookup
 //   GET  /internal/result/:owner/:repo/:sha      → Service Binding only; for web-og
 //   GET  /healthz                                → liveness probe
+//   GET  /version                                → deployed version metadata (JSON)
 
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
@@ -46,7 +47,12 @@ app.use('*', async (c, next) => {
   } finally {
     try {
       const path = c.req.path;
-      if (path !== '/healthz' && path !== '/api/event' && !path.startsWith('/internal/')) {
+      if (
+        path !== '/healthz' &&
+        path !== '/version' &&
+        path !== '/api/event' &&
+        !path.startsWith('/internal/')
+      ) {
         const req = c.req.raw;
         const enrich = takeTrack(req);
         const cf = (req as Request & { cf?: { country?: string } }).cf;
@@ -146,6 +152,18 @@ app.get('/sitemap.xml', sitemapRoute);
 app.get('/llms.txt', llmsTxtRoute);
 
 app.get('/healthz', (c) => c.text('ok'));
+
+// Deployed-version probe. Surfaces Cloudflare's version_metadata binding so the
+// maintaining loop (and humans) can confirm which version is live — id changes
+// on every deploy, timestamp says when. Read-only, no secrets. Degrades to nulls
+// when the binding is absent (wrangler dev / tests). no-store so a fresh deploy
+// is visible immediately.
+app.get('/version', (c) => {
+  const v = (c.env as Env)?.CF_VERSION_METADATA;
+  return c.json({ id: v?.id ?? null, tag: v?.tag ?? null, timestamp: v?.timestamp ?? null }, 200, {
+    'cache-control': 'no-store',
+  });
+});
 
 app.notFound((c) => c.text('Not found — paste a commit at https://released.blabberate.com\n', 404));
 

@@ -47,6 +47,31 @@ describe('web Worker — basic routing', () => {
     expect(await res.text()).toBe('ok');
   });
 
+  it('version reports the deployed Cloudflare version metadata', async () => {
+    const res = await app.fetch(new Request('https://released.example/version'), {
+      CF_VERSION_METADATA: {
+        id: '8a9f0b3c-1234-4abc-9def-000000000000',
+        tag: 'abc1234',
+        timestamp: '2026-06-26T00:00:00Z',
+      },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    // Loop observability: short cache so a deploy is reflected promptly.
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    const body = (await res.json()) as { id: string; tag: string; timestamp: string };
+    expect(body.id).toBe('8a9f0b3c-1234-4abc-9def-000000000000');
+    expect(body.tag).toBe('abc1234');
+    expect(body.timestamp).toBe('2026-06-26T00:00:00Z');
+  });
+
+  it('version degrades to nulls when the binding is absent (dev/tests)', async () => {
+    const res = await app.fetch(new Request('https://released.example/version'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { id: string | null };
+    expect(body.id).toBeNull();
+  });
+
   // Loading-state contract: on form submit the user must get visible
   // feedback within ~16ms so they don't think the click was lost. The
   // homepage form is a full-page-nav (GET /lookup → 302 → /r/...) and the
