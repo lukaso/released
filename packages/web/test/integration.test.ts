@@ -1273,6 +1273,163 @@ describe('referer attribution (blob11)', () => {
   });
 });
 
+// Bulk route (CUJ 7). The route's OWN logic — same-origin guard, body
+// validation, parse-error threading at the original index, and the by-host
+// grouping + original-order re-threading that is the whole reason the file
+// exists — was previously untested at the HTTP level (only the >MAX_BULK
+// reject path was). These cover it.
+describe('POST /api/lookup-bulk — route logic', () => {
+  it('rejects cross-origin requests with 403', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/api/lookup-bulk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+        body: JSON.stringify({ inputs: ['facebook/react@abc1234'] }),
+      }),
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('cross_origin');
+  });
+
+  it('rejects an unparseable JSON body with 400 invalid_body', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/api/lookup-bulk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: 'this is not json',
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('invalid_body');
+  });
+
+  it('rejects a non-array inputs field with 400 missing_inputs', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/api/lookup-bulk', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ inputs: 'facebook/react@abc1234' }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('missing_inputs');
+  });
+
+  it('returns 200 with a per-input error for every unparseable input (order + length preserved)', async () => {
+    // No input parses → no provider call. The route must still answer 200 with a
+    // structured per-input error at each index, NOT a top-level 4xx.
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const inputs = ['not a ref !!!', '@@@bogus', 'http://'];
+      const res = await app.fetch(
+        new Request('https://released.example/api/lookup-bulk', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ inputs }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { results: { kind?: string }[] };
+      expect(body.results).toHaveLength(inputs.length);
+      for (const r of body.results) expect(r.kind).toBe('error');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('groups inputs by host, runs each host, and re-threads results into original input order', async () => {
+    // Two DIFFERENT GitLab hosts plus a parse failure in the middle. The route
+    // splits the two valid inputs into separate per-host provider groups, runs
+    // them, and must re-thread each answer back to its ORIGINAL index — with the
+    // parse failure landing at index 1. This is the route's signature behavior
+    // (mixed-provider bulk, issue #10 territory) and was uncovered.
+    const glSha = 'a'.repeat(40);
+    const gnomeSha = 'b'.repeat(40);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/api/v4/')) {
+        const isGnome = url.includes('gitlab.gnome.org');
+        const tag = isGnome ? 'GNOME_1_0' : 'gl-v1.0.0';
+        const tagSha = isGnome ? 'gnometagsha' : 'gltagsha';
+        const fullSha = isGnome ? gnomeSha : glSha;
+        // /refs?type=tag is a subpath of /repository/commits/:sha — match it FIRST.
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([{ type: 'tag', name: tag }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/')) {
+          return new Response(
+            JSON.stringify({ id: fullSha, committed_date: '2024-01-01T00:00:00Z' }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          // Tag dated after the commit so the date cull keeps it as a candidate.
+          return new Response(
+            JSON.stringify([
+              { name: tag, commit: { id: tagSha, committed_date: '2024-02-01T00:00:00Z' } },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/releases/')) {
+          // No Release object — firstRelease still comes from the containing tag.
+          return new Response(JSON.stringify({}), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const inputs = [
+        `https://gitlab.com/acme/widget/-/commit/${glSha}`,
+        'not a valid ref !!!',
+        `https://gitlab.gnome.org/gnome/gtk/-/commit/${gnomeSha}`,
+      ];
+      const res = await app.fetch(
+        new Request('https://released.example/api/lookup-bulk', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ inputs }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        results: {
+          kind?: string;
+          firstRelease?: { tag: string } | null;
+          input?: { repo: { host: string } };
+        }[];
+      };
+      expect(body.results).toHaveLength(3);
+      // Index 0 — gitlab.com result threaded back to its original slot.
+      expect(body.results[0]?.kind).not.toBe('error');
+      expect(body.results[0]?.input?.repo.host).toBe('gitlab.com');
+      expect(body.results[0]?.firstRelease?.tag).toBe('gl-v1.0.0');
+      // Index 1 — the parse failure stays at its original index.
+      expect(body.results[1]?.kind).toBe('error');
+      // Index 2 — gitlab.gnome.org result, NOT swapped with index 0.
+      expect(body.results[2]?.kind).not.toBe('error');
+      expect(body.results[2]?.input?.repo.host).toBe('gitlab.gnome.org');
+      expect(body.results[2]?.firstRelease?.tag).toBe('GNOME_1_0');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;
