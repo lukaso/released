@@ -7,6 +7,7 @@
 // the trap of trying to use ONE client for ALL hosts.
 
 import {
+  type BulkResult,
   type LookupInput,
   type LookupResult,
   MAX_BULK,
@@ -21,6 +22,32 @@ import type { Env } from '../env.js';
 import { makeProvider } from '../provider.js';
 
 type BulkSubError = { kind: 'error'; errorName: string; message: string };
+type BulkPartial = NonNullable<BulkResult['partial']>;
+
+// Severity ordering for merging partials across host groups (issue #10).
+const PARTIAL_SEVERITY: Record<BulkPartial['reason'], number> = {
+  rate_limit_exhausted: 3,
+  bulk_deadline: 2,
+  network_error: 1,
+};
+
+/** Merge the per-host-group partials into one. A multi-host bulk runs an
+ *  independent `findReleasesBulk` per host, so a partial can come from any
+ *  group; the response must still report exactly ONE partial. Surface the most
+ *  severe reason (rate_limit_exhausted > bulk_deadline > network_error), sum
+ *  pendingCount across groups, and carry `resetAt` from the group that won. */
+export function aggregateBulkPartials(partials: readonly BulkPartial[]): BulkPartial | undefined {
+  if (partials.length === 0) return undefined;
+  const worst = partials.reduce((a, b) =>
+    PARTIAL_SEVERITY[b.reason] > PARTIAL_SEVERITY[a.reason] ? b : a,
+  );
+  const pendingCount = partials.reduce((n, p) => n + p.pendingCount, 0);
+  return {
+    reason: worst.reason,
+    pendingCount,
+    ...(worst.resetAt !== undefined ? { resetAt: worst.resetAt } : {}),
+  };
+}
 
 export async function lookupBulkRoute(c: Context): Promise<Response> {
   const env = c.env as Env;
@@ -72,9 +99,11 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
   const okResultsByIdx = new Map<number, LookupResult | BulkSubError>();
 
   // Run each host's bulk in parallel — different hosts have independent rate limits
-  // and there's no cross-host shared state.
-  await Promise.all(
-    [...byHost.entries()].map(async ([host, group]) => {
+  // and there's no cross-host shared state. Each group may return its own
+  // `partial` (rate-limit / deadline); collect them all and merge below so a
+  // partial from one host isn't silently dropped (issue #10).
+  const groupPartials = await Promise.all(
+    [...byHost.entries()].map(async ([host, group]): Promise<BulkPartial | undefined> => {
       let client: Provider;
       try {
         client = makeProvider(env, req, host);
@@ -88,7 +117,7 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
             message: errAsReleased.message,
           });
         }
-        return;
+        return undefined;
       }
       const subBulk = await findReleasesBulk(
         group.map((g) => g.input),
@@ -100,7 +129,12 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
         const g = group[i];
         if (g) okResultsByIdx.set(g.originalIdx, r);
       });
+      return subBulk.partial;
     }),
+  );
+
+  const partial = aggregateBulkPartials(
+    groupPartials.filter((p): p is BulkPartial => p !== undefined),
   );
 
   // Re-thread results into the original input order, mixing parse failures.
@@ -117,7 +151,7 @@ export async function lookupBulkRoute(c: Context): Promise<Response> {
     );
   });
 
-  return new Response(JSON.stringify({ results }), {
+  return new Response(JSON.stringify({ results, ...(partial ? { partial } : {}) }), {
     headers: { 'content-type': 'application/json' },
   });
 }

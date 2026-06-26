@@ -1403,6 +1403,91 @@ describe('POST /api/lookup-bulk — route logic', () => {
       globalThis.fetch = originalFetch;
     }
   });
+
+  it('surfaces a partial from ONE host group while keeping the other host’s answer (issue #10)', async () => {
+    // Multi-host bulk runs an independent findReleasesBulk per host group, so a
+    // partial (rate-limit / deadline) can come from any group. Pre-fix the route
+    // dropped each group's `partial` entirely — a rate-limited GitLab host would
+    // silently look like a clean "not released" result. The route must surface
+    // the partial AND still return the other host's real answer.
+    const okSha = 'c'.repeat(40);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      // gitlab.gnome.org is rate-limited: 429 with remaining=0 → RateLimitError
+      // → findReleasesBulk returns partial.reason = 'rate_limit_exhausted'.
+      if (url.includes('gitlab.gnome.org')) {
+        return new Response(JSON.stringify({ message: 'rate limited' }), {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'ratelimit-remaining': '0',
+            'ratelimit-limit': '60',
+            'ratelimit-reset': '1700000000',
+          },
+        });
+      }
+      // gitlab.com resolves cleanly via the containing-tag shortcut.
+      if (url.includes('gitlab.com') && url.includes('/api/v4/')) {
+        if (url.includes('/refs?type=tag')) {
+          return new Response(JSON.stringify([{ type: 'tag', name: 'gl-v2.0.0' }]), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (url.includes('/repository/commits/')) {
+          return new Response(
+            JSON.stringify({ id: okSha, committed_date: '2024-01-01T00:00:00Z' }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/repository/tags')) {
+          return new Response(
+            JSON.stringify([
+              {
+                name: 'gl-v2.0.0',
+                commit: { id: 'gltag2', committed_date: '2024-02-01T00:00:00Z' },
+              },
+            ]),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.includes('/releases/')) {
+          return new Response(JSON.stringify({}), {
+            status: 404,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const inputs = [
+        `https://gitlab.com/acme/widget/-/commit/${okSha}`,
+        `https://gitlab.gnome.org/gnome/gtk/-/commit/${'d'.repeat(40)}`,
+      ];
+      const res = await app.fetch(
+        new Request('https://released.example/api/lookup-bulk', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ inputs }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        results: { kind?: string; firstRelease?: { tag: string } | null }[];
+        partial?: { reason: string; pendingCount: number; resetAt?: number };
+      };
+      // The clean host's answer survives the other host's rate-limit.
+      expect(body.results[0]?.kind).not.toBe('error');
+      expect(body.results[0]?.firstRelease?.tag).toBe('gl-v2.0.0');
+      // The partial is now reported at the top level, not silently dropped.
+      expect(body.partial?.reason).toBe('rate_limit_exhausted');
+      expect(body.partial?.resetAt).toBe(1700000000);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
 
 afterEachClear();
