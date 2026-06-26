@@ -18,7 +18,15 @@
 # Worker, e.g. RELEASED_WRANGLER_DIR=packages/web-og for the OG renderer.
 set -uo pipefail
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+# Anchor ROOT to this script's own location, NOT the ambient cwd. The
+# maintaining loop's observe.sh invokes this by absolute path
+# ($APP_DIR/scripts/prod-wrangler.sh) without first cd'ing into the app, so a
+# `git rev-parse --show-toplevel` here resolves to whatever repo the caller
+# happened to be in (e.g. the loop's own engine repo) and WORKER_DIR points at a
+# nonexistent packages/web — production senses go blind. This file always lives
+# at <repo>/scripts/prod-wrangler.sh, so its parent's parent is the repo root.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 WORKER_DIR="${RELEASED_WRANGLER_DIR:-$ROOT/packages/web}"
 case "$WORKER_DIR" in
   /*) ;;                       # already absolute
