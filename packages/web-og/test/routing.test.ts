@@ -74,4 +74,55 @@ describe('web-og routing', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
   });
+
+  // Federated OG (issue #8): the /h/:host/r/:projectPath path renders unfurls for
+  // GitLab results, mirroring the federated permalink scheme in web/src/index.ts.
+  it('federated: calls the host-aware internal endpoint with the encoded projectPath', async () => {
+    const sha40 = 'a'.repeat(40);
+    const env = makeEnv(
+      new Response(
+        JSON.stringify({
+          input: {
+            kind: 'commit',
+            repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
+            sha: sha40,
+          },
+          canonicalSha: sha40,
+          firstRelease: { tag: 'GIMP_2_10_36', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+          alsoIn: [],
+          releaseNotesHtml: null,
+          rateLimit: null,
+        }),
+      ),
+    );
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.gnome.org/r/GNOME%2Fgimp/c/a1b2c3d.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const calls = (env.WEB.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const calledUrl = String(calls[0]?.[0]);
+    expect(calledUrl).toBe('https://web/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/a1b2c3d');
+    // Real result → long cache.
+    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+  });
+
+  it('federated: rejects a non-.png URL with 404', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.com/r/g%2Fp/c/abc1234.svg'),
+      makeEnv(),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('federated: placeholder with SHORT cache when the binding misses', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.com/r/g%2Fp/c/abc1234.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+  });
 });

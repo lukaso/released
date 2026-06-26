@@ -1,6 +1,7 @@
 // web-og Worker: renders OG PNGs for permalink URLs.
 //
-// GET /r/:owner/:repo/c/:sha.png
+// GET /r/:owner/:repo/c/:sha.png             — GitHub (legacy/canonical)
+// GET /h/:host/r/:projectPath/c/:sha.png     — federated (any host, #8)
 //   → Fetch the result data from `web` via Service Binding (D23).
 //   → Render PNG via @cloudflare/workers-og (Satori + resvg-wasm).
 //   → Cache 24h. On data miss, render a neutral placeholder with short TTL
@@ -17,25 +18,49 @@ type Env = {
 
 const app = new Hono<{ Bindings: Env }>();
 
+/** Fetch the result JSON from the `web` Worker via Service Binding. Returns null
+ *  on any miss/error so the caller renders a short-cached placeholder. */
+async function fetchResult(env: Env, internalUrl: string): Promise<LookupResult | null> {
+  try {
+    const res = await env.WEB.fetch(internalUrl, {
+      headers: { 'x-released-internal': env.INTERNAL_SECRET ?? 'web-og' },
+    });
+    if (res.ok) return (await res.json()) as LookupResult;
+  } catch {
+    // Fall through to placeholder.
+  }
+  return null;
+}
+
+// GitHub permalinks (legacy/canonical).
 app.get('/r/:owner/:repo/c/:shaPng', async (c) => {
   const { owner, repo, shaPng } = c.req.param();
   if (!shaPng.endsWith('.png')) return c.text('not found', 404);
   const sha = shaPng.slice(0, -4);
 
-  // Fetch the result data from the main web Worker via Service Binding.
-  let result: LookupResult | null = null;
-  try {
-    const internalUrl = `https://web/internal/result/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(sha)}`;
-    const res = await c.env.WEB.fetch(internalUrl, {
-      headers: { 'x-released-internal': c.env.INTERNAL_SECRET ?? 'web-og' },
-    });
-    if (res.ok) {
-      result = (await res.json()) as LookupResult;
-    }
-  } catch {
-    // Fall through to placeholder.
-  }
+  const internalUrl = `https://web/internal/result/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(sha)}`;
+  const result = await fetchResult(c.env, internalUrl);
+  return renderImage(result, { owner, repo, sha });
+});
 
+// Federated permalinks (any non-GitHub provider, #8). projectPath is URL-encoded
+// into a single segment, matching the /h/ scheme in web/src/index.ts.
+app.get('/h/:host/r/:projectPath/c/:shaPng', async (c) => {
+  const { host, projectPath, shaPng } = c.req.param();
+  if (!shaPng.endsWith('.png')) return c.text('not found', 404);
+  const sha = shaPng.slice(0, -4);
+
+  // Normalize then re-encode so the internal route receives one encoded segment
+  // regardless of how the router decoded the param.
+  const decodedPath = decodeURIComponent(projectPath);
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/r/${encodeURIComponent(decodedPath)}/${encodeURIComponent(sha)}`;
+  const result = await fetchResult(c.env, internalUrl);
+
+  // Placeholder context: split the project path on the first slash so
+  // PlaceholderCard's `owner/repo` label renders the full path.
+  const slash = decodedPath.indexOf('/');
+  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
+  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
   return renderImage(result, { owner, repo, sha });
 });
 

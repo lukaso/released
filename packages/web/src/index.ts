@@ -10,7 +10,8 @@
 //   GET  /<permalink>/badge.svg                  → auto-updating SVG status badge
 //   POST /api/lookup                             → JSON single lookup (client-side fetch)
 //   POST /api/lookup-bulk                        → JSON bulk lookup
-//   GET  /internal/result/:owner/:repo/:sha      → Service Binding only; for web-og
+//   GET  /internal/result/:owner/:repo/:sha      → Service Binding only; for web-og (GitHub)
+//   GET  /internal/h/:host/r/:projectPath/:sha   → Service Binding only; for web-og (federated)
 //   GET  /healthz                                → liveness probe
 //   GET  /version                                → deployed version metadata (JSON)
 
@@ -25,7 +26,7 @@ import { badgeRoute } from './routes/badge.js';
 import { eventRoute } from './routes/event.js';
 import { homeRoute } from './routes/home.js';
 import { howItWorksRoute } from './routes/how-it-works.js';
-import { internalResultRoute } from './routes/internal.js';
+import { internalFederatedResultRoute, internalResultRoute } from './routes/internal.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
 import { lookupRoute } from './routes/lookup.js';
 import { prRoute } from './routes/pr.js';
@@ -139,6 +140,7 @@ app.post('/api/lookup-bulk', lookupBulkRoute);
 app.post('/api/event', eventRoute);
 
 app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
+app.get('/internal/h/:host/r/:projectPath/:sha', internalFederatedResultRoute);
 
 // /how-it-works is a real, indexable content page (was a 301 to the README).
 // It's an SEO usage-loop entry point: targets "which release contains a commit"

@@ -1,6 +1,7 @@
 // Light integration tests using Hono's app.fetch directly.
 // No Cloudflare runtime needed — Hono apps are plain Request handlers.
 
+import { cacheKey } from '@released/core';
 import { describe, expect, it, vi } from 'vitest';
 
 // Polyfill the Workers-only `caches.default` for these tests so cache.ts works.
@@ -356,6 +357,45 @@ describe('web Worker — basic routing', () => {
       new Request('https://released.example/internal/result/facebook/react/abc1234'),
     );
     expect(res.status).toBe(404);
+  });
+
+  // Federated internal route (issue #12): the parallel host-aware endpoint that
+  // feeds web-og's federated OG renderer (issue #8).
+  it('GET /internal/h/:host/r/:projectPath/:sha rejects requests without the service-binding header', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/abc1234'),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /internal/h/:host/r/:projectPath/:sha returns the host-keyed cached result', async () => {
+    cacheStore.clear();
+    const sha = 'a'.repeat(40);
+    const seeded = {
+      input: { kind: 'commit', repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' }, sha },
+      canonicalSha: sha,
+      firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    };
+    // Seed the SAME slot the route reads: cacheKey('res', `${host}/${projectPath}`,
+    // `sha:${sha}`). Proves the route decodes the URL-encoded projectPath and keys
+    // the cache by host — without hitting any provider.
+    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
+    );
+    const res = await app.fetch(
+      new Request(`https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/${sha}`, {
+        headers: { 'x-released-internal': 'web-og' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as typeof seeded;
+    expect(body.firstRelease?.tag).toBe('GIMP_2_10_36');
+    expect(body.input.repo.host).toBe('gitlab.gnome.org');
   });
 
   it('GET /r/:o/:r/c/:sha for an unfurl bot with no cache returns a deferred-render card with short TTL', async () => {

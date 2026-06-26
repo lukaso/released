@@ -1,16 +1,14 @@
-// GET /internal/result/:owner/:repo/:sha — Service-Binding-only endpoint (D23).
-// web-og calls this via a Cloudflare Service Binding (env.WEB.fetch(...)) to get
+// Service-Binding-only endpoints (D23) that feed the web-og PNG renderer.
+//   GET /internal/result/:owner/:repo/:sha     — GitHub (legacy/canonical)
+//   GET /internal/h/:host/r/:projectPath/:sha  — federated (any host, #12)
+// web-og calls these via a Cloudflare Service Binding (env.WEB.fetch(...)) to get
 // the result JSON for rendering the OG PNG. Direct public hits are rejected.
-//
-// Currently GitHub-only — the web-og worker only renders OG images for GitHub
-// permalinks today. Federated OG rendering is a captured TODO; when that lands,
-// add a parallel /internal/h/:host/r/:projectPath/:sha route.
 
-import { type LookupResult, cacheKey, findRelease, parseInput, providerFor } from '@released/core';
+import { type LookupInput, type LookupResult, cacheKey, findRelease } from '@released/core';
 import type { Context } from 'hono';
-import { extraGitlabHostsFromEnv, resolveProviderToken } from '../auth.js';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
+import { makeProvider } from '../provider.js';
 import { singleFlight } from '../single-flight.js';
 
 /** Marker header set by the web-og Service Binding to identify itself.
@@ -18,26 +16,25 @@ import { singleFlight } from '../single-flight.js';
  *  metadata; we use a shared-secret-style marker as an extra guard for v1. */
 const SVC_HEADER = 'x-released-internal';
 
-export async function internalResultRoute(c: Context): Promise<Response> {
-  const env = c.env as Env & { INTERNAL_SECRET?: string };
+/** True when the caller presented the Service-Binding marker secret. */
+function isServiceBinding(c: Context): boolean {
+  const env = (c.env ?? {}) as Env & { INTERNAL_SECRET?: string };
+  const marker = c.req.raw.headers.get(SVC_HEADER);
+  return !!marker && marker === (env.INTERNAL_SECRET ?? 'web-og');
+}
+
+/** Resolve the LookupResult JSON for a host/projectPath/sha. Cache-first, then
+ *  compute via the (relay-aware) provider. Host-aware cache key so OG renders
+ *  share slots with the public routes' `${host}/${projectPath}` prefix. */
+async function resolveResult(
+  c: Context,
+  host: string,
+  projectPath: string,
+  sha: string,
+): Promise<Response> {
+  const env = c.env as Env;
   const req = c.req.raw;
 
-  // Reject direct public hits. Service-Binding callers set this header.
-  const marker = req.headers.get(SVC_HEADER);
-  if (!marker || marker !== (env.INTERNAL_SECRET ?? 'web-og')) {
-    return new Response('not found', { status: 404 });
-  }
-
-  const owner = c.req.param('owner');
-  const repo = c.req.param('repo');
-  const sha = c.req.param('sha');
-  if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
-
-  // This route is GitHub-only. Host-aware cache key so we share cache slots
-  // with the public /r/ and /api/lookup routes (which all use the same
-  // ${host}/${projectPath} prefix).
-  const host = 'github.com';
-  const projectPath = `${owner}/${repo}`;
   const k = await cacheKey('res', `${host}/${projectPath}`, `sha:${sha}`);
   const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
@@ -48,10 +45,15 @@ export async function internalResultRoute(c: Context): Promise<Response> {
   }
 
   // Cache miss: compute. The web-og caller chose to wait for this on its side.
+  // Build the input directly (host-aware), exactly as the public /h/ route does.
   try {
-    const parsed = parseInput(`${owner}/${repo}`, sha);
-    const token = resolveProviderToken(env, req, host);
-    const client = providerFor(host, { token, extraGitlabHosts: extraGitlabHostsFromEnv(env) });
+    const parsed: LookupInput = {
+      kind: 'commit',
+      repo: { host, projectPath },
+      sha: sha.toLowerCase(),
+    };
+    // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
+    const client = makeProvider(env, req, host);
     result = await singleFlight(k, async () => {
       const re = await cache.get<LookupResult>(k);
       if (re) return re;
@@ -68,4 +70,30 @@ export async function internalResultRoute(c: Context): Promise<Response> {
       headers: { 'content-type': 'application/json' },
     });
   }
+}
+
+/** GET /internal/result/:owner/:repo/:sha — GitHub-only (legacy/canonical). */
+export async function internalResultRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  const sha = c.req.param('sha');
+  if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
+
+  return resolveResult(c, 'github.com', `${owner}/${repo}`, sha);
+}
+
+/** GET /internal/h/:host/r/:projectPath/:sha — federated (any host, #12).
+ *  projectPath is URL-encoded into a single segment, matching the /h/ permalink
+ *  routes; decode it before building the lookup. */
+export async function internalFederatedResultRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const host = c.req.param('host');
+  const projectPathEnc = c.req.param('projectPath');
+  const sha = c.req.param('sha');
+  if (!host || !projectPathEnc || !sha) return new Response('not found', { status: 404 });
+
+  return resolveResult(c, host, decodeURIComponent(projectPathEnc), sha);
 }
