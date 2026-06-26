@@ -4,19 +4,55 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+// The last satori node tree handed to ImageResponse. The real PNG render is
+// WASM-bound and verified via `wrangler dev`, not here — but the node tree the
+// card builds from a LookupResult is pure logic, so we capture and assert on it.
+let lastRenderedNode: unknown;
+
 vi.mock('workers-og', () => ({
   // Mock ImageResponse as a Response subclass — cleaner than `return new
   // Response(...)` from a constructor (which trips lint/correctness/
   // noConstructorReturn and relies on the JS oddity where a constructor's
   // returned object overrides `this`).
   ImageResponse: class extends Response {
-    constructor(_node: unknown, init?: { headers?: Record<string, string> }) {
+    constructor(node: unknown, init?: { headers?: Record<string, string> }) {
+      lastRenderedNode = node;
       super('PNG-BYTES', { headers: init?.headers ?? {} });
     }
   },
 }));
 
 const { default: app } = await import('../src/index.js');
+
+// Walk a hono/jsx node tree ({ tag, props: { children }, ... }) and collect
+// every string/number leaf. Lets us assert what TEXT a card renders without a
+// real WASM render. Prefer props.children (the canonical path) over the
+// mirrored top-level `children` so leaves aren't double-counted.
+function collectText(node: unknown): string[] {
+  const out: string[] = [];
+  const walk = (n: unknown): void => {
+    if (n == null || typeof n === 'boolean') return;
+    if (typeof n === 'string') {
+      if (n.length > 0) out.push(n);
+      return;
+    }
+    if (typeof n === 'number') {
+      out.push(String(n));
+      return;
+    }
+    if (Array.isArray(n)) {
+      for (const c of n) walk(c);
+      return;
+    }
+    if (typeof n === 'object') {
+      const o = n as { props?: { children?: unknown }; children?: unknown };
+      if (o.props && 'children' in o.props) walk(o.props.children);
+      else if ('children' in o) walk(o.children);
+    }
+  };
+  walk(node);
+  return out;
+}
 
 function makeEnv(svcRes?: Response): { WEB: { fetch: typeof fetch } } {
   return {
@@ -73,5 +109,82 @@ describe('web-og routing', () => {
     );
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+  });
+});
+
+// The card the OG worker builds from a LookupResult branches on whether the
+// commit is released. Both states ship as the social unfurl for a permalink, so
+// the TEXT each one renders is user-facing and was previously unasserted (the
+// routing tests only checked status + cache headers). We capture the satori node
+// tree and assert its text leaves.
+describe('web-og card content', () => {
+  function resultEnv(result: Record<string, unknown>): { WEB: { fetch: typeof fetch } } {
+    return makeEnv(new Response(JSON.stringify(result)));
+  }
+  const baseInput = {
+    kind: 'commit',
+    repo: { owner: 'facebook', repo: 'react', projectPath: 'facebook/react' },
+    sha: 'a'.repeat(40),
+  };
+
+  it('released commit: shows the tag, the SHIPPED badge, the date and repo', async () => {
+    const env = resultEnv({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: { tag: 'v18.2.0', sha: 's', date: '2024-03-15T09:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('First released in');
+    expect(text).toContain('v18.2.0');
+    expect(text).toContain('SHIPPED');
+    expect(text).toContain('2024-03-15'); // date sliced to YYYY-MM-DD
+    expect(text).toContain('facebook/react');
+    expect(text.join(' ')).toContain('abc1234'); // 7-char short sha
+    // Not the not-yet-released copy.
+    expect(text).not.toContain('not yet released');
+  });
+
+  it('unreleased commit (firstRelease null): says "not yet released", NO SHIPPED, NO date', async () => {
+    const env = resultEnv({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('not yet released');
+    // The SHIPPED badge and the date are gated on `firstRelease` — both gone.
+    expect(text).not.toContain('SHIPPED');
+    expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
+    // A long-cache header still applies — we DID get a result, it's just unreleased.
+    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+  });
+
+  it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('released');
+    expect(text).toContain('Looking up…');
+    expect(text.join(' ')).toContain('facebook/react @ abc1234');
   });
 });
