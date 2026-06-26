@@ -1,0 +1,10 @@
+{
+  "contract": "live-app-contract",
+  "version": 1,
+  "agent": "liveapp-bot",
+  "state": {
+    "key": "lukaso-released",
+    "mode": "remote",
+    "remote": "https://github.com/lukaso/released-liveapp-state.git"
+  }
+}
