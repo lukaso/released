@@ -34,6 +34,22 @@ else
   exit 0
 fi
 
+# ── Branch-scoped bypass (resolves #37) ──────────────────────────────
+# Only the default branch auto-deploys, and merge is gated by review, so a
+# commit/push to any NON-default branch is safe without the approval phrase.
+# The default branch still requires it (gate 1). Gate 2 (validate.sh fresh)
+# still applies to every branch. A command that explicitly targets main/master
+# by refspec is also treated as default-branch and still gated.
+ON_DEFAULT_BRANCH=1
+CUR_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+DEFAULT_BRANCH=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')
+DEFAULT_BRANCH="${DEFAULT_BRANCH:-main}"
+if [ -n "$CUR_BRANCH" ] && [ "$CUR_BRANCH" != "$DEFAULT_BRANCH" ] \
+   && [ "$CUR_BRANCH" != "master" ] \
+   && ! printf '%s' "$CMD" | grep -qE "(^|[[:space:]:/])(${DEFAULT_BRANCH}|master)([[:space:]:]|$)"; then
+  ON_DEFAULT_BRANCH=""
+fi
+
 deny() {
   jq -cn --arg r "$1" '{
     hookSpecificOutput: {
@@ -77,8 +93,10 @@ else
   HINT="Ask first (e.g. 'push', 'ok push', 'push it', 'ship it', 'land it')."
 fi
 
-if ! printf '%s' "$NORM" | grep -qiE "$APPROVE_RE" || printf '%s' "$NORM" | grep -qiE "$NEGATE_RE"; then
-  deny "No explicit user approval for git $ACTION in the last user message. $HINT"
+if [ -n "$ON_DEFAULT_BRANCH" ]; then
+  if ! printf '%s' "$NORM" | grep -qiE "$APPROVE_RE" || printf '%s' "$NORM" | grep -qiE "$NEGATE_RE"; then
+    deny "No explicit user approval for git $ACTION in the last user message. $HINT"
+  fi
 fi
 
 # ── Gate 2: validate.sh fresh for any TS edited this session ──────────
