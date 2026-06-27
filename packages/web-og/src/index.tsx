@@ -183,8 +183,10 @@ function ResultCard(r: LookupResult) {
 
       {/* bottom meta */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        {/* One text node, not `commit {sha}` (two children): satori throws on a
+            multi-child element with no `display: flex`, yielding a 0-byte PNG. */}
         <div style={{ fontFamily: 'Geist Mono, monospace', color: '#6e6e6e', fontSize: 22 }}>
-          commit {sha}
+          {`commit ${sha}`}
         </div>
         <div style={{ fontFamily: 'Geist Mono, monospace', color: '#6e6e6e', fontSize: 18 }}>
           released.blabberate.com
