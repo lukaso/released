@@ -54,6 +54,56 @@ function collectText(node: unknown): string[] {
   return out;
 }
 
+// Satori (the renderer inside workers-og) throws — and the streamed PNG comes
+// back as a 0-byte body AFTER a 200 + image/png header is already flushed — if
+// any element has more than one child node without `display: flex` (or `none`).
+// That exact footgun shipped the entire dynamic OG card as a blank image in
+// production: `<div>commit {sha}</div>` is two children (the literal "commit "
+// and the {sha} expression). It's invisible to a status/content-type check, and
+// the real WASM render isn't exercised in vitest — so we encode satori's rule as
+// a structural assertion over the captured node tree, which IS pure logic. Walk
+// every element; one with >1 non-empty child must declare a flex/none display.
+// Returns the offending element tags (empty = valid).
+function satoriDisplayViolations(node: unknown): string[] {
+  const bad: string[] = [];
+  const childCount = (children: unknown): number => {
+    const arr = Array.isArray(children) ? children : [children];
+    let n = 0;
+    for (const c of arr) {
+      if (c == null || typeof c === 'boolean') continue;
+      if (typeof c === 'string') {
+        if (c.length > 0) n++;
+      } else n++; // number or element
+    }
+    return n;
+  };
+  const walk = (n: unknown): void => {
+    if (n == null || typeof n === 'boolean' || typeof n === 'string' || typeof n === 'number')
+      return;
+    if (Array.isArray(n)) {
+      for (const c of n) walk(c);
+      return;
+    }
+    if (typeof n === 'object') {
+      const o = n as {
+        tag?: unknown;
+        props?: { style?: Record<string, unknown>; children?: unknown };
+        children?: unknown;
+      };
+      const children = o.props && 'children' in o.props ? o.props.children : o.children;
+      if (typeof o.tag === 'string') {
+        const display = o.props?.style?.display;
+        if (childCount(children) > 1 && display !== 'flex' && display !== 'none') {
+          bad.push(`<${o.tag}> (display=${JSON.stringify(display ?? null)})`);
+        }
+      }
+      walk(children);
+    }
+  };
+  walk(node);
+  return bad;
+}
+
 function makeEnv(svcRes?: Response): { WEB: { fetch: typeof fetch } } {
   return {
     WEB: {
@@ -237,5 +287,41 @@ describe('web-og card content', () => {
     expect(text).toContain('released');
     expect(text).toContain('Looking up…');
     expect(text.join(' ')).toContain('facebook/react @ abc1234');
+  });
+
+  // Regression for the 0-byte dynamic OG render: every card that ships as a real
+  // unfurl must satisfy satori's "explicit display for multi-child elements"
+  // rule, or it renders a 200 + empty PNG (blank social preview). Asserted for
+  // BOTH card branches (released + not-yet) since both reach the dynamic path.
+  it('released card: node tree has no satori multi-child display violations', async () => {
+    const env = resultEnv({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: { tag: 'v18.2.0', sha: 's', date: '2024-03-15T09:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/r/facebook/react/c/abc1234.png'), env);
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+  });
+
+  it('not-yet-released card: node tree has no satori multi-child display violations', async () => {
+    const env = resultEnv({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/r/facebook/react/c/abc1234.png'), env);
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+  });
+
+  it('placeholder card: node tree has no satori multi-child display violations', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    await app.fetch(new Request('https://og.example/r/facebook/react/c/abc1234.png'), env);
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
   });
 });
