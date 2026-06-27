@@ -25,6 +25,7 @@ import { makeProvider } from '../provider.js';
 import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
+import { ogImageUrlForCommit } from '../ui/og-meta.js';
 import { PrereleaseHint, ResultCard, StaleNotice, StrictHint } from '../ui/result-card.js';
 
 /** Extract the RepoRef from either route family. Returns null if the params
@@ -408,6 +409,11 @@ function renderDeferred(args: {
       ogBaseUrl={ogBase}
       publicUrl={permalink}
       ogFallbackTitle={`released — looking up ${displayName}@${sha}`}
+      // #53: the cache is cold (that's why we're deferring), but the repo + sha
+      // are known. Point the unfurl at the dynamic per-commit card so a freshly
+      // shared link still gets the real OG image — web-og resolves the commit
+      // itself and degrades to its own placeholder if it can't.
+      ogImageOverride={ogImageUrlForCommit(repo, sha, ogBase)}
     >
       <Nav />
       <main>

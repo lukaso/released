@@ -410,6 +410,13 @@ describe('web Worker — basic routing', () => {
     expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
     const body = await res.text();
     expect(body).toContain('Looking up');
+    // #53: even on a cold cache the deferred card advertises the DYNAMIC
+    // per-commit OG image (not the generic placeholder). web-og resolves the
+    // commit itself and falls back to its own placeholder if it can't.
+    expect(body).toMatch(
+      /<meta property="og:image" content="[^"]*\/r\/facebook\/react\/c\/abc1234\.png/,
+    );
+    expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/placeholder\.png/);
   });
 });
 
