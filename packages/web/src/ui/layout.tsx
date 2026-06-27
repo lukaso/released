@@ -18,6 +18,8 @@ export type LayoutProps = {
   /** When present, OG meta reflects this result. */
   ogResult?: LookupResult | null;
   ogFallbackTitle?: string;
+  /** Pre-built og:image URL that wins over the result-derived one (#53). */
+  ogImageOverride?: string;
   children: unknown;
 };
 
@@ -51,6 +53,7 @@ export function Layout(props: LayoutProps) {
           publicUrl={props.publicUrl}
           result={props.ogResult ?? null}
           fallbackTitle={props.ogFallbackTitle}
+          imageOverride={props.ogImageOverride}
         />
       </head>
       <body>
