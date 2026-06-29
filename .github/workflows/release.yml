@@ -65,6 +65,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
 
+      # Stamp every deploy with the git commit so the live Worker can report it.
+      # `--tag` populates Cloudflare's version_metadata, surfaced at GET /version
+      # (the loop reads it to confirm WHICH commit is live, not just a UUID).
+      # wrangler caps a tag at ~25 chars, so use the short SHA there; the full
+      # SHA goes in `--message` (shown in `wrangler deployments list`). Both are
+      # space-free single tokens — no shell-quoting in the wrangler-action input.
+      - name: Compute deploy label
+        id: ver
+        env:
+          FULL_SHA: ${{ github.sha }}
+        run: echo "sha_short=${FULL_SHA:0:8}" >> "$GITHUB_OUTPUT"
+
       # Deploy order matters (D33 + outside-voice #3): deploy `web` first so
       # web-og's Service Binding has a target. Both deploys go in this single
       # job so OG_TEMPLATE_VERSION can't be mismatched across workers.
@@ -74,7 +86,7 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/web
-          command: deploy
+          command: deploy --tag ${{ steps.ver.outputs.sha_short }} --message commit-${{ github.sha }}
 
       - name: Deploy web-og
         uses: cloudflare/wrangler-action@v4
@@ -82,4 +94,4 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: packages/web-og
-          command: deploy
+          command: deploy --tag ${{ steps.ver.outputs.sha_short }} --message commit-${{ github.sha }}
