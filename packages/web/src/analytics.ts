@@ -23,6 +23,11 @@
 //                     gitlab.gnome.org, www.google.com), '' when absent. No
 //                     path/query — keeps the privacy posture while making
 //                     traffic attributable (organic vs self-seeded vs direct).
+//   blob12  probe     '1' for the loop's synthetic liveness probe (matched by
+//                     user-agent in index.ts), '' otherwise. Lets error queries
+//                     exclude self-monitoring traffic so a probe's soft-deadline
+//                     timeout isn't read back as a real SYSTEM error. The UA
+//                     string itself is never stored — only this boolean.
 //   double1 status         HTTP status the worker returned to the client
 //   double2 latencyMs       end-to-end request time
 //   double3 upstreamStatus  provider HTTP status when outcome=error (5xx/429/…),
@@ -68,6 +73,10 @@ export type AnalyticsEvent = {
   /** Provider HTTP status that caused an error outcome (e.g. gitlab.gnome.org 503).
    *  Distinct from `status`, which is what the worker returned to the client. */
   upstreamStatus?: number;
+  /** True for the loop's synthetic liveness probe (recognised by user-agent in
+   *  the middleware). Recorded as blob12 so error queries can exclude
+   *  self-monitoring traffic — its soft-deadline timeouts are not real failures. */
+  probe?: boolean;
 };
 
 /** Pull the upstream provider's HTTP status out of a typed error so analytics can
@@ -100,6 +109,7 @@ export function toDataPoint(e: AnalyticsEvent): AnalyticsEngineDataPoint {
       e.country ?? '',
       e.format ?? '',
       e.referer ?? '',
+      e.probe ? '1' : '',
     ],
     doubles: [e.status, e.latencyMs ?? 0, e.upstreamStatus ?? 0],
   };

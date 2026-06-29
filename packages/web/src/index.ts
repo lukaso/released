@@ -20,7 +20,7 @@
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
 import { eventForPath, refererHost, setTrack, takeTrack, track } from './analytics.js';
-import { isUnfurlBot } from './auth.js';
+import { isLivenessProbe, isUnfurlBot } from './auth.js';
 import { type Env, publicBaseUrl } from './env.js';
 import { recognizeOwnUrl } from './own-url.js';
 import { commitPermalinkPath, issuePermalinkPath, prPermalinkPath } from './paths.js';
@@ -70,6 +70,7 @@ app.use('*', async (c, next) => {
           errorType: enrich.errorType,
           upstreamStatus: enrich.upstreamStatus,
           audience: isUnfurlBot(req) ? 'bot' : 'human',
+          probe: isLivenessProbe(req),
           country: typeof cf?.country === 'string' ? cf.country : undefined,
           referer: refererHost(req.headers.get('referer')),
           status: c.res.status,

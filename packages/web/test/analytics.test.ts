@@ -80,8 +80,22 @@ describe('toDataPoint — schema mapping', () => {
       'US', // 9 country
       '', // 10 format (unset → empty; only copy events set it)
       '', // 11 referer (unset → empty)
+      '', // 12 probe (unset → empty; only the synthetic liveness probe sets it)
     ]);
     expect(dp.doubles).toEqual([200, 12, 0]); // upstreamStatus unset → 0
+  });
+
+  it('marks synthetic liveness-probe traffic with blob12=1 (so error stats can exclude it)', () => {
+    const dp = toDataPoint({
+      event: 'result',
+      host: 'github.com',
+      repo: 'honojs/hono',
+      outcome: 'error',
+      errorType: 'lookup_timeout',
+      probe: true,
+      status: 200,
+    });
+    expect(dp.blobs?.[11]).toBe('1'); // probe → blob12
   });
 
   it('maps the referring host to blob11 (organic-vs-self attribution)', () => {
@@ -248,6 +262,30 @@ describe('middleware wiring (app.fetch with a spy ANALYTICS binding)', () => {
     const { env, points } = spyEnv();
     await app.fetch(new Request('https://released.example/healthz'), env);
     expect(points).toHaveLength(0);
+  });
+
+  it('marks the synthetic liveness probe (by its user-agent) with blob12=1', async () => {
+    const { default: app } = await import('../src/index.js');
+    const { env, points } = spyEnv();
+    await app.fetch(
+      new Request('https://released.example/', {
+        headers: { 'user-agent': 'liveapp-liveness-probe/1' },
+      }),
+      env,
+    );
+    expect(points).toHaveLength(1);
+    expect(points[0]?.blobs?.[11]).toBe('1'); // probe → blob12
+  });
+
+  it('leaves blob12 empty for ordinary (non-probe) traffic', async () => {
+    const { default: app } = await import('../src/index.js');
+    const { env, points } = spyEnv();
+    await app.fetch(
+      new Request('https://released.example/', { headers: { 'user-agent': 'Mozilla/5.0' } }),
+      env,
+    );
+    expect(points).toHaveLength(1);
+    expect(points[0]?.blobs?.[11]).toBe(''); // not a probe → empty
   });
 
   it('enriches a UI search (/lookup) with host+repo+kind on a valid query', async () => {
