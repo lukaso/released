@@ -81,3 +81,17 @@ export function isUnfurlBot(req: Request): boolean {
   if (!ua) return false;
   return UNFURL_BOTS.some((re) => re.test(ua));
 }
+
+// The loop's synthetic liveness probe (bin/liveness-probe.mjs) drives real
+// end-to-end lookups every cycle to exercise CUJ #1. Those lookups hit the same
+// public routes a visitor would, so without a marker they're indistinguishable
+// from real traffic — and when one trips the soft deadline against unauthenticated
+// GitHub it lands in Analytics Engine as a `lookup_timeout` SYSTEM error, polluting
+// the very error history the loop reads back to decide if the app is healthy. The
+// probe self-identifies by user-agent; we read it here only to derive a boolean
+// marker (recorded as analytics blob12) — the UA string itself is never stored, so
+// the privacy posture is unchanged. Keep this prefix in sync with the `ua` default
+// in bin/liveness-probe.mjs (`liveapp-liveness-probe/<n>`).
+export function isLivenessProbe(req: Request): boolean {
+  return req.headers.get('user-agent')?.startsWith('liveapp-liveness-probe') ?? false;
+}
