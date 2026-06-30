@@ -124,6 +124,28 @@ describe('web Worker — basic routing', () => {
     expect(res.headers.get('location')).toBe('/h/gitlab.com/r/foo%2Fbar/c/abc1234');
   });
 
+  it('GET /lookup?q=<GitHub issue URL> redirects to the /i/ issue permalink (#54)', async () => {
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/lookup?q=' +
+          encodeURIComponent('https://github.com/honojs/hono/issues/1234'),
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/i/honojs/hono/1234');
+  });
+
+  it('GET /lookup?q=<GitLab issue URL> redirects to the federated /i/ permalink (#54)', async () => {
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/lookup?q=' +
+          encodeURIComponent('https://gitlab.gnome.org/GNOME/gimp/-/issues/9876'),
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('/h/gitlab.gnome.org/i/GNOME%2Fgimp/9876');
+  });
+
   it('GET /lookup?q=<unknown gitlab host> bounces with reason=unsupported_host', async () => {
     const res = await app.fetch(
       new Request(
@@ -1559,6 +1581,94 @@ describe('POST /api/lookup-bulk — route logic', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe('web Worker — issue permalink route (#54)', () => {
+  // The GitHub issue resolver is ONE GraphQL POST; mock it so no real network.
+  function mockIssueGraphql(issue: unknown) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/graphql')) {
+        return new Response(JSON.stringify({ data: { repository: { issue } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = originalFetch;
+    };
+  }
+
+  it('GET /i/:owner/:repo/:number renders the calm "still open" card for an open issue', async () => {
+    const restore = mockIssueGraphql({
+      title: 'Crash on startup',
+      state: 'OPEN',
+      stateReason: null,
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+    });
+    try {
+      const res = await app.fetch(new Request('https://released.example/i/honojs/hono/1234'));
+      const body = await res.text();
+      // An open issue is a real, calm answer — not an error.
+      expect(res.status).toBe(200);
+      expect(body).toContain('Still open');
+      // Links back to the issue on the provider, not a PR.
+      expect(body).toContain('github.com/honojs/hono/issues/1234');
+      // Short-cached so it flips once the issue is closed + fixed.
+      expect(res.headers.get('cache-control')).toContain('max-age=300');
+      // Security headers still fire.
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+    } finally {
+      restore();
+    }
+  });
+
+  it('GET /i/:owner/:repo/:number renders "Closed (not planned)" for a won\'t-fix issue', async () => {
+    const restore = mockIssueGraphql({
+      title: 'Please add Windows 7 support',
+      state: 'CLOSED',
+      stateReason: 'NOT_PLANNED',
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+    });
+    try {
+      const res = await app.fetch(new Request('https://released.example/i/honojs/hono/42'));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('Closed (not planned)');
+      expect(res.headers.get('cache-control')).toContain('max-age=300');
+    } finally {
+      restore();
+    }
+  });
+
+  it('GET /i/:owner/:repo/:number renders "Closed without a fix" when no closer is linked', async () => {
+    const restore = mockIssueGraphql({
+      title: 'Flaky test sometimes',
+      state: 'CLOSED',
+      stateReason: 'COMPLETED',
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+    });
+    try {
+      const res = await app.fetch(new Request('https://released.example/i/cli/cli/7'));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('Closed without a fix');
+    } finally {
+      restore();
+    }
+  });
+
+  it('GET /i/:owner/:repo/:number 302s a non-numeric issue number back to the form', async () => {
+    const res = await app.fetch(new Request('https://released.example/i/honojs/hono/not-a-number'));
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location') ?? '').toContain('reason=invalid_input');
   });
 });
 

@@ -170,6 +170,12 @@ const CLIENT_JS = `
         ? '/p/' + repo + '/' + n
         : '/h/' + host + '/p/' + encodeURIComponent(repo) + '/' + n;
     }
+    if (r.input.kind === 'issue') {
+      var iN = r.input.number;
+      return host === 'github.com'
+        ? '/i/' + repo + '/' + iN
+        : '/h/' + host + '/i/' + encodeURIComponent(repo) + '/' + iN;
+    }
     var sha = r.canonicalSha.slice(0,7);
     return host === 'github.com'
       ? '/r/' + repo + '/c/' + sha
