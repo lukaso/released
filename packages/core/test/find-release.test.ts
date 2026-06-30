@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AmbiguousShaError,
   CommitNotFoundError,
+  IssueNotFoundError,
   LookupTimeoutError,
   NoReleasesError,
   NotYetReleasedError,
@@ -13,7 +14,13 @@ import { findRelease } from '../src/find-release.js';
 import type { Provider } from '../src/provider.js';
 import { makeGithubProvider } from '../src/providers/github/client.js';
 import { makeGitlabProvider } from '../src/providers/gitlab/client.js';
-import type { LookupInput, RateLimitInfo, RepoRef, TagWithDate } from '../src/types.js';
+import type {
+  IssueResolution,
+  LookupInput,
+  RateLimitInfo,
+  RepoRef,
+  TagWithDate,
+} from '../src/types.js';
 
 /** Build a deterministic fake Provider for tests. */
 function fakeClient(spec: {
@@ -35,6 +42,8 @@ function fakeClient(spec: {
   commits?: Record<string, { fullSha: string; committedDate: string; subject?: string | null }>;
   /** Override PR resolution. */
   prs?: Record<number, { merged: boolean; mergeCommitSha: string | null; title?: string | null }>;
+  /** Override issue resolution (keyed by issue number). */
+  issues?: Record<number, IssueResolution>;
   /** Release notes by tag. */
   releaseNotes?: Record<string, string | null>;
   /** Tags the PROVIDER (e.g. GitHub) flags as prerelease via its API, regardless
@@ -86,6 +95,11 @@ function fakeClient(spec: {
         title: pr.title ?? null,
         rateLimit,
       };
+    },
+    async getIssueClosingCommit(_repo, n) {
+      const issue = spec.issues?.[n];
+      if (!issue) throw new IssueNotFoundError(n);
+      return issue;
     },
     async listTagsWithDates() {
       return { tags: spec.fetchedTags ?? spec.tags ?? [], rateLimit };
@@ -1025,5 +1039,105 @@ describe('findRelease — subject (human headline)', () => {
       name: 'NotYetReleasedError',
       subject: 'perf: cache the thing',
     });
+  });
+});
+
+describe('findRelease — issue input (#54)', () => {
+  const ISSUE: LookupInput = { kind: 'issue', repo: REPO, number: 123 };
+  const closingSha = 'b'.repeat(40);
+  const otherSha = 'c'.repeat(40);
+
+  function fixed(commits: string[], title: string | null = 'Crash on startup'): IssueResolution {
+    return { state: 'fixed', closingCommits: commits, title, rateLimit: null };
+  }
+
+  it('open issue → IssueNotClosedError, carrying the title as subject', async () => {
+    const client = fakeClient({
+      issues: { 123: { state: 'open', title: 'Crash on startup', rateLimit: null } },
+    });
+    await expect(findRelease(ISSUE, { client })).rejects.toMatchObject({
+      name: 'IssueNotClosedError',
+      issueNumber: 123,
+      subject: 'Crash on startup',
+    });
+  });
+
+  it('closed-without-fix → IssueClosedWithoutFixError (notPlanned propagated)', async () => {
+    const client = fakeClient({
+      issues: {
+        123: { state: 'closed_without_fix', title: 'Old bug', notPlanned: true, rateLimit: null },
+      },
+    });
+    await expect(findRelease(ISSUE, { client })).rejects.toMatchObject({
+      name: 'IssueClosedWithoutFixError',
+      notPlanned: true,
+      subject: 'Old bug',
+    });
+  });
+
+  it('single closing commit → first containing release, headline = issue title', async () => {
+    const tags: TagWithDate[] = [
+      { name: 'v2.0.0', sha: 'sv2', date: '2024-05-01T00:00:00Z' },
+      { name: 'v1.0.0', sha: 'sv1', date: '2024-01-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      contains: new Set(['v2.0.0']),
+      commits: { [closingSha]: { fullSha: closingSha, committedDate: '2024-04-01T00:00:00Z' } },
+      issues: { 123: fixed([closingSha]) },
+    });
+    const result = await findRelease(ISSUE, { client });
+    expect(result.firstRelease?.tag).toBe('v2.0.0');
+    expect(result.input.kind).toBe('issue');
+    expect(result.subject).toBe('Crash on startup');
+  });
+
+  it('multiple closers → earliest release containing ANY closer wins', async () => {
+    // closingSha is in the later v3.0.0; otherSha is in the earlier v2.0.0.
+    const tags: TagWithDate[] = [
+      { name: 'v3.0.0', sha: 'sv3', date: '2024-09-01T00:00:00Z' },
+      { name: 'v2.0.0', sha: 'sv2', date: '2024-05-01T00:00:00Z' },
+    ];
+    const client = fakeClient({
+      tags,
+      // truth-by-tag-name is shared across compares; both tags "contain" their
+      // respective closer, but only the named tags below are marked containing.
+      contains: new Set(['v2.0.0', 'v3.0.0']),
+      commits: {
+        [closingSha]: { fullSha: closingSha, committedDate: '2024-08-01T00:00:00Z' },
+        [otherSha]: { fullSha: otherSha, committedDate: '2024-04-01T00:00:00Z' },
+      },
+      issues: { 123: fixed([closingSha, otherSha]) },
+    });
+    const result = await findRelease(ISSUE, { client });
+    // v2.0.0 (2024-05) is earlier than v3.0.0 (2024-09) → wins.
+    expect(result.firstRelease?.tag).toBe('v2.0.0');
+  });
+
+  it('fixed but no closer is released yet → NotYetReleasedError with issue title', async () => {
+    const tags: TagWithDate[] = [{ name: 'v1.0.0', sha: 'sv1', date: '2024-01-01T00:00:00Z' }];
+    const client = fakeClient({
+      tags,
+      contains: new Set(), // no tag contains the closing commit
+      commits: { [closingSha]: { fullSha: closingSha, committedDate: '2024-04-01T00:00:00Z' } },
+      issues: { 123: fixed([closingSha]) },
+    });
+    await expect(findRelease(ISSUE, { client })).rejects.toMatchObject({
+      name: 'NotYetReleasedError',
+      subject: 'Crash on startup',
+    });
+  });
+
+  it('a fixed resolution with zero commits degrades to closed-without-fix', async () => {
+    const client = fakeClient({ issues: { 123: fixed([]) } });
+    await expect(findRelease(ISSUE, { client })).rejects.toMatchObject({
+      name: 'IssueClosedWithoutFixError',
+      notPlanned: false,
+    });
+  });
+
+  it('unknown issue → IssueNotFoundError', async () => {
+    const client = fakeClient({ issues: {} });
+    await expect(findRelease(ISSUE, { client })).rejects.toBeInstanceOf(IssueNotFoundError);
   });
 });

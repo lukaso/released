@@ -11,6 +11,8 @@
 
 import {
   BulkLimitError,
+  IssueClosedWithoutFixError,
+  IssueNotClosedError,
   LookupTimeoutError,
   NoReleasesError,
   NotYetReleasedError,
@@ -70,6 +72,11 @@ export async function findRelease(
   input: LookupInput,
   opts: FindReleaseOpts,
 ): Promise<LookupResult> {
+  // Issue inputs resolve to their closing commit(s) first, then each flows
+  // through this same function as a `commit` lookup (see findReleaseForIssue).
+  if (input.kind === 'issue') {
+    return findReleaseForIssue(input, opts);
+  }
   const { client } = opts;
   const softDeadline = opts.softDeadline ?? Date.now() + 24_000;
   const hardDeadline = opts.hardDeadline ?? Date.now() + 28_000;
@@ -388,6 +395,99 @@ export async function findRelease(
     urls: buildResultUrls(client, repo, canonicalSha, input),
     ...(heuristicMissedPrerelease ? { firstReleaseIsPrerelease: true } : {}),
   };
+}
+
+// --- Issue path (#54) --------------------------------------------------------
+
+/** Resolve an issue to the release that first shipped its fix.
+ *
+ *  An issue is just another way to name a commit. We resolve it to its closing
+ *  commit(s) via the provider, then run the normal commit→release pipeline on
+ *  each and report the EARLIEST release that contains ANY closer — the product's
+ *  "first release that contains the fix" promise applied to the set (the human-
+ *  confirmed tie-break for multi-closer issues; ~10–17% of fixed issues have
+ *  more than one closer per the #54 research). Single-closer is the common case
+ *  and reduces to one commit lookup.
+ *
+ *  Throws IssueNotClosedError (still open) or IssueClosedWithoutFixError (closed
+ *  with no discoverable fix) — both calm, non-error states the UI renders like
+ *  the not-yet card, not the not-released UI. */
+async function findReleaseForIssue(
+  input: Extract<LookupInput, { kind: 'issue' }>,
+  opts: FindReleaseOpts,
+): Promise<LookupResult> {
+  const { client } = opts;
+  const repo = input.repo;
+  const resolution = await client.getIssueClosingCommit(repo, input.number);
+
+  if (resolution.state === 'open') {
+    throw new IssueNotClosedError(input.number, resolution.title);
+  }
+  if (resolution.state === 'closed_without_fix') {
+    throw new IssueClosedWithoutFixError(input.number, resolution.notPlanned, resolution.title);
+  }
+  // resolution.state === 'fixed'
+  const closingCommits = resolution.closingCommits;
+  if (closingCommits.length === 0) {
+    // Defensive: a 'fixed' resolution with no commits is a provider bug; treat it
+    // as the no-discoverable-fix case rather than crashing.
+    throw new IssueClosedWithoutFixError(input.number, false, resolution.title);
+  }
+
+  // Run the normal pipeline on each closing commit. A closer can itself be
+  // not-yet-released (the fix landed but no release contains it yet) — collect
+  // those rather than failing, so multi-closer issues still answer when at least
+  // one closer is released.
+  const subResults: LookupResult[] = [];
+  let firstNotYet: NotYetReleasedError | null = null;
+  for (const sha of closingCommits) {
+    try {
+      subResults.push(await findRelease({ kind: 'commit', repo, sha }, opts));
+    } catch (err) {
+      if (err instanceof NotYetReleasedError) {
+        firstNotYet = firstNotYet ?? err;
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Re-tag a commit sub-result as the originating issue: the input is the issue,
+  // and the headline is the issue title (not the closing commit's subject).
+  const asIssue = (r: LookupResult): LookupResult => ({
+    ...r,
+    input,
+    subject: resolution.title,
+  });
+
+  const released = subResults.filter((r) => r.firstRelease !== null);
+  if (released.length > 0) {
+    // Earliest release containing any closer wins. Unparseable/empty dates sort
+    // last via dateKey so they never hijack a real, correctly-dated release.
+    released.sort(
+      (a, b) => dateKey(a.firstRelease?.date ?? '') - dateKey(b.firstRelease?.date ?? ''),
+    );
+    return asIssue(at(released, 0));
+  }
+
+  // No closer is in a release yet. If a closer hit a soft deadline (partial),
+  // surface that best-effort answer; otherwise it's a genuine not-yet-released.
+  const partial = subResults.find((r) => r.partial);
+  if (partial) return asIssue(partial);
+  if (firstNotYet) {
+    throw new NotYetReleasedError(
+      firstNotYet.sha,
+      firstNotYet.commitDate,
+      firstNotYet.culledTagCount,
+      firstNotYet.prereleasedSkippedCount,
+      resolution.title,
+    );
+  }
+  // All sub-lookups returned null firstRelease without a partial flag (e.g. a
+  // soft-deadline miss with no hit). Surface the first as a best-effort answer.
+  const first = subResults[0];
+  if (first) return asIssue(first);
+  throw new IssueClosedWithoutFixError(input.number, false, resolution.title);
 }
 
 // --- Bulk path (CP3 + #6 fix) ------------------------------------------------

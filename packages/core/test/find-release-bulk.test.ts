@@ -25,6 +25,9 @@ function bulkFakeClient(
     async getPullRequest(_repo, n) {
       return { merged: true, mergeCommitSha: `pr${n}`.padEnd(40, '0'), rateLimit };
     },
+    async getIssueClosingCommit(_repo, n) {
+      return { state: 'fixed', closingCommits: [`is${n}`.padEnd(40, '0')], title: null, rateLimit };
+    },
     async compareCommits(_repo, base, _head) {
       const tag = tags.find((t) => t.sha === base);
       return {

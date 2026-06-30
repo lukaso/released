@@ -115,7 +115,9 @@ export async function run(
 }
 
 function refKey(p: ReturnType<typeof parseInput>): string {
-  return p.kind === 'pr' ? `pr#${p.number}` : `sha:${p.sha}`;
+  if (p.kind === 'pr') return `pr#${p.number}`;
+  if (p.kind === 'issue') return `issue#${p.number}`;
+  return `sha:${p.sha}`;
 }
 
 function pickFormat(flags: Flags): FormatKind {

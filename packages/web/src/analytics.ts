@@ -14,7 +14,7 @@
 //   blob3   repo      owner/repo or projectPath
 //   blob4   outcome   released|not_yet|partial|error|invalid
 //   blob5   cache     hit|miss
-//   blob6   kind      commit|pr
+//   blob6   kind      commit|pr|issue
 //   blob7   audience  human|bot (unfurl)
 //   blob8   errorType error class name, when outcome=error
 //   blob9   country   request.cf.country
@@ -52,7 +52,7 @@ export type AnalyticsEvent = {
   repo?: string;
   outcome?: 'released' | 'not_yet' | 'partial' | 'error' | 'invalid';
   cache?: 'hit' | 'miss';
-  kind?: 'commit' | 'pr';
+  kind?: 'commit' | 'pr' | 'issue';
   audience?: 'human' | 'bot';
   errorType?: string;
   country?: string;
