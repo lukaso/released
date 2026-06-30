@@ -19,6 +19,10 @@ export const githubUrls = {
     const { owner, repo } = githubOwnerRepo(r);
     return `${HOST}/${owner}/${repo}/pull/${n}`;
   },
+  issue(r: RepoRef, n: number): string {
+    const { owner, repo } = githubOwnerRepo(r);
+    return `${HOST}/${owner}/${repo}/issues/${n}`;
+  },
   release(r: RepoRef, tag: string): string {
     const { owner, repo } = githubOwnerRepo(r);
     return `${HOST}/${owner}/${repo}/releases/tag/${encodeURIComponent(tag)}`;

@@ -122,6 +122,7 @@ export interface Provider {
     repo(r: RepoRef): string;
     commit(r: RepoRef, sha: string): string;
     pullRequest(r: RepoRef, n: number): string;
+    issue(r: RepoRef, n: number): string;
     release(r: RepoRef, tag: string): string;
   };
 }

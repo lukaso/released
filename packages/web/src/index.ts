@@ -5,8 +5,10 @@
 //   GET  /lookup?q=...                           → 302 to the canonical permalink
 //   GET  /r/:owner/:repo/c/:sha                  → permalink result page (GitHub)
 //   GET  /p/:owner/:repo/:number                 → PR permalink (GitHub)
+//   GET  /i/:owner/:repo/:number                 → issue permalink (GitHub)
 //   GET  /h/:host/r/:projectPath/c/:sha          → permalink result page (federated, any host)
 //   GET  /h/:host/p/:projectPath/:number         → PR/MR permalink (federated)
+//   GET  /h/:host/i/:projectPath/:number         → issue permalink (federated)
 //   GET  /<permalink>/badge.svg                  → auto-updating SVG status badge
 //   POST /api/lookup                             → JSON single lookup (client-side fetch)
 //   POST /api/lookup-bulk                        → JSON bulk lookup
@@ -21,12 +23,13 @@ import { eventForPath, refererHost, setTrack, takeTrack, track } from './analyti
 import { isUnfurlBot } from './auth.js';
 import { type Env, publicBaseUrl } from './env.js';
 import { recognizeOwnUrl } from './own-url.js';
-import { commitPermalinkPath, prPermalinkPath } from './paths.js';
+import { commitPermalinkPath, issuePermalinkPath, prPermalinkPath } from './paths.js';
 import { badgeRoute } from './routes/badge.js';
 import { eventRoute } from './routes/event.js';
 import { homeRoute } from './routes/home.js';
 import { howItWorksRoute } from './routes/how-it-works.js';
 import { internalFederatedResultRoute, internalResultRoute } from './routes/internal.js';
+import { issueRoute } from './routes/issue.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
 import { lookupRoute } from './routes/lookup.js';
 import { prRoute } from './routes/pr.js';
@@ -104,11 +107,8 @@ app.get('/lookup', (c) => {
     if (p.kind === 'pr') {
       return c.redirect(prPermalinkPath(p.repo, p.number), 302);
     }
-    // Issue input support (#54) lands its permalink route in a follow-up; until
-    // then parseInput does not emit issue inputs, so this branch is unreachable
-    // and exists only to keep the union exhaustive (no `issue` permalink yet).
     if (p.kind === 'issue') {
-      return c.redirect(`/?bad=${encodeURIComponent(q)}&reason=issue_unsupported`, 302);
+      return c.redirect(issuePermalinkPath(p.repo, p.number), 302);
     }
     // Use the FULL SHA in the permalink (not a 7-char prefix) — short prefixes
     // collide in large repos like kubernetes/kubernetes, which makes getCommit
@@ -127,10 +127,12 @@ app.get('/lookup', (c) => {
 // GitHub permalinks (legacy/canonical — preserved for cached unfurls + bookmarks).
 app.get('/r/:owner/:repo/c/:sha', resultRoute);
 app.get('/p/:owner/:repo/:number', prRoute);
+app.get('/i/:owner/:repo/:number', issueRoute);
 
 // Federated permalinks (any non-GitHub provider). projectPath URL-encoded.
 app.get('/h/:host/r/:projectPath/c/:sha', resultRoute);
 app.get('/h/:host/p/:projectPath/:number', prRoute);
+app.get('/h/:host/i/:projectPath/:number', issueRoute);
 
 // Auto-updating status badges (one extra `/badge.svg` segment per permalink).
 app.get('/r/:owner/:repo/c/:sha/badge.svg', badgeRoute);

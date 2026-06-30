@@ -78,6 +78,10 @@ const GITHUB_SHA_URL_RE =
 const PR_COMMIT_URL_RE =
   /^(?:https?:\/\/)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/\d+\/(?:commits|changes|files)\/([0-9a-f]{7,40})(?:\/.*)?$/i;
 const PR_URL_RE = /^(?:https?:\/\/)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)(?:\/.*)?$/i;
+// /issues/{N}[/...] — a GitHub issue. An issue is a third way to name a commit:
+// it resolves to the commit(s) that closed it (see #54). The bare `owner/repo#N`
+// shorthand stays a PR (ambiguous without a probe), so issues need the full URL.
+const ISSUE_URL_RE = /^(?:https?:\/\/)?github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+)(?:\/.*)?$/i;
 const OWNER_REPO_AT_SHA_RE = /^([\w.-]+)\/([\w.-]+)@([0-9a-f]{7,40})$/i;
 const OWNER_REPO_HASH_PR_RE = /^([\w.-]+)\/([\w.-]+)#(\d+)$/;
 const REPO_SSH_RE = /^git@github\.com:([\w.-]+)\/([\w.-]+?)(?:\.git)?$/i;
@@ -98,6 +102,7 @@ const ANY_GITHUB_URL_RE = /^(?:https?:\/\/)?github\.com\//i;
 const GITLAB_SHA_URL_RE =
   /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:commit|commits|blob|tree|blame|raw)\/([0-9a-f]{7,40})(?:\.(?:patch|diff))?(?:\/.*)?$/i;
 const GITLAB_MR_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/i;
+const GITLAB_ISSUE_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/issues\/(\d+)(?:\/.*)?$/i;
 const ANY_GITLAB_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(?:.+?)\/-\//i;
 
 const GITHUB_HOST = 'github.com';
@@ -106,7 +111,8 @@ const GITHUB_HOST = 'github.com';
  * Parse user input into a canonical {@link LookupInput}.
  *
  * Single-arg form (`input` only): accepts a GitHub or supported-GitLab commit URL,
- * PR/MR URL, `owner/repo@sha` shorthand (GitHub), or `owner/repo#pr` shorthand (GitHub).
+ * PR/MR URL, issue URL (`/issues/N` on GitHub, `/-/issues/N` on GitLab),
+ * `owner/repo@sha` shorthand (GitHub), or `owner/repo#pr` shorthand (GitHub).
  *
  * Two-arg form (`input` + `ref`): `input` is a GitHub repo identifier (URL or
  * owner/repo), `ref` is either a SHA (7-40 hex) or a PR number (optionally
@@ -160,6 +166,12 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     return { kind: 'pr', repo: githubRef(owner, repo), number: Number.parseInt(num, 10) };
   }
 
+  const issueUrl = stripped.match(ISSUE_URL_RE);
+  if (issueUrl) {
+    const [owner, repo, num] = captures(issueUrl, 3);
+    return { kind: 'issue', repo: githubRef(owner, repo), number: Number.parseInt(num, 10) };
+  }
+
   // GitLab URL shapes — checked after GitHub, before bareword shorthands.
   const gitlabSha = stripped.match(GITLAB_SHA_URL_RE);
   if (gitlabSha) {
@@ -174,6 +186,13 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     const host = hostRaw.toLowerCase();
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
     return { kind: 'pr', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
+  }
+  const gitlabIssue = stripped.match(GITLAB_ISSUE_URL_RE);
+  if (gitlabIssue) {
+    const [hostRaw, projectPath, num] = captures(gitlabIssue, 3);
+    const host = hostRaw.toLowerCase();
+    if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
+    return { kind: 'issue', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
   }
 
   const atSha = stripped.match(OWNER_REPO_AT_SHA_RE);
@@ -220,7 +239,7 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   if (ANY_GITHUB_URL_RE.test(trimmed)) {
     throw new InvalidInputError(
       `${input} — that's a GitHub URL but not one I recognize. ` +
-        `I can read /commit/{sha}, /commits/{sha}, /blob|tree|blame|raw/{sha}/..., and /pull/{N}.`,
+        `I can read /commit/{sha}, /commits/{sha}, /blob|tree|blame|raw/{sha}/..., /pull/{N}, and /issues/{N}.`,
     );
   }
   const gitlabShape = trimmed.match(ANY_GITLAB_URL_RE);
@@ -230,7 +249,7 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
     throw new InvalidInputError(
       `${input} — that's a ${host} URL but not a shape I recognize. ` +
-        `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., and /-/merge_requests/{N}.`,
+        `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., /-/merge_requests/{N}, and /-/issues/{N}.`,
     );
   }
   if (looksLikeUrl(trimmed)) {

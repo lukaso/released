@@ -46,6 +46,32 @@ describe('parseInput — GitHub single-arg smart input (CP5)', () => {
     });
   });
 
+  it('parses a GitHub issue URL', () => {
+    expect(parseInput('https://github.com/honojs/hono/issues/1234')).toEqual({
+      kind: 'issue',
+      repo: GH('honojs/hono'),
+      number: 1234,
+    });
+  });
+
+  it('parses a GitHub issue URL with a trailing path segment', () => {
+    expect(parseInput('https://github.com/cli/cli/issues/42/timeline')).toEqual({
+      kind: 'issue',
+      repo: GH('cli/cli'),
+      number: 42,
+    });
+  });
+
+  it('does not treat owner/repo#N shorthand as an issue (stays a PR — bare #N is ambiguous)', () => {
+    // The bare `#N` shorthand resolves to a PR; the issue path needs the full
+    // /issues/N URL until the resolver-side #N probe lands (see #54).
+    expect(parseInput('honojs/hono#1234')).toEqual({
+      kind: 'pr',
+      repo: GH('honojs/hono'),
+      number: 1234,
+    });
+  });
+
   it('strips trailing slashes and whitespace', () => {
     expect(parseInput('  https://github.com/facebook/react/commit/abc1234/  ')).toEqual({
       kind: 'commit',
@@ -197,6 +223,24 @@ describe('parseInput — GitLab URL shapes (federation)', () => {
       kind: 'pr',
       repo: GL('gitlab.gnome.org', 'GNOME/gimp'),
       number: 2466,
+    });
+  });
+
+  it('parses a GitLab issue URL', () => {
+    expect(parseInput('https://gitlab.gnome.org/GNOME/gimp/-/issues/9876')).toEqual({
+      kind: 'issue',
+      repo: GL('gitlab.gnome.org', 'GNOME/gimp'),
+      number: 9876,
+    });
+  });
+
+  it('parses a nested-subgroup GitLab issue URL with a trailing segment', () => {
+    expect(
+      parseInput('https://gitlab.com/gitlab-org/security-products/foo/-/issues/3/designs'),
+    ).toEqual({
+      kind: 'issue',
+      repo: GL('gitlab.com', 'gitlab-org/security-products/foo'),
+      number: 3,
     });
   });
 

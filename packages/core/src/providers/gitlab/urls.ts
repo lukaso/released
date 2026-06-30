@@ -17,6 +17,9 @@ export function makeGitlabUrls(host: string) {
     pullRequest(r: RepoRef, n: number): string {
       return `${base}/${r.projectPath}/-/merge_requests/${n}`;
     },
+    issue(r: RepoRef, n: number): string {
+      return `${base}/${r.projectPath}/-/issues/${n}`;
+    },
     release(r: RepoRef, tag: string): string {
       return `${base}/${r.projectPath}/-/releases/${encodeURIComponent(tag)}`;
     },
