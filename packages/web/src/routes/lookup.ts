@@ -71,7 +71,11 @@ export async function lookupRoute(c: Context): Promise<Response> {
   const k = await cacheKey(
     'res',
     `${parsed.repo.host}/${parsed.repo.projectPath}`,
-    parsed.kind === 'pr' ? `pr#${parsed.number}` : `sha:${parsed.sha}`,
+    parsed.kind === 'pr'
+      ? `pr#${parsed.number}`
+      : parsed.kind === 'issue'
+        ? `issue#${parsed.number}`
+        : `sha:${parsed.sha}`,
     strict ? 'strict' : 'cull',
     includePrereleases ? 'pre' : 'nopre',
   );

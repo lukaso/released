@@ -5,12 +5,14 @@ import {
   AmbiguousShaError,
   CommitNotFoundError,
   GitHubServerError,
+  IssueNotFoundError,
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
 } from '../../errors.js';
 import type { Provider, ProviderOpts } from '../../provider.js';
 import {
+  type IssueResolution,
   type RateLimitInfo,
   type RepoRef,
   type TagWithDate,
@@ -45,6 +47,37 @@ const TAGS_QUERY = `
           }
         }
         pageInfo{ hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
+// Resolve an issue to its closing commit(s) in ONE call. `closedByPullRequestsReferences`
+// is GitHub's authoritative "linked pull requests" connection (the UI's Development
+// sidebar) — far more precise than scraping cross-referenced timeline mentions, which
+// fire for any mention, not just a closer. `ClosedEvent.closer` adds the case where an
+// issue was closed directly by a commit (`fixes #N` pushed to default) or by a merged PR.
+const ISSUE_QUERY = `
+  query($owner:String!,$name:String!,$number:Int!){
+    repository(owner:$owner,name:$name){
+      issue(number:$number){
+        title
+        state
+        stateReason
+        timelineItems(itemTypes:[CLOSED_EVENT],last:10){
+          nodes{
+            ... on ClosedEvent {
+              closer{
+                __typename
+                ... on Commit { oid }
+                ... on PullRequest { merged mergeCommit { oid } }
+              }
+            }
+          }
+        }
+        closedByPullRequestsReferences(first:20,includeClosedPrs:false){
+          nodes{ merged mergeCommit { oid } }
+        }
       }
     }
   }
@@ -117,6 +150,48 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
       title: body.title ?? null,
       rateLimit,
     };
+  }
+
+  async function getIssueClosingCommit(repo: RepoRef, n: number): Promise<IssueResolution> {
+    const { owner, repo: name } = githubOwnerRepo(repo);
+    const res = await call(gqlEndpoint, {
+      method: 'POST',
+      headers: { ...baseHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify({ query: ISSUE_QUERY, variables: { owner, name, number: n } }),
+    });
+    const rateLimit = parseRateLimit(res);
+    if (!res.ok) throw new GitHubServerError(res.status, res.statusText);
+    const body = await readJson<GraphqlIssueResponse>(res);
+    const issue = body.data?.repository?.issue;
+    if (!issue) throw new IssueNotFoundError(n);
+    const title = issue.title ?? null;
+
+    if (issue.state !== 'CLOSED') {
+      return { state: 'open', title, rateLimit };
+    }
+    if (issue.stateReason === 'NOT_PLANNED') {
+      return { state: 'closed_without_fix', title, notPlanned: true, rateLimit };
+    }
+
+    // Closed-completed: gather closing commit SHAs from both authoritative signals.
+    const commits = new Set<string>();
+    for (const node of issue.timelineItems?.nodes ?? []) {
+      const closer = node?.closer;
+      if (!closer) continue;
+      if (closer.__typename === 'Commit' && closer.oid) {
+        commits.add(closer.oid);
+      } else if (closer.__typename === 'PullRequest' && closer.merged && closer.mergeCommit?.oid) {
+        commits.add(closer.mergeCommit.oid);
+      }
+    }
+    for (const pr of issue.closedByPullRequestsReferences?.nodes ?? []) {
+      if (pr?.merged && pr.mergeCommit?.oid) commits.add(pr.mergeCommit.oid);
+    }
+
+    if (commits.size === 0) {
+      return { state: 'closed_without_fix', title, notPlanned: false, rateLimit };
+    }
+    return { state: 'fixed', closingCommits: [...commits], title, rateLimit };
   }
 
   async function getCommit(repo: RepoRef, sha: string) {
@@ -214,6 +289,7 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
     kind: 'github',
     terms: GITHUB_TERMS,
     getPullRequest,
+    getIssueClosingCommit,
     getCommit,
     listTagsWithDates,
     compareCommits,
@@ -223,6 +299,28 @@ export function makeGithubProvider(opts: ProviderOpts = {}): Provider {
 }
 
 // --- GraphQL response shape --------------------------------------------------
+
+type GraphqlPrRef = { merged?: boolean; mergeCommit?: { oid?: string } | null };
+type GraphqlIssueResponse = {
+  data?: {
+    repository?: {
+      issue?: {
+        title?: string | null;
+        state?: string;
+        stateReason?: string | null;
+        timelineItems?: {
+          nodes?: ({
+            closer?:
+              | { __typename: 'Commit'; oid?: string }
+              | ({ __typename: 'PullRequest' } & GraphqlPrRef)
+              | null;
+          } | null)[];
+        };
+        closedByPullRequestsReferences?: { nodes?: (GraphqlPrRef | null)[] };
+      } | null;
+    };
+  };
+};
 
 type GraphqlTagsResponse = {
   data?: {

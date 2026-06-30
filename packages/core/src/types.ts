@@ -52,10 +52,15 @@ export function displayName(r: RepoRef): string {
   return r.projectPath;
 }
 
-/** Parsed user input — what to look up. */
+/** Parsed user input — what to look up.
+ *
+ *  `issue` is a third way to *name a commit* (like `pr`): an issue resolves to
+ *  the commit(s) that closed it, which then flow through the identical
+ *  commit→release pipeline. See {@link IssueResolution} and find-release.ts. */
 export type LookupInput =
   | { readonly kind: 'commit'; readonly repo: RepoRef; readonly sha: string }
-  | { readonly kind: 'pr'; readonly repo: RepoRef; readonly number: number };
+  | { readonly kind: 'pr'; readonly repo: RepoRef; readonly number: number }
+  | { readonly kind: 'issue'; readonly repo: RepoRef; readonly number: number };
 
 /** A tag with its best-available release date (Release `published_at` > annotated
  *  tagger date > tagged commit's committer date). Date is for *ordering only*,
@@ -98,6 +103,36 @@ export type RateLimitInfo = {
   /** Reset time as a unix epoch seconds value. */
   readonly resetAt: number;
 };
+
+/** Result of resolving an issue to the commit(s) that closed it. Discriminated
+ *  by `state` (mirrors how the PR path raises PrNotMerged for the unmerged case):
+ *
+ *  - `open` — the issue is still open; nothing to track to a release yet.
+ *  - `closed_without_fix` — closed, but no machine-discoverable fixing commit or
+ *    merged PR/MR. COMMON in practice (manual closes, `not_planned`), not an edge
+ *    case — see the #54 research. `notPlanned` distinguishes a "won't fix" close.
+ *  - `fixed` — one or more closing commits. Multiple closers are real (~10–17% of
+ *    fixed issues); find-release reports the earliest release containing any.
+ *
+ *  `title` is the issue title, used as the lookup headline (like a PR title). */
+export type IssueResolution =
+  | {
+      readonly state: 'open';
+      readonly title: string | null;
+      readonly rateLimit: RateLimitInfo | null;
+    }
+  | {
+      readonly state: 'closed_without_fix';
+      readonly title: string | null;
+      readonly notPlanned: boolean;
+      readonly rateLimit: RateLimitInfo | null;
+    }
+  | {
+      readonly state: 'fixed';
+      readonly closingCommits: readonly string[];
+      readonly title: string | null;
+      readonly rateLimit: RateLimitInfo | null;
+    };
 
 /** Final shape returned by findRelease on success. */
 export type LookupResult = {

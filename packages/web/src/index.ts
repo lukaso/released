@@ -104,6 +104,12 @@ app.get('/lookup', (c) => {
     if (p.kind === 'pr') {
       return c.redirect(prPermalinkPath(p.repo, p.number), 302);
     }
+    // Issue input support (#54) lands its permalink route in a follow-up; until
+    // then parseInput does not emit issue inputs, so this branch is unreachable
+    // and exists only to keep the union exhaustive (no `issue` permalink yet).
+    if (p.kind === 'issue') {
+      return c.redirect(`/?bad=${encodeURIComponent(q)}&reason=issue_unsupported`, 302);
+    }
     // Use the FULL SHA in the permalink (not a 7-char prefix) — short prefixes
     // collide in large repos like kubernetes/kubernetes, which makes getCommit
     // return 422 ambiguous. The UI displays the short form for cosmetics; the

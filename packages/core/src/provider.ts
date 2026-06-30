@@ -2,7 +2,7 @@
 // these 5 methods + url builders + display terms. The algorithm in find-release.ts
 // is provider-agnostic and consumes this interface unchanged across all providers.
 
-import type { RateLimitInfo, RepoRef, TagWithDate } from './types.js';
+import type { IssueResolution, RateLimitInfo, RepoRef, TagWithDate } from './types.js';
 
 /** Common options that any provider factory accepts. */
 export type ProviderOpts = {
@@ -46,6 +46,18 @@ export interface Provider {
     title?: string | null;
     rateLimit: RateLimitInfo | null;
   }>;
+  /** Resolve an issue number to the commit(s) that closed it. Returns a
+   *  discriminated {@link IssueResolution}: `open` (no fix yet),
+   *  `closed_without_fix` (closed but no discoverable linked commit/PR — common),
+   *  or `fixed` with one or more closing commit SHAs. Throws IssueNotFoundError
+   *  on 404.
+   *
+   *  The "what fixed this" signal is provider-specific (GitHub: the close-event
+   *  `commit_id` when present, else linked merged PRs from the issue timeline;
+   *  GitLab: `closed_by` MRs, then `related_merge_requests` filtered to merged).
+   *  The resolver does NOT pick among multiple closers — it returns them all and
+   *  find-release applies the earliest-release tie-break. */
+  getIssueClosingCommit(repo: RepoRef, n: number): Promise<IssueResolution>;
   /** Resolve a commit (possibly a short SHA) to its full SHA + committed date.
    *  `subject` is the first line of the commit message when available. */
   getCommit(

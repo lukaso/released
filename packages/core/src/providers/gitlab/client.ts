@@ -12,6 +12,7 @@
 
 import {
   CommitNotFoundError,
+  IssueNotFoundError,
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
@@ -19,6 +20,7 @@ import {
 } from '../../errors.js';
 import type { Provider, ProviderOpts } from '../../provider.js';
 import {
+  type IssueResolution,
   type RateLimitInfo,
   type RepoRef,
   type TagWithDate,
@@ -104,6 +106,55 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     const sha = body.merge_commit_sha ?? body.squash_commit_sha ?? body.sha;
     if (sha == null) throw new PrMergeCommitUnavailableError(n, GITLAB_TERMS);
     return { merged: true as const, mergeCommitSha: sha, title: body.title ?? null, rateLimit };
+  }
+
+  /** Pull merge commit SHAs out of a list of MR objects, keeping only merged ones. */
+  function mergedCommits(mrs: GitlabMr[]): string[] {
+    const out = new Set<string>();
+    for (const mr of mrs) {
+      if (mr.state !== 'merged') continue;
+      const sha = mr.merge_commit_sha ?? mr.squash_commit_sha ?? mr.sha;
+      if (sha) out.add(sha);
+    }
+    return [...out];
+  }
+
+  async function getIssueClosingCommit(repo: RepoRef, n: number): Promise<IssueResolution> {
+    // Issue metadata: state ('opened' | 'closed') + title.
+    const issueRes = await call(`${restBase}/projects/${projectId(repo)}/issues/${n}`, {
+      headers: baseHeaders(),
+    });
+    let rateLimit = parseRateLimit(issueRes);
+    if (issueRes.status === 404) throw new IssueNotFoundError(n);
+    if (!issueRes.ok) throw new ProviderServerError(host, issueRes.status, issueRes.statusText);
+    const issue = await readJson<{ state: string; title?: string | null }>(issueRes);
+    const title = issue.title ?? null;
+    // GitLab issue state is 'opened' | 'closed'. No not_planned concept.
+    if (issue.state !== 'closed') {
+      return { state: 'open', title, rateLimit };
+    }
+
+    // `closed_by`: the MRs that auto-closed the issue. Frequently EMPTY on
+    // manual-close-heavy hosts (GNOME) — fall back to related_merge_requests
+    // filtered to merged (#54 research, finding 5). Both endpoints can 404 on
+    // some self-hosted versions; treat a 404 as "no data" rather than failing.
+    const fetchMrs = async (path: string): Promise<string[]> => {
+      const res = await call(`${restBase}/projects/${projectId(repo)}/issues/${n}/${path}`, {
+        headers: baseHeaders(),
+      });
+      rateLimit = parseRateLimit(res) ?? rateLimit;
+      if (res.status === 404) return [];
+      if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
+      return mergedCommits(await readJson<GitlabMr[]>(res));
+    };
+
+    let commits = await fetchMrs('closed_by');
+    if (commits.length === 0) commits = await fetchMrs('related_merge_requests');
+
+    if (commits.length === 0) {
+      return { state: 'closed_without_fix', title, notPlanned: false, rateLimit };
+    }
+    return { state: 'fixed', closingCommits: commits, title, rateLimit };
   }
 
   async function getCommit(repo: RepoRef, sha: string) {
@@ -217,6 +268,7 @@ export function makeGitlabProvider(host: string, opts: ProviderOpts = {}): Provi
     kind: 'gitlab',
     terms: GITLAB_TERMS,
     getPullRequest,
+    getIssueClosingCommit,
     getCommit,
     listTagsWithDates,
     compareCommits,
@@ -233,6 +285,16 @@ type GitlabTag = {
   name: string;
   commit: { id: string; committed_date?: string; created_at?: string };
   release?: { description?: string | null } | null;
+};
+
+/** Subset of a GitLab merge request object returned by closed_by /
+ *  related_merge_requests. `sha` is the source-branch head at merge time (used
+ *  for fast-forward merges that create no merge commit, common on GNOME). */
+type GitlabMr = {
+  state: string;
+  merge_commit_sha?: string | null;
+  squash_commit_sha?: string | null;
+  sha?: string | null;
 };
 
 function decodeTag(t: GitlabTag): TagWithDate | null {

@@ -3,6 +3,7 @@ import {
   AmbiguousShaError,
   CommitNotFoundError,
   GitHubServerError,
+  IssueNotFoundError,
   NetworkError,
   PrMergeCommitUnavailableError,
   PrNotFoundError,
@@ -476,5 +477,118 @@ describe('token + headers', () => {
     const c = makeGithubClient({ fetch: mockFetch });
     await c.getCommit({ host: 'github.com', projectPath: 'o/r' }, 'abcdef1234');
     expect(calls[0]!.headers.get('authorization')).toBeNull();
+  });
+});
+
+describe('getIssueClosingCommit', () => {
+  const REPO = { host: 'github.com', projectPath: 'o/r' } as const;
+  const issueResp = (issue: unknown) => jsonResp({ data: { repository: { issue } } });
+
+  it('returns open for an issue that is not closed', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Crash on launch',
+        state: 'OPEN',
+        stateReason: null,
+        timelineItems: { nodes: [] },
+        closedByPullRequestsReferences: { nodes: [] },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'open', title: 'Crash on launch' });
+  });
+
+  it('maps a not_planned close to closed_without_fix (notPlanned)', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Wontfix',
+        state: 'CLOSED',
+        stateReason: 'NOT_PLANNED',
+        timelineItems: { nodes: [] },
+        closedByPullRequestsReferences: { nodes: [] },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'closed_without_fix', notPlanned: true });
+  });
+
+  it('resolves a linked merged PR to its merge commit', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Fixed via PR',
+        state: 'CLOSED',
+        stateReason: 'COMPLETED',
+        timelineItems: { nodes: [] },
+        closedByPullRequestsReferences: {
+          nodes: [{ merged: true, mergeCommit: { oid: 'mergesha1' } }],
+        },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['mergesha1'] });
+  });
+
+  it('resolves a ClosedEvent whose closer is a direct commit', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Closed by commit',
+        state: 'CLOSED',
+        stateReason: 'COMPLETED',
+        timelineItems: { nodes: [{ closer: { __typename: 'Commit', oid: 'directsha' } }] },
+        closedByPullRequestsReferences: { nodes: [] },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['directsha'] });
+  });
+
+  it('dedups a commit seen via both the closer and the linked-PR connection', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Both signals',
+        state: 'CLOSED',
+        stateReason: 'COMPLETED',
+        timelineItems: {
+          nodes: [
+            {
+              closer: { __typename: 'PullRequest', merged: true, mergeCommit: { oid: 'samesha' } },
+            },
+          ],
+        },
+        closedByPullRequestsReferences: {
+          nodes: [{ merged: true, mergeCommit: { oid: 'samesha' } }],
+        },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['samesha'] });
+  });
+
+  it('ignores an unmerged linked PR → closed_without_fix', async () => {
+    const fetch = queuedFetch(
+      issueResp({
+        title: 'Closed, PR never merged',
+        state: 'CLOSED',
+        stateReason: 'COMPLETED',
+        timelineItems: { nodes: [] },
+        closedByPullRequestsReferences: {
+          nodes: [{ merged: false, mergeCommit: null }],
+        },
+      }),
+    );
+    const c = makeGithubClient({ fetch });
+    const res = await c.getIssueClosingCommit(REPO, 123);
+    expect(res).toMatchObject({ state: 'closed_without_fix', notPlanned: false });
+  });
+
+  it('throws IssueNotFoundError when the issue is null', async () => {
+    const fetch = queuedFetch(issueResp(null));
+    const c = makeGithubClient({ fetch });
+    await expect(c.getIssueClosingCommit(REPO, 999)).rejects.toBeInstanceOf(IssueNotFoundError);
   });
 });

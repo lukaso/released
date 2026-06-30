@@ -126,6 +126,56 @@ export class PrMergeCommitUnavailableError extends ReleasedError {
   }
 }
 
+// --- Issue resolution --------------------------------------------------------
+// Issues use the `#` sigil on BOTH GitHub and GitLab (only MRs use GitLab's `!`),
+// so a literal `#${n}` is correct vocabulary for both providers.
+
+export class IssueNotFoundError extends ReleasedError {
+  readonly kind = 'issue_not_found' as const;
+  constructor(public readonly issueNumber: number) {
+    super(`Issue #${issueNumber} not found.`);
+    this.name = 'IssueNotFoundError';
+  }
+}
+
+/** Thrown when the issue is still OPEN — there is no fix to track to a release
+ *  yet. Mirrors PrNotMergedError's "open" case. Short-cache like not-yet: a fix
+ *  can still land. */
+export class IssueNotClosedError extends ReleasedError {
+  readonly kind = 'issue_not_closed' as const;
+  constructor(
+    public readonly issueNumber: number,
+    /** Issue title, so the UI/copy can stay self-describing. */
+    public readonly subject: string | null = null,
+  ) {
+    super(`Issue #${issueNumber} is still open — there's no fix to track to a release yet.`);
+    this.name = 'IssueNotClosedError';
+  }
+}
+
+/** Thrown when the issue is CLOSED but no fixing commit / merged PR/MR could be
+ *  found (manual close, `not_planned`, or no auto-close link). COMMON in
+ *  practice, not an edge case (#54 research) — the UI must render it as a calm,
+ *  normal result matching the other cards' tone, NOT as an error or the
+ *  not-released UI, and short-cache it (a fix can still land later). */
+export class IssueClosedWithoutFixError extends ReleasedError {
+  readonly kind = 'issue_closed_without_fix' as const;
+  constructor(
+    public readonly issueNumber: number,
+    /** True when the issue was closed as *not planned* ("won't fix"), as opposed
+     *  to closed-completed with no discoverable linked fix. Drives the wording. */
+    public readonly notPlanned: boolean = false,
+    public readonly subject: string | null = null,
+  ) {
+    super(
+      notPlanned
+        ? `Issue #${issueNumber} was closed as not planned.`
+        : `Issue #${issueNumber} was closed, but no fixing commit or merged pull/merge request was found.`,
+    );
+    this.name = 'IssueClosedWithoutFixError';
+  }
+}
+
 // --- Tag listing / algorithm -------------------------------------------------
 
 export class NoReleasesError extends ReleasedError {

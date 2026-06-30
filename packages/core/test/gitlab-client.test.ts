@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CommitNotFoundError,
+  IssueNotFoundError,
   PrMergeCommitUnavailableError,
   PrNotFoundError,
   PrNotMergedError,
@@ -485,5 +486,80 @@ describe('GitlabProvider — auth + rate-limit + errors', () => {
       expect(err).toBeInstanceOf(RateLimitError);
       expect((err as RateLimitError).providerHost).toBe('gitlab.gnome.org');
     }
+  });
+});
+
+describe('getIssueClosingCommit', () => {
+  it('returns open for an opened issue (no further calls)', async () => {
+    const fetch = queuedFetch(jsonResp({ state: 'opened', title: 'Bug report' }));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'open', title: 'Bug report' });
+  });
+
+  it('resolves a merged closed_by MR to its merge commit', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', title: 'Fixed bug' }),
+      jsonResp([{ state: 'merged', merge_commit_sha: 'mc1' }]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['mc1'], title: 'Fixed bug' });
+  });
+
+  it('uses the source-branch sha for a fast-forward merge (no merge commit)', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', title: 'FF merge' }),
+      jsonResp([
+        { state: 'merged', merge_commit_sha: null, squash_commit_sha: null, sha: 'ffsha' },
+      ]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['ffsha'] });
+  });
+
+  it('falls back to related_merge_requests when closed_by is empty', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', title: 'Linked, not auto-closed' }),
+      jsonResp([]), // closed_by empty
+      jsonResp([
+        { state: 'opened', merge_commit_sha: null },
+        { state: 'merged', merge_commit_sha: 'related1' },
+      ]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['related1'] });
+  });
+
+  it('treats a 404 on closed_by as empty and tries related_merge_requests', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', title: 'x' }),
+      errResp(404), // closed_by 404 on some self-hosted versions
+      jsonResp([{ state: 'merged', merge_commit_sha: 'rel404' }]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'fixed', closingCommits: ['rel404'] });
+  });
+
+  it('closed with no merged MRs anywhere → closed_without_fix (never notPlanned on GitLab)', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ state: 'closed', title: 'Manually closed' }),
+      jsonResp([]),
+      jsonResp([{ state: 'closed', merge_commit_sha: null }]),
+    );
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    const res = await c.getIssueClosingCommit(GNOME_GIMP, 42);
+    expect(res).toMatchObject({ state: 'closed_without_fix', notPlanned: false });
+  });
+
+  it('throws IssueNotFoundError on a 404 for the issue itself', async () => {
+    const fetch = queuedFetch(errResp(404));
+    const c = makeGitlabProvider('gitlab.gnome.org', { fetch });
+    await expect(c.getIssueClosingCommit(GNOME_GIMP, 999)).rejects.toBeInstanceOf(
+      IssueNotFoundError,
+    );
   });
 });
