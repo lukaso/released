@@ -2,8 +2,10 @@
 //
 //   GET /r/:owner/:repo/c/:sha/badge.svg            — commit (GitHub)
 //   GET /p/:owner/:repo/:number/badge.svg           — PR (GitHub)
+//   GET /i/:owner/:repo/:number/badge.svg           — issue (GitHub)
 //   GET /h/:host/r/:projectPath/c/:sha/badge.svg    — commit (federated)
 //   GET /h/:host/p/:projectPath/:number/badge.svg   — MR (federated)
+//   GET /h/:host/i/:projectPath/:number/badge.svg   — issue (federated)
 //
 // Shares the exact cache key the permalink page uses, so once a page (or a
 // prior badge fetch) warms the cache the badge is instant. Released answers are
@@ -11,6 +13,7 @@
 // (GitHub camo / GitLab) re-fetches and the badge flips after a release.
 
 import {
+  IssueNotClosedError,
   type LookupInput,
   type LookupResult,
   PrNotMergedError,
@@ -43,6 +46,13 @@ function repoFromParams(c: Context): RepoRef | null {
   return { host: 'github.com', projectPath: `${owner}/${repo}` };
 }
 
+/** Issue badge routes carry a `:number` like PR routes, so the param alone
+ *  can't tell them apart — disambiguate on the path. projectPath is encoded into
+ *  a single segment (`%2F`), so no stray slash can fake the `/i/` marker. */
+function isIssueBadgePath(pathname: string): boolean {
+  return /^\/i\//.test(pathname) || /^\/h\/[^/]+\/i\//.test(pathname);
+}
+
 function svg(body: string, cacheControl: string): Response {
   return new Response(body, {
     headers: {
@@ -65,20 +75,24 @@ export async function badgeRoute(c: Context): Promise<Response> {
   if (!repo) return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
   setTrack(req, { host: repo.host, repo: repo.projectPath });
 
-  // Decide commit vs PR from the params present on the matched route.
+  // Decide commit vs PR vs issue from the params + path on the matched route.
+  // PR and issue routes both carry `:number`; the path tells them apart.
   const numberStr = c.req.param('number');
   const sha = c.req.param('sha');
+  const isIssue = isIssueBadgePath(new URL(req.url).pathname);
   let input: LookupInput;
   let keyPart: string;
   if (numberStr !== undefined) {
-    setTrack(req, { kind: 'pr' });
+    setTrack(req, { kind: isIssue ? 'issue' : 'pr' });
     const n = Number.parseInt(numberStr, 10);
     if (!Number.isFinite(n) || n <= 0) {
       setTrack(req, { outcome: 'invalid' });
       return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
     }
-    input = { kind: 'pr', repo, number: n };
-    keyPart = `pr#${n}`;
+    // Same cache key the issue/pr permalink pages use, so a page (or prior badge)
+    // visit warms it (issue#N for issues, pr#N for PR/MRs).
+    input = isIssue ? { kind: 'issue', repo, number: n } : { kind: 'pr', repo, number: n };
+    keyPart = isIssue ? `issue#${n}` : `pr#${n}`;
   } else {
     setTrack(req, { kind: 'commit' });
     if (!sha || !/^[0-9a-f]{7,40}$/i.test(sha)) {
@@ -152,6 +166,13 @@ export async function badgeRoute(c: Context): Promise<Response> {
   // so the proxy re-fetches and the badge updates within minutes of merge.
   // Closed-without-merging stays "unknown" — it will never flip.
   if (resolved.error instanceof PrNotMergedError && resolved.error.prState === 'open') {
+    return badge({ message: 'not yet', color: BADGE_COLORS.notYet }, SHORT_CACHE);
+  }
+  // A still-open issue is the issue analog of an open PR: a fix can still land
+  // and ship, so "not yet" (gold) + SHORT_CACHE keeps the badge re-fetching so
+  // it flips once the issue is closed and released. A closed-without-fix issue
+  // (IssueClosedWithoutFixError) will never flip on its own → stays "unknown".
+  if (resolved.error instanceof IssueNotClosedError) {
     return badge({ message: 'not yet', color: BADGE_COLORS.notYet }, SHORT_CACHE);
   }
   return badge({ message: 'unknown', color: BADGE_COLORS.neutral }, SHORT_CACHE);
