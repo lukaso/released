@@ -10,9 +10,12 @@
 // Both render like the not-yet card (calm), NOT the not-released/error UI, and
 // short-cache so a later fix can still flip the answer.
 //
-// Issue results omit the badge/share actions for now: a badge needs its own
-// `/i/.../badge.svg` route (the PR badge route keys off the `:number` param and
-// would mis-resolve an issue as a PR), so badges land in a follow-up (#54 PR2b).
+// Resolved and not-yet issue pages carry the same share actions + dynamic
+// per-commit OG card as PR/commit pages (#54 PR2b). The badge they embed keys
+// off `/i/.../badge.svg` (a dedicated route in badge.ts; the PR badge route
+// keys off `:number` and would mis-resolve an issue as a PR). The calm states
+// (open / closed-without-fix) still render a plain card with no badge — there's
+// no commit to track yet.
 
 import {
   IssueClosedWithoutFixError,
@@ -191,6 +194,10 @@ export async function issueRoute(c: Context): Promise<Response> {
       nonce={nonce}
       ogBaseUrl={ogBase}
       publicUrl={permalink}
+      // OG image = the per-commit card for the closing commit (same dynamic card
+      // PR/commit permalinks use); the fallback title covers a partial result
+      // with no firstRelease yet.
+      ogResult={result}
       ogFallbackTitle={`released — ${displayName}#${issueNumber}${
         result.firstRelease ? `: fixed in ${result.firstRelease.tag}` : ''
       }`}
@@ -218,7 +225,7 @@ export async function issueRoute(c: Context): Promise<Response> {
           issueNumber={issueNumber}
           fixSha={result.canonicalSha}
         />
-        <ResultCard result={result} publicBaseUrl={pubBase} hideShare />
+        <ResultCard result={result} publicBaseUrl={pubBase} />
       </main>
       <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
       <footer>
@@ -483,7 +490,7 @@ function renderIssueNotYetReleased(
       <Nav />
       <main style="padding-top: 24px;">
         <IssueBanner provider={provider} repo={repo} issueNumber={issueNumber} fixSha={err.sha} />
-        <ResultCard result={synthetic} publicBaseUrl={pubBase} hideShare />
+        <ResultCard result={synthetic} publicBaseUrl={pubBase} />
       </main>
       <script nonce={nonce}>{raw(`window.__RELEASED_RESULT__ = ${inlineData};`)}</script>
     </Layout>

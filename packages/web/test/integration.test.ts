@@ -1672,6 +1672,210 @@ describe('web Worker — issue permalink route (#54)', () => {
   });
 });
 
+// Issue status badge + share/OG re-enable (#54 PR2b). PR2 shipped the issue
+// permalink but deferred its badge route + the in-page share actions; without a
+// `/i/.../badge.svg` route the embedded badge would 404. These lock in the
+// follow-up: the issue badge endpoint, and the resolved/not-yet issue pages now
+// surfacing the same share + per-commit OG card the PR pages do.
+describe('issue status badge — /i/.../badge.svg (#54 PR2b)', () => {
+  // The GitHub issue resolver is ONE GraphQL POST; mock it so no real network.
+  function mockIssueGraphql(issue: unknown) {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('api.github.com/graphql')) {
+        return new Response(JSON.stringify({ data: { repository: { issue } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = originalFetch;
+    };
+  }
+
+  it('badge.svg for a still-open issue returns "not yet" gold (short-cached, auto-flips)', async () => {
+    cacheStore.clear();
+    const restore = mockIssueGraphql({
+      title: 'Crash on startup',
+      state: 'OPEN',
+      stateReason: null,
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+    });
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/i/honojs/hono/1234/badge.svg'),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      const body = await res.text();
+      expect(body).toContain('not yet');
+      expect(body).toContain('#d29922'); // --warn gold (BADGE_COLORS.notYet)
+      // Short cache so a later fix+ship triggers re-fetch + flip.
+      expect(res.headers.get('cache-control') ?? '').toContain('max-age=300');
+    } finally {
+      restore();
+    }
+  });
+
+  it('badge.svg for a closed-without-fix issue stays "unknown" (will never flip)', async () => {
+    cacheStore.clear();
+    const restore = mockIssueGraphql({
+      title: 'Flaky test sometimes',
+      state: 'CLOSED',
+      stateReason: 'COMPLETED',
+      timelineItems: { nodes: [] },
+      closedByPullRequestsReferences: { nodes: [] },
+    });
+    try {
+      const res = await app.fetch(new Request('https://released.example/i/cli/cli/7/badge.svg'));
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      const body = await res.text();
+      expect(body).toContain('unknown');
+      expect(res.headers.get('cache-control') ?? '').toContain('max-age=300');
+    } finally {
+      restore();
+    }
+  });
+
+  it('badge.svg for a non-numeric issue number returns "unknown" without hitting upstream', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/i/honojs/hono/not-a-number/badge.svg'),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('unknown');
+  });
+
+  it('federated badge.svg route is registered for issues (GitLab open issue → "not yet")', async () => {
+    cacheStore.clear();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('gitlab.gnome.org/api/v4/projects') && url.includes('/issues/9876')) {
+        return new Response(JSON.stringify({ state: 'opened', title: 'Still broken' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    try {
+      const res = await app.fetch(
+        new Request('https://released.example/h/gitlab.gnome.org/i/GNOME%2Fgimp/9876/badge.svg'),
+      );
+      // A registered route resolves to an SVG; an unregistered one would 404.
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('image/svg+xml');
+      expect(await res.text()).toContain('not yet');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+describe('resolved issue page surfaces share + per-commit OG card (#54 PR2b)', () => {
+  // A fully-resolved GitHub issue: the closing PR's merge commit IS a tagged
+  // commit, so the release algorithm needs exactly one `compare` (identical).
+  const FIX_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  function json(obj: unknown): Response {
+    return new Response(JSON.stringify(obj), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  function mockResolvedIssue() {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const reqBody = typeof init?.body === 'string' ? init.body : '';
+      if (url.includes('api.github.com/graphql')) {
+        // Two distinct GraphQL queries hit the same endpoint; branch on the body.
+        if (reqBody.includes('closedByPullRequestsReferences')) {
+          return json({
+            data: {
+              repository: {
+                issue: {
+                  title: 'Memory leak under load',
+                  state: 'CLOSED',
+                  stateReason: 'COMPLETED',
+                  timelineItems: { nodes: [] },
+                  closedByPullRequestsReferences: {
+                    nodes: [{ merged: true, mergeCommit: { oid: FIX_SHA } }],
+                  },
+                },
+              },
+            },
+          });
+        }
+        // Tags query.
+        return json({
+          data: {
+            repository: {
+              refs: {
+                nodes: [
+                  {
+                    name: 'v1.0.0',
+                    target: {
+                      __typename: 'Commit',
+                      oid: FIX_SHA,
+                      committedDate: '2024-01-02T00:00:00Z',
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        });
+      }
+      if (url.includes(`/commits/${FIX_SHA}`)) {
+        return json({
+          sha: FIX_SHA,
+          commit: { committer: { date: '2024-01-01T00:00:00Z' }, message: 'fix: plug the leak' },
+        });
+      }
+      if (url.includes('/compare/')) {
+        return json({ status: 'identical' });
+      }
+      if (url.includes('/releases/tags/')) {
+        return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch in test: ${url}`);
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = originalFetch;
+    };
+  }
+
+  it('GET /i/:o/:r/:n for a released issue shows the badge/share actions + a per-commit OG image', async () => {
+    cacheStore.clear();
+    const restore = mockResolvedIssue();
+    try {
+      const res = await app.fetch(new Request('https://released.example/i/honojs/hono/555'));
+      expect(res.status).toBe(200);
+      const body = await res.text();
+      // Released card.
+      expect(body).toContain('First released in');
+      expect(body).toContain('v1.0.0');
+      // Share actions are now enabled (the deferred `hideShare` is gone).
+      expect(body).toContain('Copy &amp; embed badge');
+      expect(body).toContain('data-copy="badge"');
+      // OG image is the dynamic per-commit card, not the generic placeholder.
+      expect(body).toMatch(
+        /<meta property="og:image" content="[^"]*\/r\/honojs\/hono\/c\/aaaaaaa\.png/,
+      );
+      expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/placeholder\.png/);
+    } finally {
+      restore();
+    }
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;
