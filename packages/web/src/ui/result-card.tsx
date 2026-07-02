@@ -10,13 +10,9 @@ export type ResultCardProps = {
   /** When true, renders with dashed border + tinted bg + EXAMPLE caption. */
   asExample?: boolean;
   publicBaseUrl: string;
-  /** Suppress the "Copy & embed badge" share disclosure. Issue results use this
-   *  until issue-scoped badge routes land (#54 PR2b) — without a badge route the
-   *  generated `/i/.../badge.svg` would 404. */
-  hideShare?: boolean;
 };
 
-export function ResultCard({ result, asExample, publicBaseUrl, hideShare }: ResultCardProps) {
+export function ResultCard({ result, asExample, publicBaseUrl }: ResultCardProps) {
   // CRITICAL distinction: partial state (algorithm timed out) ≠ "not yet released"
   // (algorithm completed, found no containing tag). A 2024 kubernetes commit
   // hitting the soft deadline should NOT be displayed as "not released."
@@ -25,8 +21,7 @@ export function ResultCard({ result, asExample, publicBaseUrl, hideShare }: Resu
   // "could be off by one" caveat (PartialBanner above the result).
   // If partial AND no firstRelease, show the "taking longer" UI.
   if (result.partial && !result.firstRelease) return <PartialResult result={result} />;
-  if (!result.firstRelease)
-    return <NotYetReleased result={result} publicBaseUrl={publicBaseUrl} hideShare={hideShare} />;
+  if (!result.firstRelease) return <NotYetReleased result={result} publicBaseUrl={publicBaseUrl} />;
   const r = result.firstRelease;
   const repoDisplay = result.input.repo.projectPath;
   const shortSha = result.canonicalSha.slice(0, 7);
@@ -53,7 +48,7 @@ export function ResultCard({ result, asExample, publicBaseUrl, hideShare }: Resu
           <div class="answer-date">
             <b>{formatDate(r.date)}</b> · shipped {relativeFromCommit(result.canonicalSha, r.date)}
           </div>
-          {!hideShare && <CopyActions perma={perma} />}
+          <CopyActions perma={perma} />
         </div>
 
         <div class="answer-meta">
@@ -191,11 +186,9 @@ function PartialResult({ result }: { result: LookupResult }) {
 function NotYetReleased({
   result,
   publicBaseUrl,
-  hideShare,
 }: {
   result: LookupResult;
   publicBaseUrl: string;
-  hideShare?: boolean;
 }) {
   const perma = `${publicBaseUrl}${permalinkPathForInput(result.input, result.canonicalSha)}`;
   const notInRelease =
@@ -216,12 +209,10 @@ function NotYetReleased({
         <div class="answer-date">
           <b>{notInRelease}</b> · commit {result.canonicalSha.slice(0, 7)}
         </div>
-        {!hideShare && (
-          <CopyActions
-            perma={perma}
-            hint="Paste the badge into your PR/MR now — it flips to the version automatically once this ships."
-          />
-        )}
+        <CopyActions
+          perma={perma}
+          hint="Paste the badge into your PR/MR now — it flips to the version automatically once this ships."
+        />
       </div>
     </div>
   );

@@ -137,8 +137,10 @@ app.get('/h/:host/i/:projectPath/:number', issueRoute);
 // Auto-updating status badges (one extra `/badge.svg` segment per permalink).
 app.get('/r/:owner/:repo/c/:sha/badge.svg', badgeRoute);
 app.get('/p/:owner/:repo/:number/badge.svg', badgeRoute);
+app.get('/i/:owner/:repo/:number/badge.svg', badgeRoute);
 app.get('/h/:host/r/:projectPath/c/:sha/badge.svg', badgeRoute);
 app.get('/h/:host/p/:projectPath/:number/badge.svg', badgeRoute);
+app.get('/h/:host/i/:projectPath/:number/badge.svg', badgeRoute);
 
 app.post('/api/lookup', lookupRoute);
 app.post('/api/lookup-bulk', lookupBulkRoute);
