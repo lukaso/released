@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { resolveProviderToken } from '../src/auth.js';
+import { isLivenessProbe, resolveProviderToken } from '../src/auth.js';
 import type { Env } from '../src/env.js';
 
 const req = (headers: Record<string, string> = {}) =>
   new Request('https://released.example/api/x', { headers });
+
+describe('isLivenessProbe — recognise the loop self-monitoring probe by its user-agent', () => {
+  it('matches the liveness probe user-agent (current and future minor versions)', () => {
+    expect(isLivenessProbe(req({ 'user-agent': 'liveapp-liveness-probe/1' }))).toBe(true);
+    expect(isLivenessProbe(req({ 'user-agent': 'liveapp-liveness-probe/2' }))).toBe(true);
+  });
+
+  it('does not match ordinary visitors, unfurl bots, or a missing user-agent', () => {
+    expect(isLivenessProbe(req({ 'user-agent': 'Mozilla/5.0' }))).toBe(false);
+    expect(isLivenessProbe(req({ 'user-agent': 'Slackbot-LinkExpanding 1.0' }))).toBe(false);
+    expect(isLivenessProbe(req())).toBe(false);
+  });
+});
 
 describe('resolveProviderToken — GitLab token scoping', () => {
   it('uses the generic GITLAB_TOKEN for gitlab.com', () => {
