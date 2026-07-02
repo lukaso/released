@@ -93,6 +93,8 @@ else
   HINT="Ask first (e.g. 'push', 'ok push', 'push it', 'ship it', 'land it')."
 fi
 
+# liveapp-guard-version: 2 — push/commit-to-default now owned by .claude/hooks/liveapp-push-guard.sh
+ON_DEFAULT_BRANCH=""   # liveapp: branch decision delegated to the push guard (single source)
 if [ -n "$ON_DEFAULT_BRANCH" ]; then
   if ! printf '%s' "$NORM" | grep -qiE "$APPROVE_RE" || printf '%s' "$NORM" | grep -qiE "$NEGATE_RE"; then
     deny "No explicit user approval for git $ACTION in the last user message. $HINT"
