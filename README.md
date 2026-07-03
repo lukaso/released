@@ -23,7 +23,7 @@ npx git-released github.com/honojs/hono/commit/f82aba8
 ```
 
 - **Web**: <https://released.blabberate.com> — paste a commit, SHA, or PR/MR.
-- **CLI**: `npx git-released <commit-url | owner/repo sha | PR/MR>` (published on
+- **CLI**: `npx git-released <commit-url | owner/repo sha | PR/MR | issue-url>` (published on
   npm as `git-released` — `released` was taken in 2014). The package installs both
   the `released` and `git-released` bins; `git released <sha>` works inside a repo.
 

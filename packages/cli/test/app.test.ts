@@ -1,4 +1,7 @@
 import {
+  IssueClosedWithoutFixError,
+  IssueNotClosedError,
+  IssueNotFoundError,
   type LookupResult,
   NoReleasesError,
   NotYetReleasedError,
@@ -17,7 +20,7 @@ import pkg from '../package.json' with { type: 'json' };
 // Hoisted so the (also-hoisted) vi.mock factories below can close over them.
 const { findRelease, providerFor, resolveToken, cacheGet, cachePut, makeFileCache } = vi.hoisted(
   () => {
-    const cacheGet = vi.fn(async () => null as LookupResult | null);
+    const cacheGet = vi.fn(async (_key: string) => null as LookupResult | null);
     const cachePut = vi.fn(async () => {});
     return {
       findRelease: vi.fn(),
@@ -45,6 +48,11 @@ const { VERSION, run } = await import('../src/app.js');
 const COMMIT_URL = 'github.com/facebook/react/commit/a1b2c3d4e5f67890abcdef1234567890abcdef12';
 const SHA = 'a1b2c3d4e5f67890abcdef1234567890abcdef12';
 
+// A GitHub issue URL so the real parseInput yields an `issue` input (kind:'issue',
+// number:456) — the third way to name a commit (#54). The lookup is mocked per test;
+// these exercise run()'s issue plumbing: refKey → cache key, exit codes, error mapping.
+const ISSUE_URL = 'github.com/facebook/react/issues/456';
+
 function releasedResult(): LookupResult {
   return {
     input: {
@@ -71,6 +79,19 @@ function releasedResult(): LookupResult {
 
 function notYetResult(): LookupResult {
   return { ...releasedResult(), firstRelease: null };
+}
+
+// A released-issue result: the fix landed and shipped in v18.2.0. `input.kind`
+// is 'issue' (number, no sha), the shape findRelease returns for an issue lookup.
+function issueResult(): LookupResult {
+  return {
+    ...releasedResult(),
+    input: {
+      kind: 'issue',
+      repo: { host: 'github.com', projectPath: 'facebook/react' },
+      number: 456,
+    },
+  };
 }
 
 // Collect into arrays via mockImplementation rather than reading a typed spy:
@@ -295,5 +316,80 @@ describe('run() — JSON error envelope', () => {
     expect(code).toBe(70);
     expect(err()).toContain('socket hang up');
     expect(out()).toBe('');
+  });
+});
+
+// Issue input (#54) is the third way to name a commit: paste an issue URL, get
+// the release that shipped its fix. The web surface got 5 integration tests; the
+// CLI shares the same core (parseInput → findRelease → reportError) but had ZERO
+// coverage of the issue path, so a regression here was invisible. These lock the
+// contract: an issue URL routes through the same plumbing as a commit, keyed by
+// `issue#N`, and the issue-specific error classes map to calm, correct output.
+describe('run() — issue input', () => {
+  it('parses an issue URL and threads the issue input into findRelease', async () => {
+    findRelease.mockResolvedValue(issueResult());
+    await run(ISSUE_URL, undefined, {});
+    expect(findRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'issue', number: 456 }),
+      expect.anything(),
+    );
+  });
+
+  it('released issue (fix shipped) → exit 0, formatted result on stdout', async () => {
+    findRelease.mockResolvedValue(issueResult());
+    const code = await run(ISSUE_URL, undefined, {});
+    expect(code).toBe(0);
+    expect(out()).toContain('v18.2.0');
+  });
+
+  it('keys the issue lookup distinctly from a commit lookup on the same repo (no collision)', async () => {
+    // The cache key is a hash, so the `issue#N` refKey isn't literally visible —
+    // but an issue and a commit on facebook/react must never share a key, or a
+    // warmed badge/permalink would serve one the other's answer.
+    findRelease.mockResolvedValue(issueResult());
+    await run(ISSUE_URL, undefined, {});
+    expect(cacheGet).toHaveBeenCalledOnce();
+    const issueKey = cacheGet.mock.calls[0]?.[0];
+
+    cacheGet.mockClear();
+    findRelease.mockResolvedValue(releasedResult());
+    await run(COMMIT_URL, undefined, {});
+    const commitKey = cacheGet.mock.calls[0]?.[0];
+
+    expect(issueKey).toBeTruthy();
+    expect(issueKey).not.toBe(commitKey);
+  });
+
+  it('IssueNotClosedError (still open) → calm stderr message, generic ReleasedError exit 2', async () => {
+    findRelease.mockRejectedValue(new IssueNotClosedError(456));
+    const code = await run(ISSUE_URL, undefined, {});
+    expect(code).toBe(2);
+    // Reads as a calm statement of fact, not a stack trace or the wrong "not released".
+    expect(err()).toContain('still open');
+    expect(err()).not.toMatch(/undefined|\[object/);
+  });
+
+  it('IssueClosedWithoutFixError → calm stderr message, exit 2', async () => {
+    findRelease.mockRejectedValue(new IssueClosedWithoutFixError(456));
+    const code = await run(ISSUE_URL, undefined, {});
+    expect(code).toBe(2);
+    expect(err()).toContain('no fixing commit');
+  });
+
+  it('IssueNotFoundError → exit 2 with the issue number in the message', async () => {
+    findRelease.mockRejectedValue(new IssueNotFoundError(456));
+    const code = await run(ISSUE_URL, undefined, {});
+    expect(code).toBe(2);
+    expect(err()).toContain('#456');
+  });
+
+  it('--json emits the issue error kind in the envelope, stderr stays clean', async () => {
+    findRelease.mockRejectedValue(new IssueClosedWithoutFixError(456, true));
+    const code = await run(ISSUE_URL, undefined, { json: true });
+    expect(code).toBe(2);
+    const env = JSON.parse(out());
+    expect(env).toMatchObject({ error: 'issue_closed_without_fix' });
+    expect(typeof env.message).toBe('string');
+    expect(err()).toBe(''); // JSON mode keeps stderr clean for piping
   });
 });

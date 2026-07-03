@@ -38,7 +38,7 @@ export function buildCli(): CAC {
   const cli = cac(NAME);
 
   cli
-    .command('[input] [ref]', 'Find the first release that contains a commit.')
+    .command('[input] [ref]', 'Find the first release that contains a commit, PR, or issue.')
     .option('--json', 'Output JSON for scripting.')
     .option('--slack', 'Output Slack mrkdwn (paste into a Slack message).')
     .option('--markdown', 'Output GitHub-flavored markdown (paste into a PR comment).')
@@ -55,6 +55,9 @@ export function buildCli(): CAC {
     )
     .example('released github.com/facebook/react/commit/a1b2c3d')
     .example('released vercel/next.js#56012')
+    .example(
+      'released github.com/facebook/react/issues/12345   # an issue → the release that shipped its fix',
+    )
     .example('released facebook/react a1b2c3d')
     .example('git released a1b2c3d   # via the bin alias when in a checkout')
     .action(async (input: string | undefined, ref: string | undefined, flags: Flags) => {
