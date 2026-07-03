@@ -244,6 +244,28 @@ describe('parseInput — GitLab URL shapes (federation)', () => {
     });
   });
 
+  // GitLab's work-items migration serves issues at /-/work_items/N (the new
+  // canonical URL; the IID is identical to the legacy /-/issues/N). GNOME's
+  // GitLab already redirects issue links here. Verified live: work_items/8230
+  // ↔ REST /issues/8230 (same iid). See #54.
+  it('parses a GitLab work_items URL as an issue', () => {
+    expect(parseInput('https://gitlab.gnome.org/GNOME/gtk/-/work_items/8230')).toEqual({
+      kind: 'issue',
+      repo: GL('gitlab.gnome.org', 'GNOME/gtk'),
+      number: 8230,
+    });
+  });
+
+  it('parses a nested-subgroup GitLab work_items URL with a trailing segment', () => {
+    expect(
+      parseInput('https://gitlab.com/gitlab-org/security-products/foo/-/work_items/3/designs'),
+    ).toEqual({
+      kind: 'issue',
+      repo: GL('gitlab.com', 'gitlab-org/security-products/foo'),
+      number: 3,
+    });
+  });
+
   it('parses nested-subgroup GitLab URL (group/sub/project)', () => {
     expect(
       parseInput('https://gitlab.com/gitlab-org/security-products/foo/-/commit/abc1234'),
