@@ -102,7 +102,13 @@ const ANY_GITHUB_URL_RE = /^(?:https?:\/\/)?github\.com\//i;
 const GITLAB_SHA_URL_RE =
   /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:commit|commits|blob|tree|blame|raw)\/([0-9a-f]{7,40})(?:\.(?:patch|diff))?(?:\/.*)?$/i;
 const GITLAB_MR_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/merge_requests\/(\d+)(?:\/.*)?$/i;
-const GITLAB_ISSUE_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/issues\/(\d+)(?:\/.*)?$/i;
+// GitLab serves issues at BOTH /-/issues/{iid} (legacy) and /-/work_items/{iid}
+// (the work-items migration's new canonical URL; GNOME's GitLab already
+// redirects issue links to it). The IID is identical between the two forms, so
+// both map to the same `kind:'issue'` and hit the same REST /issues/{iid}
+// endpoint. Verified live: work_items/8230 ↔ REST issues/8230 (same iid). See #54.
+const GITLAB_ISSUE_URL_RE =
+  /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:issues|work_items)\/(\d+)(?:\/.*)?$/i;
 const ANY_GITLAB_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(?:.+?)\/-\//i;
 
 const GITHUB_HOST = 'github.com';
@@ -111,7 +117,8 @@ const GITHUB_HOST = 'github.com';
  * Parse user input into a canonical {@link LookupInput}.
  *
  * Single-arg form (`input` only): accepts a GitHub or supported-GitLab commit URL,
- * PR/MR URL, issue URL (`/issues/N` on GitHub, `/-/issues/N` on GitLab),
+ * PR/MR URL, issue URL (`/issues/N` on GitHub, `/-/issues/N` or
+ * `/-/work_items/N` on GitLab),
  * `owner/repo@sha` shorthand (GitHub), or `owner/repo#pr` shorthand (GitHub).
  *
  * Two-arg form (`input` + `ref`): `input` is a GitHub repo identifier (URL or
@@ -249,7 +256,7 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
     throw new InvalidInputError(
       `${input} — that's a ${host} URL but not a shape I recognize. ` +
-        `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., /-/merge_requests/{N}, and /-/issues/{N}.`,
+        `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., /-/merge_requests/{N}, and /-/issues/{N} (or /-/work_items/{N}).`,
     );
   }
   if (looksLikeUrl(trimmed)) {
