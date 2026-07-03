@@ -83,3 +83,36 @@ dataset = "released_events"
 
 # Once web-og is deployed, uncomment to give web-og a service binding to this Worker:
 # (configured FROM web-og's wrangler.toml — see packages/web-og/wrangler.toml)
+
+# ── Branch-preview environment (issue #70) ──────────────────────────────────
+# A per-PR preview deploy of THIS Worker, isolated from prod so a PR can be
+# EXERCISED live before merge (a green gate is not a working deploy). A distinct
+# name means a distinct secret store, so a preview deploy can never touch prod
+# creds — the wrangler footgun that caused the #110 outage.
+#
+# Bindings are NON-inheritable in wrangler (only main/compatibility_*/assets/
+# observability carry over from the top level), so isolation here is expressed
+# by OMITTING the prod-only outbound bindings, not by pointing them elsewhere:
+#   • no [[containers]] / [[durable_objects.bindings]] / [[migrations]] → the
+#     Anubis relay is absent; relay.ts needs both RELAY and RELAY_SECRET, so it
+#     skips the relay and blocked hosts (freedesktop/GNOME) degrade to the
+#     CLI-hint card — never a hard fail (see priorities.md "graceful degradation").
+#   • no [[analytics_engine_datasets]] → analytics.ts optional-chains ANALYTICS,
+#     so preview traffic writes NOTHING to the prod `released_events` dataset the
+#     maintaining loop reads back for error stats — no pollution of the signal.
+# The self-hosted fonts under /fonts/ still serve (assets is inherited).
+#
+# Human cloud steps to activate (create nothing here): Cloudflare Workers Builds
+# with CLOUDFLARE_ENV=preview on non-default branches. See SETUP-previews.md.
+[env.preview]
+name = "released-web-preview"
+
+[env.preview.vars]
+# Relay off in preview: empty string disables it (relay.ts anubisHostsFromEnv),
+# belt-and-suspenders on top of the omitted RELAY binding above.
+ANUBIS_HOSTS = ""
+
+# version_metadata is a binding, so it is NOT inherited — redeclare it so GET
+# /version reports a real tag on the preview (the liveness probe reads it).
+[env.preview.version_metadata]
+binding = "CF_VERSION_METADATA"
