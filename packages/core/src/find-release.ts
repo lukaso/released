@@ -25,6 +25,7 @@ import {
   type BulkResult,
   type BulkSubError,
   DEFAULT_DATE_CULL_MARGIN_MS,
+  isPrereleaseTag,
   type LookupInput,
   type LookupResult,
   MAX_BULK,
@@ -32,7 +33,6 @@ import {
   type ReleaseHit,
   type RepoRef,
   type TagWithDate,
-  isPrereleaseTag,
 } from './types.js';
 
 /** Index into an array, throwing a descriptive error if out of bounds. For the

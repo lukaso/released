@@ -12,12 +12,12 @@ import {
 } from '../../errors.js';
 import type { Provider, ProviderOpts } from '../../provider.js';
 import {
+  githubOwnerRepo,
   type IssueResolution,
+  isPrereleaseTag,
   type RateLimitInfo,
   type RepoRef,
   type TagWithDate,
-  githubOwnerRepo,
-  isPrereleaseTag,
 } from '../../types.js';
 import { callWithRetry, enc, readJson } from '../http.js';
 import { githubUrls } from './urls.js';

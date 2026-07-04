@@ -124,15 +124,7 @@ function Nav() {
   );
 }
 
-function ErrorBanner({
-  message,
-  bad,
-  reason,
-}: {
-  message: string;
-  bad: string;
-  reason: string;
-}) {
+function ErrorBanner({ message, bad, reason }: { message: string; bad: string; reason: string }) {
   return (
     <div
       role="alert"

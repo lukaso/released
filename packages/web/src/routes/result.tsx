@@ -4,21 +4,21 @@
 // Same page in two states (D33): input stays at top, result card below.
 
 import {
+  cacheKey,
+  findRelease,
   type LookupInput,
   type LookupResult,
   type NotYetReleasedError,
   type Provider,
+  providerFor,
   ReleasedError,
   type RepoRef,
-  cacheKey,
-  findRelease,
-  providerFor,
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
 import { isUnfurlBot } from '../auth.js';
-import { type WorkerCache, makeWorkerCache } from '../cache.js';
+import { makeWorkerCache, type WorkerCache } from '../cache.js';
 import { type Env, ogBaseUrl, publicBaseUrl } from '../env.js';
 import { commitPermalinkPath } from '../paths.js';
 import { makeProvider } from '../provider.js';

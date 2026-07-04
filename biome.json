@@ -1,8 +1,15 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "ignore": ["dist", "node_modules", ".wrangler", ".changeset", "**/*.html"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/.wrangler",
+      "!**/.changeset",
+      "!**/*.html"
+    ]
   },
   "formatter": {
     "enabled": true,
@@ -37,7 +44,7 @@
   },
   "overrides": [
     {
-      "include": ["**/*.test.ts", "**/*.test.tsx"],
+      "includes": ["**/*.test.ts", "**/*.test.tsx"],
       "linter": {
         "rules": {
           "style": {

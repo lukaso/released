@@ -13,7 +13,7 @@ import {
   type ReleasedError,
   UnsupportedHostError,
 } from './errors.js';
-import { type KnownProject, findProjectByAlias } from './known-projects.js';
+import { findProjectByAlias, type KnownProject } from './known-projects.js';
 import { KNOWN_GITLAB_HOSTS } from './providers/index.js';
 import type { LookupInput, RepoRef } from './types.js';
 

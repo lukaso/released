@@ -3,13 +3,13 @@
 // Cache API for cross-request reuse.
 
 import {
+  cacheKey,
+  findRelease,
   type LookupInput,
   type LookupResult,
   type Provider,
-  ReleasedError,
-  cacheKey,
-  findRelease,
   parseInput,
+  ReleasedError,
 } from '@released/core';
 import type { Context } from 'hono';
 import { setTrack, upstreamStatusOf } from '../analytics.js';
