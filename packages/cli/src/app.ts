@@ -2,6 +2,7 @@
 // The executable entry (`cli.ts`) imports `buildCli()` and calls `.parse()`.
 
 import {
+  IssueNotClosedError,
   type LookupResult,
   NoReleasesError,
   NotYetReleasedError,
@@ -168,7 +169,11 @@ function reportError(err: unknown, format: FormatKind, flags: Flags): number {
   }
   // Exit code by error class:
   if (err instanceof NoReleasesError) return 4;
-  if (err instanceof NotYetReleasedError) return 1;
+  // A still-open issue whose fix can still land is the issue-input twin of
+  // NotYetReleasedError (the web renders both as the calm gold "not yet" card),
+  // so it shares exit 1 — callers can tell "not yet" from a hard failure. Its
+  // terminal siblings (closed-without-fix, not-found) stay at the generic 2.
+  if (err instanceof NotYetReleasedError || err instanceof IssueNotClosedError) return 1;
   if (err instanceof PrNotMergedError) return 3;
   if (err instanceof RateLimitError) return 5;
   if (err instanceof ReleasedError) return 2;
