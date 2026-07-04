@@ -90,20 +90,31 @@ dataset = "released_events"
 # name means a distinct secret store, so a preview deploy can never touch prod
 # creds — the wrangler footgun that caused the #110 outage.
 #
-# Bindings are NON-inheritable in wrangler (only main/compatibility_*/assets/
-# observability carry over from the top level), so isolation here is expressed
-# by OMITTING the prod-only outbound bindings, not by pointing them elsewhere:
-#   • no [[containers]] / [[durable_objects.bindings]] / [[migrations]] → the
-#     Anubis relay is absent; relay.ts needs both RELAY and RELAY_SECRET, so it
-#     skips the relay and blocked hosts (freedesktop/GNOME) degrade to the
-#     CLI-hint card — never a hard fail (see priorities.md "graceful degradation").
+# BINDING tables are NOT inherited into a named env in wrangler (only main/
+# compatibility_*/assets/observability + top-level vars/version-independent keys
+# carry over), so isolation here is expressed by OMITTING the prod-only outbound
+# bindings, not by pointing them elsewhere. Verified with wrangler 4.90.1's own
+# `unstable_readConfig({ env: 'preview' })` and asserted in
+# test/wrangler-preview-env.test.ts (which resolves this config the way the
+# deploy does, catching inline-array binding forms too):
+#   • no [[containers]] and no [[durable_objects.bindings]] → the Anubis relay is
+#     absent; relay.ts needs BOTH the RELAY binding and RELAY_SECRET (plus a
+#     non-empty ANUBIS_HOSTS), so it skips the relay and blocked hosts
+#     (freedesktop/GNOME) degrade to the CLI-hint card — never a hard fail
+#     (see priorities.md "graceful degradation").
 #   • no [[analytics_engine_datasets]] → analytics.ts optional-chains ANALYTICS,
 #     so preview traffic writes NOTHING to the prod `released_events` dataset the
 #     maintaining loop reads back for error stats — no pollution of the signal.
-# The self-hosted fonts under /fonts/ still serve (assets is inherited).
+# Note: [[migrations]] IS inherited (it is not a binding table). The v1 migration
+# declaring the GitlabRelay SQLite class carries into preview — harmless, because
+# the class is exported from the shared Worker code and the relay can never fire
+# here (RELAY + RELAY_SECRET + non-empty ANUBIS_HOSTS all absent). The
+# self-hosted fonts under /fonts/ still serve (assets is inherited).
 #
 # Human cloud steps to activate (create nothing here): Cloudflare Workers Builds
-# with CLOUDFLARE_ENV=preview on non-default branches. See SETUP-previews.md.
+# with CLOUDFLARE_ENV=preview on non-default branches, wired to run
+# `versions upload` (not `deploy`) so a preview never re-deploys prod. The
+# activation runbook is tracked on issue #70.
 [env.preview]
 name = "released-web-preview"
 
