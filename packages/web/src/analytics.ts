@@ -120,6 +120,32 @@ export function track(env: Env | undefined, e: AnalyticsEvent): void {
   env?.ANALYTICS?.writeDataPoint(toDataPoint(e));
 }
 
+/** True when this request should be counted in production analytics.
+ *
+ *  Cloudflare per-version Preview URLs serve the SAME Worker as prod and therefore
+ *  share its bindings — including ANALYTICS → the `released_events` dataset the
+ *  maintaining loop reads back to compute SYSTEM error counts and health. Without a
+ *  guard, exercising a preview (or tripping an error while testing one) would inject
+ *  preview traffic straight into the loop's own senses. A preview URL differs from
+ *  prod only by hostname, so that's the discriminator: record only requests that
+ *  arrived on the production host.
+ *
+ *  Gated on PROD_HOST (a committed var in wrangler.toml). When unset — local dev,
+ *  tests, or any single-surface deploy without previews — we fail OPEN and record
+ *  everything, so nothing changes for deploys that never enable Preview URLs. */
+export function isProdRequest(env: Env | undefined, req: Request): boolean {
+  const prod = env?.PROD_HOST;
+  if (!prod) return true;
+  try {
+    // Forgiving of a value written with scheme/trailing slash (e.g. copied from
+    // PUBLIC_BASE_URL): normalise both sides to a bare host before comparing.
+    const prodHost = new URL(prod.includes('//') ? prod : `https://${prod}`).host;
+    return new URL(req.url).host === prodHost;
+  } catch {
+    return true; // unparseable config → fail open rather than silently drop prod data
+  }
+}
+
 // Per-request enrichment set by route handlers and drained by the middleware.
 // Keyed by the raw Request, which is a stable reference across the lifecycle.
 const pending = new WeakMap<Request, Partial<AnalyticsEvent>>();

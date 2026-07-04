@@ -21,6 +21,14 @@ export type Env = {
   /** Public base URL of the web Worker (e.g. https://released.blabberate.com). */
   PUBLIC_BASE_URL?: string;
 
+  /** Canonical production hostname (e.g. released.blabberate.com), set as a
+   *  committed var in wrangler.toml. Analytics are recorded ONLY for requests
+   *  that arrive on this host, so Cloudflare per-version Preview URLs — which
+   *  share the prod ANALYTICS binding — don't pollute the `released_events`
+   *  dataset the maintaining loop reads back. Unset ⇒ record everything (see
+   *  isProdRequest in analytics.ts). */
+  PROD_HOST?: string;
+
   /** Base URL of the web-og Worker (e.g. https://og.released.blabberate.com).
    *  Used to generate og:image URLs. */
   OG_BASE_URL?: string;

@@ -34,6 +34,7 @@ import {
 import {
   type AnalyticsEvent,
   eventForPath,
+  isProdRequest,
   refererHost,
   toDataPoint,
   track,
@@ -214,6 +215,32 @@ describe('track — no-op when the binding is absent', () => {
   });
 });
 
+describe('isProdRequest — off-prod (preview URL) analytics guard', () => {
+  const reqOn = (host: string) => new Request(`https://${host}/r/facebook/react/c/abc1234`);
+
+  it('records everything when PROD_HOST is unset (local dev / single-surface deploy)', () => {
+    expect(isProdRequest(undefined, reqOn('anything.workers.dev'))).toBe(true);
+    expect(isProdRequest({} as Env, reqOn('anything.workers.dev'))).toBe(true);
+  });
+
+  it('records a request that arrived on the production host', () => {
+    const env = { PROD_HOST: 'released.blabberate.com' } as Env;
+    expect(isProdRequest(env, reqOn('released.blabberate.com'))).toBe(true);
+  });
+
+  it('skips a request that arrived on a Cloudflare preview URL host', () => {
+    const env = { PROD_HOST: 'released.blabberate.com' } as Env;
+    expect(isProdRequest(env, reqOn('a1b2c3d4-released-web.acme.workers.dev'))).toBe(false);
+    expect(isProdRequest(env, reqOn('released-web.acme.workers.dev'))).toBe(false);
+  });
+
+  it('is forgiving of a PROD_HOST written with scheme/trailing slash', () => {
+    const env = { PROD_HOST: 'https://released.blabberate.com/' } as Env;
+    expect(isProdRequest(env, reqOn('released.blabberate.com'))).toBe(true);
+    expect(isProdRequest(env, reqOn('preview-released-web.acme.workers.dev'))).toBe(false);
+  });
+});
+
 describe('eventForPath — route → event derivation', () => {
   it.each([
     ['/', 'home'],
@@ -303,6 +330,26 @@ describe('middleware wiring (app.fetch with a spy ANALYTICS binding)', () => {
     expect(points[0]?.blobs?.[1]).toBe('github.com'); // host
     expect(points[0]?.blobs?.[2]).toBe('facebook/react'); // repo
     expect(points[0]?.blobs?.[5]).toBe('commit'); // kind
+  });
+
+  it('records prod-host traffic but SKIPS a preview-URL host when PROD_HOST is set', async () => {
+    const { default: app } = await import('../src/index.js');
+    // Prod host → recorded.
+    const prod = spyEnv();
+    (prod.env as Env & { PROD_HOST?: string }).PROD_HOST = 'released.blabberate.com';
+    await app.fetch(new Request('https://released.blabberate.com/'), prod.env);
+    expect(prod.points).toHaveLength(1);
+
+    // A Cloudflare per-version Preview URL (shares the prod bindings) → NOT recorded,
+    // so exercising a preview never pollutes the released_events dataset.
+    const preview = spyEnv();
+    (preview.env as Env & { PROD_HOST?: string }).PROD_HOST = 'released.blabberate.com';
+    const res = await app.fetch(
+      new Request('https://a1b2c3d4-released-web.acme.workers.dev/'),
+      preview.env,
+    );
+    expect(res.status).toBe(200); // the page still renders on the preview
+    expect(preview.points).toHaveLength(0); // but nothing was tracked
   });
 
   it('marks an invalid UI search as outcome=invalid (failed-search funnel)', async () => {
