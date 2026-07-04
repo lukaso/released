@@ -71,17 +71,15 @@ describe('wrangler.toml branch-preview environment (issue #70)', () => {
     expect(preview.vars?.ANUBIS_HOSTS).toBe('');
   });
 
-  it('inherits the DO migration — which is benign, and documented as such', () => {
-    // `[[migrations]]` IS inherited by named envs (unlike binding tables), so the
-    // `v1` migration declaring the GitlabRelay SQLite class carries into preview.
-    // That is harmless: the class is exported from the shared Worker code, and
-    // the relay can never fire in preview because makeRelayFetch (relay.ts)
-    // requires BOTH the RELAY binding (omitted here) and RELAY_SECRET (unset),
-    // plus a non-empty ANUBIS_HOSTS (empty here). We assert the inheritance so a
-    // future change to migrations is a conscious one, not a silent surprise.
-    expect((preview.migrations ?? []).map((m: { tag: string }) => m.tag)).toEqual(
-      (prod.migrations ?? []).map((m: { tag: string }) => m.tag),
-    );
+  it('overrides migrations to empty so the prod DO migration does not inherit', () => {
+    // `[[migrations]]` IS inheritable in wrangler (unlike binding tables), so an
+    // un-overridden preview would inherit prod's `v1` GitlabRelay migration and,
+    // on first upload, try to provision a Container-backed DO SQLite class with
+    // no [[containers]] config — a dangling class at best, a failed upload at
+    // worst. `[env.preview]` sets `migrations = []` to cut that; prod keeps its
+    // real migration, so this is a genuine override, not a vacuous match.
+    expect(preview.migrations ?? []).toEqual([]);
+    expect((prod.migrations ?? []).length).toBeGreaterThan(0);
   });
 
   it('still exposes /version in preview (version_metadata redeclared)', () => {

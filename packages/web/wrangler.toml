@@ -105,11 +105,17 @@ dataset = "released_events"
 #   • no [[analytics_engine_datasets]] → analytics.ts optional-chains ANALYTICS,
 #     so preview traffic writes NOTHING to the prod `released_events` dataset the
 #     maintaining loop reads back for error stats — no pollution of the signal.
-# Note: [[migrations]] IS inherited (it is not a binding table). The v1 migration
-# declaring the GitlabRelay SQLite class carries into preview — harmless, because
-# the class is exported from the shared Worker code and the relay can never fire
-# here (RELAY + RELAY_SECRET + non-empty ANUBIS_HOSTS all absent). The
-# self-hosted fonts under /fonts/ still serve (assets is inherited).
+# CAUTION: only BINDINGS are non-inheritable. Most other top-level keys DO
+# inherit into a named env — including `migrations` and `routes`/`route`. So:
+#   • `migrations` is overridden to [] below. Otherwise the v1 migration
+#     (`new_sqlite_classes = ["GitlabRelay"]`) inherits and the first preview
+#     upload tries to provision a Container-backed DO SQLite class with no
+#     [[containers]] config — a dangling class at best, a failed upload at worst.
+#     Empty migrations + no DO binding = GitlabRelay is inert exported code.
+#   • do NOT move the prod custom domain into a top-level `routes = [...]`: it
+#     would inherit here and attach the secrets-less preview Worker to the prod
+#     route. The domain stays a dashboard binding, off this file, on purpose.
+# The self-hosted fonts under /fonts/ still serve (assets is inherited).
 #
 # Human cloud steps to activate (create nothing here): Cloudflare Workers Builds
 # with CLOUDFLARE_ENV=preview on non-default branches, wired to run
@@ -117,6 +123,10 @@ dataset = "released_events"
 # activation runbook is tracked on issue #70.
 [env.preview]
 name = "released-web-preview"
+
+# migrations IS inheritable (unlike bindings) — override to empty so the preview
+# never inherits prod's GitlabRelay DO migration (see the CAUTION block above).
+migrations = []
 
 [env.preview.vars]
 # Relay off in preview: empty string disables it (relay.ts anubisHostsFromEnv),
