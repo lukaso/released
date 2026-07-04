@@ -4,7 +4,7 @@
 // web-og calls these via a Cloudflare Service Binding (env.WEB.fetch(...)) to get
 // the result JSON for rendering the OG PNG. Direct public hits are rejected.
 
-import { type LookupInput, type LookupResult, cacheKey, findRelease } from '@released/core';
+import { cacheKey, findRelease, type LookupInput, type LookupResult } from '@released/core';
 import type { Context } from 'hono';
 import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';

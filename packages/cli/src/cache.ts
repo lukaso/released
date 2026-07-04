@@ -1,7 +1,7 @@
 // CLI cache: JSON files at ~/.cache/released/{sha256-hex}.json with 30-min TTL.
 // Uses the same cacheKey() as web/web-og so all three packages share semantics.
 
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CacheStore } from '@released/core';

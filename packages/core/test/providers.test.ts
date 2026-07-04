@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { UnsupportedHostError } from '../src/errors.js';
-import { KNOWN_GITLAB_HOSTS, isKnownHost, providerFor } from '../src/providers/index.js';
+import { isKnownHost, KNOWN_GITLAB_HOSTS, providerFor } from '../src/providers/index.js';
 
 describe('providerFor — host dispatch', () => {
   it('returns a GithubProvider for github.com', () => {

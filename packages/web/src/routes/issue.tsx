@@ -20,6 +20,8 @@
 // no commit to track yet.
 
 import {
+  cacheKey,
+  findRelease,
   IssueClosedWithoutFixError,
   IssueNotClosedError,
   type LookupResult,
@@ -27,8 +29,6 @@ import {
   type Provider,
   ReleasedError,
   type RepoRef,
-  cacheKey,
-  findRelease,
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';

@@ -2,7 +2,7 @@
 // instead of templating strings, so adding a new provider doesn't require
 // touching every URL site.
 
-import { type RepoRef, githubOwnerRepo } from '../../types.js';
+import { githubOwnerRepo, type RepoRef } from '../../types.js';
 
 const HOST = 'https://github.com';
 

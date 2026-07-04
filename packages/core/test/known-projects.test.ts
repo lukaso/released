@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KNOWN_PROJECTS, findProjectByAlias } from '../src/known-projects.js';
+import { findProjectByAlias, KNOWN_PROJECTS } from '../src/known-projects.js';
 import { KNOWN_GITLAB_HOSTS } from '../src/providers/index.js';
 
 describe('findProjectByAlias', () => {

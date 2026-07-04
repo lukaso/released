@@ -21,10 +21,10 @@ import {
 import type { Provider, ProviderOpts } from '../../provider.js';
 import {
   type IssueResolution,
+  isPrereleaseTag,
   type RateLimitInfo,
   type RepoRef,
   type TagWithDate,
-  isPrereleaseTag,
 } from '../../types.js';
 import { callWithRetry, enc, readJson } from '../http.js';
 import { makeGitlabUrls } from './urls.js';

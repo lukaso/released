@@ -43,13 +43,13 @@ export function recognizeOwnUrl(input: string, selfHosts: string[]): string | nu
   s = s.replace(/\/badge\.svg$/i, '');
 
   // Federated, with the /h/ prefix: h/<host>/p/<projectEnc>/<n> | r/.../c/<sha>
-  let m = s.match(/^h\/([\w.-]+)\/p\/([^\/]+)\/(\d+)$/i);
+  let m = s.match(/^h\/([\w.-]+)\/p\/([^/]+)\/(\d+)$/i);
   if (m?.[1] && m[2] && m[3]) return prPermalinkPath(fed(m[1], m[2]), Number(m[3]));
   m = s.match(new RegExp(`^h/([\\w.-]+)/r/([^/]+)/c/(${SHA})$`, 'i'));
   if (m?.[1] && m[2] && m[3]) return commitPermalinkPath(fed(m[1], m[2]), m[3].toLowerCase());
 
   // Federated, /h/ prefix dropped (host must look dotted): <host>/p/<enc>/<n>
-  m = s.match(/^([\w.-]+\.[\w.-]+)\/p\/([^\/]+)\/(\d+)$/i);
+  m = s.match(/^([\w.-]+\.[\w.-]+)\/p\/([^/]+)\/(\d+)$/i);
   if (m?.[1] && m[2] && m[3]) return prPermalinkPath(fed(m[1], m[2]), Number(m[3]));
   m = s.match(new RegExp(`^([\\w.-]+\\.[\\w.-]+)/r/([^/]+)/c/(${SHA})$`, 'i'));
   if (m?.[1] && m[2] && m[3]) return commitPermalinkPath(fed(m[1], m[2]), m[3].toLowerCase());

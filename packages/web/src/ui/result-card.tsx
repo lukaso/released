@@ -221,13 +221,7 @@ function NotYetReleased({
 /** Hint shown above a NotYetReleased answer when the algorithm skipped tags
  *  that LOOK like prereleases (alpha/beta/rc/...). Surfaces the
  *  "Include prereleases" escape hatch. */
-export function PrereleaseHint({
-  skipped,
-  retryHref,
-}: {
-  skipped: number;
-  retryHref: string;
-}) {
+export function PrereleaseHint({ skipped, retryHref }: { skipped: number; retryHref: string }) {
   return (
     <div
       class="answer"
@@ -283,13 +277,7 @@ function ProviderPrereleaseBanner({ tag, releaseUrl }: { tag: string; releaseUrl
 
 /** Hint shown above the answer when a NotYetReleasedError carried a non-zero
  *  culledTagCount — surfacing the "try strict mode" escape hatch. */
-export function StrictHint({
-  culled,
-  retryHref,
-}: {
-  culled: number;
-  retryHref: string;
-}) {
+export function StrictHint({ culled, retryHref }: { culled: number; retryHref: string }) {
   return (
     <div
       class="answer"

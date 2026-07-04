@@ -13,14 +13,14 @@
 // (GitHub camo / GitLab) re-fetches and the badge flips after a release.
 
 import {
+  cacheKey,
+  findRelease,
   IssueNotClosedError,
   type LookupInput,
   type LookupResult,
   PrNotMergedError,
-  type RepoRef,
-  cacheKey,
-  findRelease,
   providerFor,
+  type RepoRef,
 } from '@released/core';
 import type { Context } from 'hono';
 import { setTrack, upstreamStatusOf } from '../analytics.js';

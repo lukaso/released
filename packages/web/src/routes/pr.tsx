@@ -6,14 +6,14 @@
 // request !1234" instead of "Pull request #1234".
 
 import {
+  cacheKey,
+  findRelease,
   type LookupResult,
   type NotYetReleasedError,
   PrNotMergedError,
   type Provider,
   ReleasedError,
   type RepoRef,
-  cacheKey,
-  findRelease,
 } from '@released/core';
 import type { Context } from 'hono';
 import { raw } from 'hono/html';

@@ -2,17 +2,17 @@
 // The executable entry (`cli.ts`) imports `buildCli()` and calls `.parse()`.
 
 import {
+  cacheKey,
+  findRelease,
   IssueNotClosedError,
   type LookupResult,
   NoReleasesError,
   NotYetReleasedError,
   PrNotMergedError,
-  RateLimitError,
-  ReleasedError,
-  cacheKey,
-  findRelease,
   parseInput,
   providerFor,
+  RateLimitError,
+  ReleasedError,
 } from '@released/core';
 import { type CAC, cac } from 'cac';
 import pkg from '../package.json' with { type: 'json' };

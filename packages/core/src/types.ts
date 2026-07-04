@@ -83,7 +83,7 @@ export type TagWithDate = {
  *  followed by `-`, `.`, `_`, a digit, or end-of-string.
  *  Underscore-separated forms catch GIMP-style tags like GIMP_3_2_0_RC1. */
 export function isPrereleaseTag(name: string): boolean {
-  return /(?:^|[\-._])(?:alpha|beta|rc|pre|preview|snapshot|nightly|canary|dev)(?:[\-._]|\d|$)/i.test(
+  return /(?:^|[-._])(?:alpha|beta|rc|pre|preview|snapshot|nightly|canary|dev)(?:[-._]|\d|$)/i.test(
     name,
   );
 }
