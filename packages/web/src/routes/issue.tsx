@@ -10,8 +10,10 @@
 // Both render like the not-yet card (calm), NOT the not-released/error UI, and
 // short-cache so a later fix can still flip the answer.
 //
-// Resolved and not-yet issue pages carry the same share actions + dynamic
-// per-commit OG card as PR/commit pages (#54 PR2b). The badge they embed keys
+// Resolved and not-yet issue pages carry the same share actions (#54 PR2b);
+// the dynamic per-commit OG card lands on the resolved page only (via
+// `ogResult`) — the not-yet page uses the text fallback, matching PR/commit
+// pages. The badge they embed keys
 // off `/i/.../badge.svg` (a dedicated route in badge.ts; the PR badge route
 // keys off `:number` and would mis-resolve an issue as a PR). The calm states
 // (open / closed-without-fix) still render a plain card with no badge — there's
