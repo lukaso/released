@@ -360,10 +360,15 @@ describe('run() — issue input', () => {
     expect(issueKey).not.toBe(commitKey);
   });
 
-  it('IssueNotClosedError (still open) → calm stderr message, generic ReleasedError exit 2', async () => {
+  it('IssueNotClosedError (still open) → calm stderr message, "not yet" exit 1 (PR/NotYetReleased parity)', async () => {
+    // A still-open issue whose fix can still land is the issue-input twin of
+    // NotYetReleasedError: the web renders both as the calm gold "not yet" card.
+    // So the CLI mirrors that with exit 1, not the generic ReleasedError exit 2 —
+    // a script asking "did this issue's fix ship?" can tell "not yet" from a hard
+    // failure. Free to choose: issue input never shipped in a published release.
     findRelease.mockRejectedValue(new IssueNotClosedError(456));
     const code = await run(ISSUE_URL, undefined, {});
-    expect(code).toBe(2);
+    expect(code).toBe(1);
     // Reads as a calm statement of fact, not a stack trace or the wrong "not released".
     expect(err()).toContain('still open');
     expect(err()).not.toMatch(/undefined|\[object/);
