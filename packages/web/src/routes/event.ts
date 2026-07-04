@@ -19,7 +19,7 @@
 // emit no telemetry whatsoever. Keep it that way: do not add a beacon to the CLI.
 
 import type { Context } from 'hono';
-import { track } from '../analytics.js';
+import { isProdRequest, track } from '../analytics.js';
 import { checkSameOrigin, isUnfurlBot } from '../auth.js';
 import type { Env } from '../env.js';
 
@@ -55,7 +55,9 @@ export async function eventRoute(c: Context): Promise<Response> {
       typeof body.format === 'string' && COPY_FORMATS.has(body.format)
         ? (body.format as 'badge' | 'slack' | 'link')
         : undefined;
-    if (format) {
+    // Skip off-prod (Preview URL) beacons for the same reason as the request
+    // logger in index.ts — a preview shares the prod ANALYTICS binding.
+    if (format && isProdRequest(c.env as Env | undefined, req)) {
       const cf = (req as Request & { cf?: { country?: string } }).cf;
       track(c.env as Env | undefined, {
         event: 'copy',

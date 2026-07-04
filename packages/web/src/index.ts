@@ -19,7 +19,14 @@
 
 import { parseInput } from '@released/core';
 import { Hono } from 'hono';
-import { eventForPath, refererHost, setTrack, takeTrack, track } from './analytics.js';
+import {
+  eventForPath,
+  isProdRequest,
+  refererHost,
+  setTrack,
+  takeTrack,
+  track,
+} from './analytics.js';
 import { isLivenessProbe, isUnfurlBot } from './auth.js';
 import { type Env, publicBaseUrl } from './env.js';
 import { recognizeOwnUrl } from './own-url.js';
@@ -51,13 +58,16 @@ app.use('*', async (c, next) => {
   } finally {
     try {
       const path = c.req.path;
+      const req = c.req.raw;
       if (
         path !== '/healthz' &&
         path !== '/version' &&
         path !== '/api/event' &&
-        !path.startsWith('/internal/')
+        !path.startsWith('/internal/') &&
+        // Off-prod (Cloudflare Preview URL) traffic shares the prod ANALYTICS
+        // binding; skip it so a preview never pollutes released_events.
+        isProdRequest(c.env as Env | undefined, req)
       ) {
-        const req = c.req.raw;
         const enrich = takeTrack(req);
         const cf = (req as Request & { cf?: { country?: string } }).cf;
         track(c.env as Env | undefined, {

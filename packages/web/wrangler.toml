@@ -35,8 +35,15 @@ directory = "./public"
 #                        src/relay.ts; set here to make it auditable + adjustable.
 #   EXTRA_GITLAB_HOSTS — extend the known-GitLab-hosts allowlist with self-hosted
 #                        instances, e.g. "git.example.com,gitlab.acme.net".
+#   PROD_HOST          — the canonical production hostname. Analytics are recorded
+#                        ONLY for requests that arrive on this host, so Cloudflare
+#                        per-version Preview URLs (which share this Worker's
+#                        ANALYTICS binding) don't pollute the released_events
+#                        dataset the maintaining loop reads back. Unset ⇒ record
+#                        everything. See isProdRequest() in src/analytics.ts.
 [vars]
 ANUBIS_HOSTS = "gitlab.freedesktop.org,gitlab.gnome.org"
+PROD_HOST = "released.blabberate.com"
 # EXTRA_GITLAB_HOSTS = "git.example.com,gitlab.acme.net"
 
 # Version metadata: exposes the deployed version's id/tag/timestamp at runtime
