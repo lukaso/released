@@ -145,7 +145,7 @@ function jsonErr(error: string, status: number): Response {
   });
 }
 
-function statusFor(kind: string): number {
+export function statusFor(kind: string): number {
   switch (kind) {
     case 'non_github_url':
     case 'unsupported_host':
@@ -158,6 +158,12 @@ function statusFor(kind: string): number {
     case 'commit_not_found':
     case 'no_releases':
     case 'not_yet_released':
+    // Issue-input outcomes are the same "resolved, but no release answer"
+    // family as their PR/commit siblings above — not server faults. Without
+    // these cases they fell through to the 500 default (see #54).
+    case 'issue_not_found':
+    case 'issue_not_closed':
+    case 'issue_closed_without_fix':
       return 404;
     case 'ambiguous_sha':
       return 422;
