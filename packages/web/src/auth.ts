@@ -93,5 +93,5 @@ export function isUnfurlBot(req: Request): boolean {
 // the privacy posture is unchanged. Keep this prefix in sync with the `ua` default
 // in bin/liveness-probe.mjs (`liveapp-liveness-probe/<n>`).
 export function isLivenessProbe(req: Request): boolean {
-  return req.headers.get('user-agent')?.startsWith('liveapp-liveness-probe') ?? false;
+  return req.headers.get('user-agent')?.startsWith('liveapp-liveness-probe/') ?? false;
 }
