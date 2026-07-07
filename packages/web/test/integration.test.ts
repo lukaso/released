@@ -26,6 +26,10 @@ const cacheStore = new Map<string, Response>();
 
 const { default: app } = await import('../src/index.js');
 
+// A shared secret that is deliberately NOT the public 'web-og' default, so the
+// /internal/* tests exercise the real web↔web-og handshake, not the fallback.
+const INTERNAL_SECRET = 'test-shared-secret';
+
 describe('web Worker — basic routing', () => {
   it('serves the homepage with the EXAMPLE result (real, click-to-verify)', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
@@ -409,15 +413,50 @@ describe('web Worker — basic routing', () => {
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
       new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
     );
+    // Real handshake: caller presents the shared INTERNAL_SECRET, and the env has
+    // it set (as prod / `wrangler dev` via .dev.vars do). The value is NOT 'web-og',
+    // so this can't pass via the legacy default fallback.
     const res = await app.fetch(
       new Request(`https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/${sha}`, {
-        headers: { 'x-released-internal': 'web-og' },
+        headers: { 'x-released-internal': INTERNAL_SECRET },
       }),
+      { INTERNAL_SECRET },
     );
     expect(res.status).toBe(200);
     const body = (await res.json()) as typeof seeded;
     expect(body.firstRelease?.tag).toBe('GIMP_2_10_36');
     expect(body.input.repo.host).toBe('gitlab.gnome.org');
+  });
+
+  // Defense-in-depth (backlog "internal.ts fail-open default"): if INTERNAL_SECRET
+  // were ever unset/misconfigured, isServiceBinding() must DENY rather than fall
+  // back to the public 'web-og' constant — otherwise /internal/* opens to anyone
+  // who guesses the default. Prod always sets the secret; this guards the misconfig.
+  it('GET /internal/h/... fails CLOSED when INTERNAL_SECRET is unset (no web-og fallback)', async () => {
+    cacheStore.clear();
+    const sha = 'a'.repeat(40);
+    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(
+        JSON.stringify({
+          input: {
+            kind: 'commit',
+            repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
+            sha,
+          },
+          firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    // INTERNAL_SECRET deliberately unset; caller spoofs the public default.
+    const res = await app.fetch(
+      new Request(`https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/${sha}`, {
+        headers: { 'x-released-internal': 'web-og' },
+      }),
+    );
+    expect(res.status).toBe(404);
   });
 
   it('GET /r/:o/:r/c/:sha for an unfurl bot with no cache returns a deferred-render card with short TTL', async () => {
