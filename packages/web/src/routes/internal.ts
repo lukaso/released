@@ -16,11 +16,18 @@ import { singleFlight } from '../single-flight.js';
  *  metadata; we use a shared-secret-style marker as an extra guard for v1. */
 const SVC_HEADER = 'x-released-internal';
 
-/** True when the caller presented the Service-Binding marker secret. */
+/** True when the caller presented the Service-Binding marker secret.
+ *  Fails CLOSED when INTERNAL_SECRET is unset: a missing secret must DENY,
+ *  never fall back to a guessable default (the legacy 'web-og' constant), or
+ *  /internal/* would open to anyone who guesses it. Prod and `wrangler dev`
+ *  (via .dev.vars) always set it; set with `wrangler secret put INTERNAL_SECRET`,
+ *  matching web-og's. */
 function isServiceBinding(c: Context): boolean {
   const env = (c.env ?? {}) as Env & { INTERNAL_SECRET?: string };
+  const secret = env.INTERNAL_SECRET;
+  if (!secret) return false;
   const marker = c.req.raw.headers.get(SVC_HEADER);
-  return !!marker && marker === (env.INTERNAL_SECRET ?? 'web-og');
+  return !!marker && marker === secret;
 }
 
 /** Resolve the LookupResult JSON for a host/projectPath/sha. Cache-first, then
