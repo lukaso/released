@@ -30,19 +30,18 @@ function isServiceBinding(c: Context): boolean {
   return !!marker && marker === secret;
 }
 
-/** Resolve the LookupResult JSON for a host/projectPath/sha. Cache-first, then
- *  compute via the (relay-aware) provider. Host-aware cache key so OG renders
- *  share slots with the public routes' `${host}/${projectPath}` prefix. */
-async function resolveResult(
-  c: Context,
-  host: string,
-  projectPath: string,
-  sha: string,
-): Promise<Response> {
+/** Resolve the LookupResult JSON for a lookup input. Cache-first, then compute
+ *  via the (relay-aware) provider. Host-aware cache key so OG renders share slots
+ *  with the public routes' `${host}/${projectPath}` prefix; the input kind+id
+ *  distinguishes the slot (`sha:` / `issue:` / `pr:`), mirroring the commit
+ *  endpoint's `sha:${sha}` scheme. */
+async function resolveResult(c: Context, input: LookupInput): Promise<Response> {
   const env = c.env as Env;
   const req = c.req.raw;
+  const { host, projectPath } = input.repo;
 
-  const k = await cacheKey('res', `${host}/${projectPath}`, `sha:${sha}`);
+  const idPart = input.kind === 'commit' ? `sha:${input.sha}` : `${input.kind}:${input.number}`;
+  const k = await cacheKey('res', `${host}/${projectPath}`, idPart);
   const cache = makeWorkerCache(req);
   let result: LookupResult | null = await cache.get<LookupResult>(k);
   if (result) {
@@ -52,19 +51,13 @@ async function resolveResult(
   }
 
   // Cache miss: compute. The web-og caller chose to wait for this on its side.
-  // Build the input directly (host-aware), exactly as the public /h/ route does.
+  // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
   try {
-    const parsed: LookupInput = {
-      kind: 'commit',
-      repo: { host, projectPath },
-      sha: sha.toLowerCase(),
-    };
-    // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
     const client = makeProvider(env, req, host);
     result = await singleFlight(k, async () => {
       const re = await cache.get<LookupResult>(k);
       if (re) return re;
-      const r = await findRelease(parsed, { client });
+      const r = await findRelease(input, { client });
       await cache.put(k, r, 30 * 60);
       return r;
     });
@@ -79,6 +72,12 @@ async function resolveResult(
   }
 }
 
+/** Parse a permalink :number param into a positive int, or null if invalid. */
+function parseNumber(raw: string | undefined): number | null {
+  const n = Number.parseInt(raw ?? '', 10);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
 /** GET /internal/result/:owner/:repo/:sha — GitHub-only (legacy/canonical). */
 export async function internalResultRoute(c: Context): Promise<Response> {
   if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
@@ -88,7 +87,11 @@ export async function internalResultRoute(c: Context): Promise<Response> {
   const sha = c.req.param('sha');
   if (!owner || !repo || !sha) return new Response('not found', { status: 404 });
 
-  return resolveResult(c, 'github.com', `${owner}/${repo}`, sha);
+  return resolveResult(c, {
+    kind: 'commit',
+    repo: { host: 'github.com', projectPath: `${owner}/${repo}` },
+    sha: sha.toLowerCase(),
+  });
 }
 
 /** GET /internal/h/:host/r/:projectPath/:sha — federated (any host, #12).
@@ -102,5 +105,78 @@ export async function internalFederatedResultRoute(c: Context): Promise<Response
   const sha = c.req.param('sha');
   if (!host || !projectPathEnc || !sha) return new Response('not found', { status: 404 });
 
-  return resolveResult(c, host, decodeURIComponent(projectPathEnc), sha);
+  return resolveResult(c, {
+    kind: 'commit',
+    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    sha: sha.toLowerCase(),
+  });
+}
+
+/** GET /internal/issue/:owner/:repo/:number — GitHub issue (#79). Resolves the
+ *  issue (→ its closing commit(s) → release) so the returned result carries
+ *  subject = the issue title, which web-og renders on the title-aware OG card. */
+export async function internalIssueRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  const number = parseNumber(c.req.param('number'));
+  if (!owner || !repo || number === null) return new Response('not found', { status: 404 });
+
+  return resolveResult(c, {
+    kind: 'issue',
+    repo: { host: 'github.com', projectPath: `${owner}/${repo}` },
+    number,
+  });
+}
+
+/** GET /internal/pr/:owner/:repo/:number — GitHub PR (#79). Resolves the PR to
+ *  its merge commit so subject = the PR title. */
+export async function internalPrRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const owner = c.req.param('owner');
+  const repo = c.req.param('repo');
+  const number = parseNumber(c.req.param('number'));
+  if (!owner || !repo || number === null) return new Response('not found', { status: 404 });
+
+  return resolveResult(c, {
+    kind: 'pr',
+    repo: { host: 'github.com', projectPath: `${owner}/${repo}` },
+    number,
+  });
+}
+
+/** GET /internal/h/:host/i/:projectPath/:number — federated issue (#79). */
+export async function internalFederatedIssueRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const host = c.req.param('host');
+  const projectPathEnc = c.req.param('projectPath');
+  const number = parseNumber(c.req.param('number'));
+  if (!host || !projectPathEnc || number === null)
+    return new Response('not found', { status: 404 });
+
+  return resolveResult(c, {
+    kind: 'issue',
+    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    number,
+  });
+}
+
+/** GET /internal/h/:host/p/:projectPath/:number — federated PR/MR (#79). */
+export async function internalFederatedPrRoute(c: Context): Promise<Response> {
+  if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
+
+  const host = c.req.param('host');
+  const projectPathEnc = c.req.param('projectPath');
+  const number = parseNumber(c.req.param('number'));
+  if (!host || !projectPathEnc || number === null)
+    return new Response('not found', { status: 404 });
+
+  return resolveResult(c, {
+    kind: 'pr',
+    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    number,
+  });
 }

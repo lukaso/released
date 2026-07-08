@@ -485,6 +485,143 @@ describe('web Worker — basic routing', () => {
 // 301 to the README; now it's a real, indexable content page (an SEO usage-loop
 // entry point). Full coverage lives in seo.test.ts; this just locks in that it
 // is no longer a redirect.
+// #79: issue/PR internal endpoints feed web-og's title-aware OG card. They
+// mirror the commit endpoints (/internal/result, /internal/h/.../r) but resolve
+// an issue/PR input so the returned result carries subject = the issue/PR title
+// (findReleaseForIssue / the pr path set it) and input.kind/number — which the
+// OG card renders as "Issue #N" / "PR #N" + the title. Same service-binding
+// guard (fail closed) and host-aware cache key as the commit endpoints.
+describe('web Worker — issue/PR internal endpoints (#79)', () => {
+  it('GET /internal/issue/:owner/:repo/:number rejects without the service-binding header', async () => {
+    const res = await app.fetch(
+      new Request('https://released.example/internal/issue/honojs/hono/11'),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /internal/issue/:owner/:repo/:number returns the cached issue result with subject = title', async () => {
+    cacheStore.clear();
+    const seeded = {
+      input: {
+        kind: 'issue',
+        repo: { host: 'github.com', projectPath: 'honojs/hono' },
+        number: 11,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Logger builtin middleware',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    };
+    // Seed the slot the route reads: cacheKey('res', `${host}/${projectPath}`,
+    // `issue:${number}`) — mirroring the commit endpoint's `sha:${sha}` key.
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue:11');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
+    );
+    const res = await app.fetch(
+      new Request('https://released.example/internal/issue/honojs/hono/11', {
+        headers: { 'x-released-internal': INTERNAL_SECRET },
+      }),
+      { INTERNAL_SECRET },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as typeof seeded;
+    expect(body.input.kind).toBe('issue');
+    expect(body.subject).toBe('Logger builtin middleware');
+    expect(body.firstRelease?.tag).toBe('v0.0.11');
+  });
+
+  it('GET /internal/pr/:owner/:repo/:number returns the cached PR result', async () => {
+    cacheStore.clear();
+    const seeded = {
+      input: { kind: 'pr', repo: { host: 'github.com', projectPath: 'honojs/hono' }, number: 17 },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Add logger builtin',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    };
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'pr:17');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
+    );
+    const res = await app.fetch(
+      new Request('https://released.example/internal/pr/honojs/hono/17', {
+        headers: { 'x-released-internal': INTERNAL_SECRET },
+      }),
+      { INTERNAL_SECRET },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as typeof seeded;
+    expect(body.input.kind).toBe('pr');
+    expect(body.subject).toBe('Add logger builtin');
+  });
+
+  it('GET /internal/h/:host/i/:projectPath/:number returns the host-keyed cached issue result', async () => {
+    cacheStore.clear();
+    const seeded = {
+      input: {
+        kind: 'issue',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/glib' },
+        number: 1234,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Fix a GLib crash',
+      firstRelease: { tag: '2.88.2', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    };
+    // Proves the route decodes the URL-encoded projectPath and keys by host.
+    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/glib', 'issue:1234');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
+    );
+    const res = await app.fetch(
+      new Request('https://released.example/internal/h/gitlab.gnome.org/i/GNOME%2Fglib/1234', {
+        headers: { 'x-released-internal': INTERNAL_SECRET },
+      }),
+      { INTERNAL_SECRET },
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as typeof seeded;
+    expect(body.input.repo.host).toBe('gitlab.gnome.org');
+    expect(body.subject).toBe('Fix a GLib crash');
+  });
+
+  it('GET /internal/issue/... fails CLOSED when INTERNAL_SECRET is unset (no web-og fallback)', async () => {
+    cacheStore.clear();
+    const key = await cacheKey('res', 'github.com/honojs/hono', 'issue:11');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(
+        JSON.stringify({
+          input: {
+            kind: 'issue',
+            repo: { host: 'github.com', projectPath: 'honojs/hono' },
+            number: 11,
+          },
+          firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    // INTERNAL_SECRET deliberately unset; caller spoofs the public default.
+    const res = await app.fetch(
+      new Request('https://released.example/internal/issue/honojs/hono/11', {
+        headers: { 'x-released-internal': 'web-og' },
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('/how-it-works is a content page (no longer a redirect)', () => {
   it('serves a 200 HTML page, not a 301', async () => {
     const res = await app.fetch(new Request('https://released.example/how-it-works'));
@@ -1891,7 +2028,7 @@ describe('resolved issue page surfaces share + per-commit OG card (#54 PR2b)', (
     };
   }
 
-  it('GET /i/:o/:r/:n for a released issue shows the badge/share actions + a per-commit OG image', async () => {
+  it('GET /i/:o/:r/:n for a released issue shows the badge/share actions + a title-aware OG image', async () => {
     cacheStore.clear();
     const restore = mockResolvedIssue();
     try {
@@ -1904,10 +2041,10 @@ describe('resolved issue page surfaces share + per-commit OG card (#54 PR2b)', (
       // Share actions are now enabled (the deferred `hideShare` is gone).
       expect(body).toContain('Copy &amp; embed badge');
       expect(body).toContain('data-copy="badge"');
-      // OG image is the dynamic per-commit card, not the generic placeholder.
-      expect(body).toMatch(
-        /<meta property="og:image" content="[^"]*\/r\/honojs\/hono\/c\/aaaaaaa\.png/,
-      );
+      // OG image is the title-aware issue card (#79), keyed by the issue
+      // number — not the per-commit /r/.../c/:sha card and not the placeholder.
+      expect(body).toMatch(/<meta property="og:image" content="[^"]*\/i\/honojs\/hono\/555\.png/);
+      expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/r\/honojs\/hono\/c\//);
       expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/placeholder\.png/);
     } finally {
       restore();

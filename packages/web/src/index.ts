@@ -35,7 +35,14 @@ import { badgeRoute } from './routes/badge.js';
 import { eventRoute } from './routes/event.js';
 import { homeRoute } from './routes/home.js';
 import { howItWorksRoute } from './routes/how-it-works.js';
-import { internalFederatedResultRoute, internalResultRoute } from './routes/internal.js';
+import {
+  internalFederatedIssueRoute,
+  internalFederatedPrRoute,
+  internalFederatedResultRoute,
+  internalIssueRoute,
+  internalPrRoute,
+  internalResultRoute,
+} from './routes/internal.js';
 import { issueRoute } from './routes/issue.js';
 import { lookupRoute } from './routes/lookup.js';
 import { lookupBulkRoute } from './routes/lookup-bulk.js';
@@ -162,6 +169,13 @@ app.post('/api/event', eventRoute);
 
 app.get('/internal/result/:owner/:repo/:sha', internalResultRoute);
 app.get('/internal/h/:host/r/:projectPath/:sha', internalFederatedResultRoute);
+// Issue/PR internal endpoints (#79): feed web-og's title-aware OG card. Resolve
+// the issue/PR (not the bare commit) so the result carries the issue/PR title
+// in `subject` and the OG card can render "Issue #N" / "PR #N".
+app.get('/internal/issue/:owner/:repo/:number', internalIssueRoute);
+app.get('/internal/pr/:owner/:repo/:number', internalPrRoute);
+app.get('/internal/h/:host/i/:projectPath/:number', internalFederatedIssueRoute);
+app.get('/internal/h/:host/p/:projectPath/:number', internalFederatedPrRoute);
 
 // /how-it-works is a real, indexable content page (was a 301 to the README).
 // It's an SEO usage-loop entry point: targets "which release contains a commit"

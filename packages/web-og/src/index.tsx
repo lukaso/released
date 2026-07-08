@@ -64,11 +64,69 @@ app.get('/h/:host/r/:projectPath/c/:shaPng', async (c) => {
   return renderImage(result, { owner, repo, sha });
 });
 
-app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '', sha: '' }));
+// GitHub issue/PR permalinks (#79): title-aware OG card. Fetches the result
+// resolved AS an issue/PR (not the bare closing commit) so result.subject
+// carries the issue/PR title and the card can render "Issue #N" / "PR #N".
+app.get('/i/:owner/:repo/:numberPng', async (c) => {
+  const { owner, repo, numberPng } = c.req.param();
+  if (!numberPng.endsWith('.png')) return c.text('not found', 404);
+  const number = numberPng.slice(0, -4);
+  const internalUrl = `https://web/internal/issue/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(number)}`;
+  const result = await fetchResult(c.env, internalUrl);
+  return renderImage(result, { owner, repo, number });
+});
+
+app.get('/p/:owner/:repo/:numberPng', async (c) => {
+  const { owner, repo, numberPng } = c.req.param();
+  if (!numberPng.endsWith('.png')) return c.text('not found', 404);
+  const number = numberPng.slice(0, -4);
+  const internalUrl = `https://web/internal/pr/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(number)}`;
+  const result = await fetchResult(c.env, internalUrl);
+  return renderImage(result, { owner, repo, number });
+});
+
+// Federated issue/PR permalinks (#79). projectPath URL-encoded into one segment,
+// matching the /h/ scheme in web/src/index.ts.
+app.get('/h/:host/i/:projectPath/:numberPng', async (c) => {
+  const { host, projectPath, numberPng } = c.req.param();
+  if (!numberPng.endsWith('.png')) return c.text('not found', 404);
+  const number = numberPng.slice(0, -4);
+  const decodedPath = decodeURIComponent(projectPath);
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/i/${encodeURIComponent(decodedPath)}/${encodeURIComponent(number)}`;
+  const result = await fetchResult(c.env, internalUrl);
+  const slash = decodedPath.indexOf('/');
+  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
+  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
+  return renderImage(result, { owner, repo, number });
+});
+
+app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
+  const { host, projectPath, numberPng } = c.req.param();
+  if (!numberPng.endsWith('.png')) return c.text('not found', 404);
+  const number = numberPng.slice(0, -4);
+  const decodedPath = decodeURIComponent(projectPath);
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/p/${encodeURIComponent(decodedPath)}/${encodeURIComponent(number)}`;
+  const result = await fetchResult(c.env, internalUrl);
+  const slash = decodedPath.indexOf('/');
+  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
+  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
+  return renderImage(result, { owner, repo, number });
+});
+
+app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '' }));
 
 app.get('/healthz', (c) => c.text('ok'));
 
-app.notFound((c) => c.text('not found', 404));
+// An unmatched .png request (a stale crawler URL, or a permalink OG URL hit
+// during the brief web→web-og deploy window before web-og has the matching
+// route) renders a short-cached placeholder PNG instead of a 404 text body — a
+// social unfurl fetcher gets a valid image, not an error. Non-.png paths still
+// 404. (Deploy-order safety: web deploys before web-og in CI, so og:image URLs
+// can briefly point at routes web-og hasn't shipped yet.)
+app.notFound((c) => {
+  if (c.req.path.endsWith('.png')) return renderImage(null, { owner: '', repo: '' });
+  return c.text('not found', 404);
+});
 
 export default app;
 
@@ -76,7 +134,7 @@ export default app;
 
 function renderImage(
   result: LookupResult | null,
-  ctx: { owner: string; repo: string; sha: string },
+  ctx: { owner: string; repo: string; sha?: string; number?: string },
 ): Response {
   const SIZE = { width: 1200, height: 630 };
   const longCache = `public, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
@@ -99,6 +157,21 @@ function ResultCard(r: LookupResult) {
   const date = r.firstRelease ? r.firstRelease.date.slice(0, 10) : '';
   const repo = r.input.repo.projectPath;
   const sha = r.canonicalSha.slice(0, 7);
+
+  // #79: issue/PR results get a title-aware headline ("Issue #N" / "PR #N" +
+  // the title from result.subject). findReleaseForIssue / the pr path set
+  // subject to the issue/PR title; commit results leave it as the commit
+  // subject, which the commit card does NOT surface (unchanged behavior).
+  const input = r.input;
+  const kindLabel =
+    input.kind === 'issue'
+      ? `Issue #${input.number}`
+      : input.kind === 'pr'
+        ? `PR #${input.number}`
+        : null;
+  const title = kindLabel !== null ? (r.subject ?? null) : null;
+  // Shrink the release tag when a headline is present so both fit the card.
+  const tagFontSize = kindLabel !== null ? 96 : 140;
 
   return (
     <div
@@ -127,6 +200,20 @@ function ResultCard(r: LookupResult) {
         </div>
       </div>
 
+      {/* issue/PR headline (#79) — kind label + title, above the release tag */}
+      {kindLabel !== null && (
+        <div style={{ display: 'flex', flexDirection: 'column', marginTop: 36 }}>
+          <div style={{ color: '#52a8ff', fontSize: 26, fontWeight: 600, letterSpacing: 1 }}>
+            {kindLabel}
+          </div>
+          {title !== null && (
+            <div style={{ fontSize: 40, fontWeight: 600, marginTop: 12, lineHeight: 1.2 }}>
+              {title}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* spacer */}
       <div style={{ flex: 1 }} />
 
@@ -151,7 +238,7 @@ function ResultCard(r: LookupResult) {
           style={{
             fontFamily: 'Geist Mono, monospace',
             fontWeight: 700,
-            fontSize: 140,
+            fontSize: tagFontSize,
             lineHeight: 1,
           }}
         >
@@ -196,9 +283,11 @@ function ResultCard(r: LookupResult) {
   );
 }
 
-function PlaceholderCard(ctx: { owner: string; repo: string; sha: string }) {
-  const label =
-    ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo} @ ${ctx.sha.slice(0, 7)}` : 'released';
+function PlaceholderCard(ctx: { owner: string; repo: string; sha?: string; number?: string }) {
+  // Commit lookups identify by sha (`@ abc1234`); issue/PR by number (`#11`).
+  const ident =
+    ctx.number !== undefined ? ` #${ctx.number}` : ctx.sha ? ` @ ${ctx.sha.slice(0, 7)}` : '';
+  const label = ctx.owner && ctx.repo ? `${ctx.owner}/${ctx.repo}${ident}` : 'released';
   return (
     <div
       style={{
