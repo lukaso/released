@@ -29,11 +29,39 @@ function commitImageUrl(host: string, projectPath: string, sha: string, ogBaseUr
   return `${ogBaseUrl}/h/${encodeURIComponent(host)}/r/${encodeURIComponent(projectPath)}/c/${sha}.png${v}`;
 }
 
+/** Build the web-og image URL for an issue/PR permalink (#79). Mirrors the
+ *  commit scheme but swaps the `r` segment for `i` (issue) or `p` (PR) and the
+ *  sha for the number — matching the /i/ and /p/ permalink routes in index.ts.
+ *  The card is title-aware: web-og resolves the result AS an issue/PR so
+ *  result.subject carries the issue/PR title. */
+function numberImageUrl(
+  host: string,
+  projectPath: string,
+  segment: 'i' | 'p',
+  number: number,
+  ogBaseUrl: string,
+): string {
+  const v = `?v=${OG_TEMPLATE_VERSION}`;
+  if (host === 'github.com') {
+    const [owner, name] = projectPath.split('/');
+    return `${ogBaseUrl}/${segment}/${owner}/${name}/${number}.png${v}`;
+  }
+  return `${ogBaseUrl}/h/${encodeURIComponent(host)}/${segment}/${encodeURIComponent(projectPath)}/${number}.png${v}`;
+}
+
 /** Build the OG image URL for a resolved result. A null result renders the
- *  neutral placeholder. */
+ *  neutral placeholder. Issue/PR results point at their own title-aware card
+ *  (#79); commit results at the per-commit card. */
 export function ogImageUrl(result: LookupResult | null, ogBaseUrl: string): string {
   if (!result) return `${ogBaseUrl}/placeholder.png?v=${OG_TEMPLATE_VERSION}`;
   const { host, projectPath } = result.input.repo;
+  const input = result.input;
+  if (input.kind === 'issue') {
+    return numberImageUrl(host, projectPath, 'i', input.number, ogBaseUrl);
+  }
+  if (input.kind === 'pr') {
+    return numberImageUrl(host, projectPath, 'p', input.number, ogBaseUrl);
+  }
   return commitImageUrl(host, projectPath, shortSha(result.canonicalSha), ogBaseUrl);
 }
 

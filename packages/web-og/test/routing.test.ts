@@ -211,6 +211,23 @@ describe('web-og routing', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
   });
+
+  // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
+  // OG URL hit during the web→web-og deploy window before web-og ships the
+  // matching route) renders a placeholder PNG, not a 404 text body — so a social
+  // unfurl fetcher always gets a valid image.
+  it('notFound: an unmatched .png renders a short-cached placeholder PNG, not 404', async () => {
+    const res = await app.fetch(new Request('https://og.example/totally/unknown.png'), makeEnv());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Looking up…');
+  });
+
+  it('notFound: a non-.png path still 404s', async () => {
+    const res = await app.fetch(new Request('https://og.example/totally/unknown'), makeEnv());
+    expect(res.status).toBe(404);
+  });
 });
 
 // The card the OG worker builds from a LookupResult branches on whether the
@@ -323,5 +340,138 @@ describe('web-og card content', () => {
     const env = makeEnv(new Response('not found', { status: 404 }));
     await app.fetch(new Request('https://og.example/r/facebook/react/c/abc1234.png'), env);
     expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+  });
+});
+
+// #79: issue/PR permalinks get a title-aware OG card. web-og adds /i/ and /p/
+// image routes (mirroring the permalink scheme) that fetch the result resolved
+// AS an issue/PR (so result.subject = the issue/PR title, not the commit
+// subject) and render an "Issue #N" / "PR #N" headline above the release tag.
+describe('web-og issue/PR cards (#79)', () => {
+  function resultEnv(result: Record<string, unknown>): { WEB: { fetch: typeof fetch } } {
+    return makeEnv(new Response(JSON.stringify(result)));
+  }
+
+  it('issue route: calls /internal/issue/:owner/:repo/:number and renders the title + tag', async () => {
+    const env = resultEnv({
+      input: {
+        kind: 'issue',
+        repo: { host: 'github.com', projectPath: 'honojs/hono' },
+        number: 11,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Logger builtin middleware',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
+    expect(res.status).toBe(200);
+    const calls = (env.WEB.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(String(calls[0]?.[0])).toBe('https://web/internal/issue/honojs/hono/11');
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Issue #11');
+    expect(text).toContain('Logger builtin middleware'); // the title (subject)
+    expect(text).toContain('v0.0.11');
+    expect(text).toContain('honojs/hono');
+    // Real result → long cache.
+    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+  });
+
+  it('pr route: calls /internal/pr/:owner/:repo/:number and renders "PR #N" + title', async () => {
+    const env = resultEnv({
+      input: { kind: 'pr', repo: { host: 'github.com', projectPath: 'honojs/hono' }, number: 17 },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Add logger builtin',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(new Request('https://og.example/p/honojs/hono/17.png'), env);
+    expect(res.status).toBe(200);
+    const calls = (env.WEB.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(String(calls[0]?.[0])).toBe('https://web/internal/pr/honojs/hono/17');
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('PR #17');
+    expect(text).toContain('Add logger builtin');
+    expect(text).toContain('v0.0.11');
+  });
+
+  it('federated issue route: calls /internal/h/:host/i/:projectPath/:number', async () => {
+    const env = resultEnv({
+      input: {
+        kind: 'issue',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/glib' },
+        number: 1234,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Fix a GLib crash',
+      firstRelease: { tag: '2.88.2', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.gnome.org/i/GNOME%2Fglib/1234.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const calls = (env.WEB.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(String(calls[0]?.[0])).toBe(
+      'https://web/internal/h/gitlab.gnome.org/i/GNOME%2Fglib/1234',
+    );
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Issue #1234');
+    expect(text).toContain('Fix a GLib crash');
+  });
+
+  it('issue route: placeholder with SHORT cache on binding miss shows owner/repo #N', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Looking up…');
+    expect(text.join(' ')).toContain('honojs/hono #11');
+  });
+
+  it('issue card: no satori multi-child display violations', async () => {
+    const env = resultEnv({
+      input: {
+        kind: 'issue',
+        repo: { host: 'github.com', projectPath: 'honojs/hono' },
+        number: 11,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Logger builtin middleware',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+  });
+
+  it('pr card: no satori multi-child display violations', async () => {
+    const env = resultEnv({
+      input: { kind: 'pr', repo: { host: 'github.com', projectPath: 'honojs/hono' }, number: 17 },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Add logger builtin',
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/p/honojs/hono/17.png'), env);
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+  });
+
+  it('issue route: rejects a non-.png URL with 404', async () => {
+    const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.svg'), makeEnv());
+    expect(res.status).toBe(404);
   });
 });
