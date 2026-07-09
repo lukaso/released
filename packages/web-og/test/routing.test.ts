@@ -525,4 +525,45 @@ describe('web-og issue/PR cards (#79)', () => {
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
+
+  // The %-escape need not be malformed — a lone `%` arrives via the valid
+  // encoding `%25`, which Hono decodes to `%`. The OLD code then
+  // decodeURIComponent'd that `%` again and threw URIError → 500. Pinned so the
+  // fix (no redundant double-decode) stays intact for this exact repro.
+  it('federated issue route: a `%25` (lone percent) path renders a placeholder, not a 500', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.gnome.org/i/bad%25/1.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+  });
+
+  // A verbose issue/PR title (GitHub allows 256 chars) must not overflow the
+  // 630px card. The title renders at fontSize 40 above a flex:1 spacer; ~4+
+  // lines collapse the spacer and satori clips the bottom (SHA + domain) and
+  // crowds the tag/date. Cap it with an ellipsis so it can't overflow.
+  it('issue card: a long title is truncated with an ellipsis, never overflowing', async () => {
+    const env = resultEnv({
+      input: {
+        kind: 'issue',
+        repo: { host: 'github.com', projectPath: 'honojs/hono' },
+        number: 11,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'X'.repeat(200),
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
+    // The card still satisfies satori's layout rules.
+    expect(satoriDisplayViolations(lastRenderedNode)).toEqual([]);
+    const joined = collectText(lastRenderedNode).join('');
+    expect(joined).toContain('…'); // truncated
+    expect(joined).not.toContain('X'.repeat(80)); // capped short of 80 chars
+    expect(joined).toContain('X'.repeat(70)); // but kept most of the title
+  });
 });

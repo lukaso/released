@@ -213,7 +213,10 @@ function ResultCard(r: LookupResult) {
           </div>
           {title !== null && (
             <div style={{ fontSize: 40, fontWeight: 600, marginTop: 12, lineHeight: 1.2 }}>
-              {title}
+              {/* Cap at ~2 lines (80 chars): GitHub allows 256-char titles, which
+                  would wrap 4+ lines, collapse the spacer, and clip the card's
+                  bottom meta + tag under satori's fixed 630px canvas. */}
+              {title.length > 80 ? `${title.slice(0, 79)}…` : title}
             </div>
           )}
         </div>
