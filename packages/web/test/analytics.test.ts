@@ -1,6 +1,6 @@
 // Analytics Engine usage tracking — schema mapping + middleware wiring.
 
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { Env } from '../src/env.js';
 
 // Polyfill the Workers-only `caches.default` so importing the app (which pulls in
@@ -260,6 +260,17 @@ describe('eventForPath — route → event derivation', () => {
 });
 
 describe('middleware wiring (app.fetch with a spy ANALYTICS binding)', () => {
+  // Register a route that throws, BEFORE the router matcher is built (the first
+  // fetch in this block compiles it). Added once here so a later test can exercise
+  // app.onError end-to-end through the real app — Hono refuses route registration
+  // after the matcher is built, so this must precede any fetch.
+  beforeAll(async () => {
+    const app = (await import('../src/index.js')).default;
+    app.get('/__test/onerror-throw', () => {
+      throw new Error('TestBoom');
+    });
+  });
+
   it('records a home event for the homepage', async () => {
     const { default: app } = await import('../src/index.js');
     const { env, points } = spyEnv();
@@ -363,5 +374,26 @@ describe('middleware wiring (app.fetch with a spy ANALYTICS binding)', () => {
     expect(points).toHaveLength(1);
     expect(points[0]?.blobs?.[0]).toBe('redirect'); // event
     expect(points[0]?.blobs?.[3]).toBe('invalid'); // outcome
+  });
+
+  it('renders a graceful 500 + logs outcome=error when a route throws (app.onError backstop)', async () => {
+    const { default: app } = await import('../src/index.js');
+    const { env, points } = spyEnv();
+    // /__test/onerror-throw (registered in beforeAll) throws an uncaught exception
+    // — the bare-500 class that has hit three sites (public routes, /lookup,
+    // internal). Without an app.onError backstop this surfaced Hono's "Internal
+    // Server Error" AND logged status=500 with EMPTY outcome/errorType (the route
+    // threw before its setTrack), which the error-history query (blob4='error' AND
+    // blob8!='') never matches — so a bare 500 was invisible to the loop's
+    // persisted SYSTEM/CLIENT counts.
+    const res = await app.fetch(new Request('https://released.example/__test/onerror-throw'), env);
+
+    expect(res.status).toBe(500);
+    expect(await res.text()).not.toContain('Internal Server Error'); // graceful, not Hono's default
+    // Visible to the loop's error history: outcome=error + the thrown Error's name.
+    expect(points).toHaveLength(1);
+    expect(points[0]?.blobs?.[3]).toBe('error'); // outcome
+    expect(points[0]?.blobs?.[7]).toBe('Error'); // errorType = err.name
+    expect(points[0]?.doubles?.[0]).toBe(500); // status
   });
 });
