@@ -151,8 +151,6 @@ function BestEffortBanner({ result }: { result: LookupResult }) {
 }
 
 function PartialResult({ result }: { result: LookupResult }) {
-  const repoDisplay = result.input.repo.projectPath;
-  const sha = result.canonicalSha.slice(0, 7);
   const isGithub = result.input.repo.host === 'github.com';
   const viewLabel = isGithub ? 'View commit on GitHub' : `View commit on ${result.input.repo.host}`;
   const checkedSoFar = result.partial?.candidatesTried ?? 0;
