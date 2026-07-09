@@ -566,4 +566,32 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(joined).not.toContain('X'.repeat(80)); // capped short of 80 chars
     expect(joined).toContain('X'.repeat(70)); // but kept most of the title
   });
+
+  // Truncation must cut on a Unicode code-point boundary, not a UTF-16 code-unit
+  // boundary: slicing at index 79 can split an emoji surrogate pair (🎉 is two
+  // code units), leaving a lone high surrogate that satori/resvg renders as □.
+  it('issue card: truncating an emoji at the boundary leaves no lone surrogate', async () => {
+    // 78 plain chars + a 2-code-unit emoji at positions 78–79 + a trailing char
+    // → title.length === 81 (> 80, so it truncates), and index 79 falls inside
+    // the surrogate pair. `title.slice(0, 79)` would keep the high surrogate.
+    const title = 'X'.repeat(78) + '🎉' + 'Y';
+    const env = resultEnv({
+      input: {
+        kind: 'issue',
+        repo: { host: 'github.com', projectPath: 'honojs/hono' },
+        number: 11,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: title,
+      firstRelease: { tag: 'v0.0.11', sha: 's', date: '2024-04-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
+    const joined = collectText(lastRenderedNode).join('');
+    expect(joined).toContain('…');
+    // No lone surrogate (U+D800–U+DFFF) leaks into the rendered text.
+    expect(/[\u{D800}-\u{DFFF}]/u.test(joined)).toBe(false);
+  });
 });

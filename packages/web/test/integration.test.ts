@@ -406,8 +406,8 @@ describe('web Worker — basic routing', () => {
       rateLimit: null,
     };
     // Seed the SAME slot the route reads: cacheKey('res', `${host}/${projectPath}`,
-    // `sha:${sha}`). Proves the route decodes the URL-encoded projectPath and keys
-    // the cache by host — without hitting any provider.
+    // `sha:${sha}`). Proves the route keys the cache by host on the (Hono-decoded)
+    // projectPath — without hitting any provider.
     const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
@@ -577,7 +577,7 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
       releaseNotesHtml: null,
       rateLimit: null,
     };
-    // Proves the route decodes the URL-encoded projectPath and keys by host.
+    // Proves the route keys the cache by host on the (Hono-decoded) projectPath.
     const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/glib', 'issue:1234');
     cacheStore.set(
       `https://released.example/__cache__/${encodeURIComponent(key)}`,
@@ -593,6 +593,44 @@ describe('web Worker — issue/PR internal endpoints (#79)', () => {
     const body = (await res.json()) as typeof seeded;
     expect(body.input.repo.host).toBe('gitlab.gnome.org');
     expect(body.subject).toBe('Fix a GLib crash');
+  });
+
+  // Regression: a `%25` (lone percent) in the federated projectPath. Hono
+  // already percent-decodes c.req.param() (safe try/catch), so an explicit
+  // decodeURIComponent here is a redundant DOUBLE-decode: `bad%25` → Hono
+  // decodes to `bad%` → decodeURIComponent("bad%") throws URIError. The throw
+  // is in the route-handler argument, outside resolveResult's try/catch, with
+  // no app.onError → HTTP 500 on a Service-Binding route. web-og masks it to a
+  // placeholder, so a `%`-bearing project path never resolves its OG card and
+  // web logs a 500. The route must NOT re-decode the already-decoded param.
+  it('GET /internal/h/:host/i/:projectPath/:number does not 500 on a `%25` (lone-percent) path', async () => {
+    cacheStore.clear();
+    const seeded = {
+      input: {
+        kind: 'issue',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'bad%' },
+        number: 1,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Fix',
+      firstRelease: { tag: '2.88.2', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    };
+    // Seed the slot the FIXED route keys on (Hono already decoded bad%25 → bad%).
+    const key = await cacheKey('res', 'gitlab.gnome.org/bad%', 'issue:1');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
+    );
+    const res = await app.fetch(
+      new Request('https://released.example/internal/h/gitlab.gnome.org/i/bad%25/1', {
+        headers: { 'x-released-internal': INTERNAL_SECRET },
+      }),
+      { INTERNAL_SECRET },
+    );
+    expect(res.status).toBe(200);
   });
 
   it('GET /internal/issue/... fails CLOSED when INTERNAL_SECRET is unset (no web-og fallback)', async () => {

@@ -215,8 +215,10 @@ function ResultCard(r: LookupResult) {
             <div style={{ fontSize: 40, fontWeight: 600, marginTop: 12, lineHeight: 1.2 }}>
               {/* Cap at ~2 lines (80 chars): GitHub allows 256-char titles, which
                   would wrap 4+ lines, collapse the spacer, and clip the card's
-                  bottom meta + tag under satori's fixed 630px canvas. */}
-              {title.length > 80 ? `${title.slice(0, 79)}…` : title}
+                  bottom meta + tag under satori's fixed 630px canvas. Truncate on
+                  a code-point boundary (Array.from) so an emoji straddling index
+                  79 isn't split into a lone surrogate (renders as □). */}
+              {title.length > 80 ? `${Array.from(title).slice(0, 79).join('')}…` : title}
             </div>
           )}
         </div>

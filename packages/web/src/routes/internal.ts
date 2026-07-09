@@ -96,18 +96,20 @@ export async function internalResultRoute(c: Context): Promise<Response> {
 
 /** GET /internal/h/:host/r/:projectPath/:sha — federated (any host, #12).
  *  projectPath is URL-encoded into a single segment, matching the /h/ permalink
- *  routes; decode it before building the lookup. */
+ *  routes. Hono already percent-decodes c.req.param() (safe try/catch), so do
+ *  NOT decodeURIComponent again — that's a redundant double-decode that throws
+ *  URIError on a malformed escape (bad%25 → bad% → throws) → HTTP 500. */
 export async function internalFederatedResultRoute(c: Context): Promise<Response> {
   if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
 
   const host = c.req.param('host');
-  const projectPathEnc = c.req.param('projectPath');
+  const projectPath = c.req.param('projectPath');
   const sha = c.req.param('sha');
-  if (!host || !projectPathEnc || !sha) return new Response('not found', { status: 404 });
+  if (!host || !projectPath || !sha) return new Response('not found', { status: 404 });
 
   return resolveResult(c, {
     kind: 'commit',
-    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    repo: { host, projectPath },
     sha: sha.toLowerCase(),
   });
 }
@@ -152,14 +154,13 @@ export async function internalFederatedIssueRoute(c: Context): Promise<Response>
   if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
 
   const host = c.req.param('host');
-  const projectPathEnc = c.req.param('projectPath');
+  const projectPath = c.req.param('projectPath');
   const number = parseNumber(c.req.param('number'));
-  if (!host || !projectPathEnc || number === null)
-    return new Response('not found', { status: 404 });
+  if (!host || !projectPath || number === null) return new Response('not found', { status: 404 });
 
   return resolveResult(c, {
     kind: 'issue',
-    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    repo: { host, projectPath },
     number,
   });
 }
@@ -169,14 +170,13 @@ export async function internalFederatedPrRoute(c: Context): Promise<Response> {
   if (!isServiceBinding(c)) return new Response('not found', { status: 404 });
 
   const host = c.req.param('host');
-  const projectPathEnc = c.req.param('projectPath');
+  const projectPath = c.req.param('projectPath');
   const number = parseNumber(c.req.param('number'));
-  if (!host || !projectPathEnc || number === null)
-    return new Response('not found', { status: 404 });
+  if (!host || !projectPath || number === null) return new Response('not found', { status: 404 });
 
   return resolveResult(c, {
     kind: 'pr',
-    repo: { host, projectPath: decodeURIComponent(projectPathEnc) },
+    repo: { host, projectPath },
     number,
   });
 }
