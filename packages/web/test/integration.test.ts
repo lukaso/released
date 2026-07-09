@@ -116,6 +116,23 @@ describe('web Worker — basic routing', () => {
     expect(loc).toContain('reason=invalid_input');
   });
 
+  it('GET /lookup?q=<federated own-URL with a malformed %> bounces, never 500s', async () => {
+    // Same bug class as the public-route double-decode: recognizeOwnUrl() runs
+    // OUTSIDE the try/catch and calls decodeURIComponent() (own-url.fed) on the
+    // captured project path. A stray/typo'd "%" (e.g. a mangled pasted link)
+    // throws URIError before the catch → bare 500 instead of the bounce-to-form.
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/lookup?q=' + encodeURIComponent('gitlab.gnome.org/p/x%2G/1'),
+      ),
+    );
+    expect(res.status).toBe(302);
+    const loc = res.headers.get('location') ?? '';
+    expect(loc.startsWith('/?')).toBe(true);
+    expect(loc).toMatch(/bad=/);
+    expect(loc).toMatch(/reason=/);
+  });
+
   it('GET /lookup?q=<gitlab.com URL> redirects to the federated permalink (post-federation)', async () => {
     const res = await app.fetch(
       new Request(
