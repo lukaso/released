@@ -339,7 +339,6 @@ describe('getReleaseNotes', () => {
 describe('rate-limit + network failure modes', () => {
   it('throws RateLimitError on 403 with remaining=0', async () => {
     const reset = Math.floor(Date.now() / 1000) + 600;
-    const fetch = queuedFetch(errResp(403, { message: 'rate limit exceeded' }, 0));
     // Manually set reset on the response we just built:
     const c = makeGithubClient({
       fetch: queuedFetch(
