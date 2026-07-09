@@ -476,6 +476,43 @@ describe('web Worker — basic routing', () => {
     expect(res.status).toBe(404);
   });
 
+  // Defense-in-depth companion to the fail-closed test above: even when
+  // INTERNAL_SECRET is correctly set, a caller presenting the WRONG marker
+  // value must be DENIED. The exact-match comparison (marker === secret) is
+  // otherwise only exercised positively (the success test). The no-header
+  // tests never reach the comparison, and the unset-secret test returns on its
+  // early branch — so without this case a regression weakening the check to
+  // "any non-empty marker" would leave the whole suite green.
+  it('GET /internal/h/... rejects a wrong marker value when INTERNAL_SECRET is set', async () => {
+    cacheStore.clear();
+    const sha = 'a'.repeat(40);
+    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(
+        JSON.stringify({
+          input: {
+            kind: 'commit',
+            repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
+            sha,
+          },
+          firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    // Secret IS set; caller sends a non-empty but WRONG marker. The cache is
+    // seeded, so a fail-OPEN check would return 200 — a 404 here proves the
+    // exact-match guard fired rather than a mere cache miss.
+    const res = await app.fetch(
+      new Request(`https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/${sha}`, {
+        headers: { 'x-released-internal': 'web-og' },
+      }),
+      { INTERNAL_SECRET },
+    );
+    expect(res.status).toBe(404);
+  });
+
   it('GET /r/:o/:r/c/:sha for an unfurl bot with no cache returns a deferred-render card with short TTL', async () => {
     cacheStore.clear();
     const res = await app.fetch(
