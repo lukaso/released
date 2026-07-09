@@ -30,6 +30,19 @@ const { default: app } = await import('../src/index.js');
 // /internal/* tests exercise the real web↔web-og handshake, not the fallback.
 const INTERNAL_SECRET = 'test-shared-secret';
 
+// Seed the result-cache slot the federated /internal/h/... route reads, keyed to
+// the GNOME/gimp fixture every host-keyed test below uses. `result` is an
+// intentionally partial fixture — only the fields the route deserializes — so it's
+// typed `unknown`, not LookupResult (a full LookupResult isn't required to exercise
+// the route, and the seeded fixtures below don't populate one).
+async function seedFederatedResult(sha: string, result: unknown) {
+  const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
+  cacheStore.set(
+    `https://released.example/__cache__/${encodeURIComponent(key)}`,
+    new Response(JSON.stringify(result), { headers: { 'content-type': 'application/json' } }),
+  );
+}
+
 describe('web Worker — basic routing', () => {
   it('serves the homepage with the EXAMPLE result (real, click-to-verify)', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
@@ -422,14 +435,10 @@ describe('web Worker — basic routing', () => {
       releaseNotesHtml: null,
       rateLimit: null,
     };
-    // Seed the SAME slot the route reads: cacheKey('res', `${host}/${projectPath}`,
-    // `sha:${sha}`). Proves the route keys the cache by host on the (Hono-decoded)
-    // projectPath — without hitting any provider.
-    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
-    cacheStore.set(
-      `https://released.example/__cache__/${encodeURIComponent(key)}`,
-      new Response(JSON.stringify(seeded), { headers: { 'content-type': 'application/json' } }),
-    );
+    // Seeds the host-keyed slot the route reads (see seedFederatedResult) — proves
+    // the route decodes the URL-encoded projectPath and keys the cache by host,
+    // without hitting any provider.
+    await seedFederatedResult(sha, seeded);
     // Real handshake: caller presents the shared INTERNAL_SECRET, and the env has
     // it set (as prod / `wrangler dev` via .dev.vars do). The value is NOT 'web-og',
     // so this can't pass via the legacy default fallback.
@@ -452,21 +461,14 @@ describe('web Worker — basic routing', () => {
   it('GET /internal/h/... fails CLOSED when INTERNAL_SECRET is unset (no web-og fallback)', async () => {
     cacheStore.clear();
     const sha = 'a'.repeat(40);
-    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
-    cacheStore.set(
-      `https://released.example/__cache__/${encodeURIComponent(key)}`,
-      new Response(
-        JSON.stringify({
-          input: {
-            kind: 'commit',
-            repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
-            sha,
-          },
-          firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      ),
-    );
+    await seedFederatedResult(sha, {
+      input: {
+        kind: 'commit',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
+        sha,
+      },
+      firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
+    });
     // INTERNAL_SECRET deliberately unset; caller spoofs the public default.
     const res = await app.fetch(
       new Request(`https://released.example/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/${sha}`, {
@@ -486,21 +488,14 @@ describe('web Worker — basic routing', () => {
   it('GET /internal/h/... rejects a wrong marker value when INTERNAL_SECRET is set', async () => {
     cacheStore.clear();
     const sha = 'a'.repeat(40);
-    const key = await cacheKey('res', 'gitlab.gnome.org/GNOME/gimp', `sha:${sha}`);
-    cacheStore.set(
-      `https://released.example/__cache__/${encodeURIComponent(key)}`,
-      new Response(
-        JSON.stringify({
-          input: {
-            kind: 'commit',
-            repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
-            sha,
-          },
-          firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
-        }),
-        { headers: { 'content-type': 'application/json' } },
-      ),
-    );
+    await seedFederatedResult(sha, {
+      input: {
+        kind: 'commit',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/gimp' },
+        sha,
+      },
+      firstRelease: { tag: 'GIMP_2_10_36', sha: 't', date: '2024-02-01T00:00:00Z', url: '' },
+    });
     // Secret IS set; caller sends a non-empty but WRONG marker. The cache is
     // seeded, so a fail-OPEN check would return 200 — a 404 here proves the
     // exact-match guard fired rather than a mere cache miss.
