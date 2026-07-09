@@ -111,12 +111,15 @@ app.get('/lookup', (c) => {
   // instead of handing `released.*` to parseInput, which would reject our own
   // host as "unsupported".
   const req = c.req.raw;
-  const own = recognizeOwnUrl(q, [
-    new URL(publicBaseUrl(c.env as Env, req)).host,
-    new URL(req.url).host,
-  ]);
-  if (own) return c.redirect(own, 302);
   try {
+    // recognizeOwnUrl decodes the federated project path (own-url.fed). A stray
+    // "%" in a pasted link throws URIError, so keep it in this try alongside
+    // parseInput — the catch bounces to the form instead of surfacing a 500.
+    const own = recognizeOwnUrl(q, [
+      new URL(publicBaseUrl(c.env as Env, req)).host,
+      new URL(req.url).host,
+    ]);
+    if (own) return c.redirect(own, 302);
     const p = parseInput(q);
     // Enrich the existing `redirect` event so a UI search is a measurable funnel:
     // which hosts/repos people search for (valid) vs how often parsing fails
