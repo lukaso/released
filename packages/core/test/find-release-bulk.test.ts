@@ -3,7 +3,6 @@ import { BulkLimitError, RateLimitError } from '../src/errors.js';
 import { findReleasesBulk } from '../src/find-release.js';
 import type { Provider } from '../src/provider.js';
 import { makeGithubProvider } from '../src/providers/github/client.js';
-import { makeGitlabProvider } from '../src/providers/gitlab/client.js';
 import type { LookupInput, RepoRef, TagWithDate } from '../src/types.js';
 
 function bulkFakeClient(

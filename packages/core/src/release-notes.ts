@@ -11,7 +11,7 @@ import { SanitizeError } from './errors.js';
 /** Render a GitHub release-notes markdown string to safe HTML.
  *  Returns null for empty/whitespace input. */
 export async function renderReleaseNotes(markdown: string): Promise<string | null> {
-  if (!markdown || !markdown.trim()) return null;
+  if (!markdown?.trim()) return null;
   try {
     // micromark with the default extension set: no raw HTML, no script.
     const html = micromark(markdown, {
