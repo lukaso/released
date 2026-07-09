@@ -207,6 +207,25 @@ app.get('/version', (c) => {
 
 app.notFound((c) => c.text('Not found — paste a commit at https://released.blabberate.com\n', 404));
 
+// Backstop for uncaught exceptions. Without it, any unguarded parse/decode on
+// user input (the bare-500 class — three sites so far) hits Hono's default
+// "Internal Server Error", and the analytics middleware logs it status=500 with
+// EMPTY outcome/errorType (the route threw before its setTrack) — so the
+// error-history query (outcome='error' AND errorType!='') never matches and a
+// bare 500 is invisible to the loop's persisted SYSTEM/CLIENT counts. Catching
+// it here renders a graceful surface AND tags outcome=error + err.name so the
+// loop can see the next one. Routes use `return` for expected errors (404 /
+// recovery cards), so this only fires on genuinely unexpected exceptions —
+// never the soft-deadline partial-result path, which is a returned value.
+app.onError((err, c) => {
+  console.error(err); // preserve the log-tail signal Hono's default emitted
+  setTrack(c.req.raw, { outcome: 'error', errorType: (err as Error)?.name ?? 'UnknownError' });
+  return c.text(
+    'Something broke. Try again, or paste your commit at https://released.blabberate.com\n',
+    500,
+  );
+});
+
 export default app;
 
 // Durable Object class backing the Anubis relay container. Must be exported
