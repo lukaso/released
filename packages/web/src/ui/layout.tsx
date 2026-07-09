@@ -1,7 +1,7 @@
 // HTML shell with CSP, nonce, OG meta, and the locked design system.
 
 import type { LookupResult } from '@released/core';
-import { html, raw } from 'hono/html';
+import { raw } from 'hono/html';
 import { OgMeta } from './og-meta.js';
 import { STYLES } from './styles.js';
 
