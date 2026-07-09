@@ -50,17 +50,18 @@ app.get('/h/:host/r/:projectPath/c/:shaPng', async (c) => {
   if (!shaPng.endsWith('.png')) return c.text('not found', 404);
   const sha = shaPng.slice(0, -4);
 
-  // Normalize then re-encode so the internal route receives one encoded segment
-  // regardless of how the router decoded the param.
-  const decodedPath = decodeURIComponent(projectPath);
-  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/r/${encodeURIComponent(decodedPath)}/${encodeURIComponent(sha)}`;
+  // projectPath is already percent-decoded by Hono's router (via a safe
+  // try/catch), so re-encoding here yields one clean segment regardless of how
+  // the caller encoded it. Do NOT decodeURIComponent again — that's a redundant
+  // double-decode that throws URIError on a malformed escape (foo%2 → 500).
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/r/${encodeURIComponent(projectPath)}/${encodeURIComponent(sha)}`;
   const result = await fetchResult(c.env, internalUrl);
 
   // Placeholder context: split the project path on the first slash so
   // PlaceholderCard's `owner/repo` label renders the full path.
-  const slash = decodedPath.indexOf('/');
-  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
-  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
+  const slash = projectPath.indexOf('/');
+  const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
+  const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
   return renderImage(result, { owner, repo, sha });
 });
 
@@ -91,12 +92,11 @@ app.get('/h/:host/i/:projectPath/:numberPng', async (c) => {
   const { host, projectPath, numberPng } = c.req.param();
   if (!numberPng.endsWith('.png')) return c.text('not found', 404);
   const number = numberPng.slice(0, -4);
-  const decodedPath = decodeURIComponent(projectPath);
-  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/i/${encodeURIComponent(decodedPath)}/${encodeURIComponent(number)}`;
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/i/${encodeURIComponent(projectPath)}/${encodeURIComponent(number)}`;
   const result = await fetchResult(c.env, internalUrl);
-  const slash = decodedPath.indexOf('/');
-  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
-  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
+  const slash = projectPath.indexOf('/');
+  const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
+  const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
   return renderImage(result, { owner, repo, number });
 });
 
@@ -104,12 +104,11 @@ app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
   const { host, projectPath, numberPng } = c.req.param();
   if (!numberPng.endsWith('.png')) return c.text('not found', 404);
   const number = numberPng.slice(0, -4);
-  const decodedPath = decodeURIComponent(projectPath);
-  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/p/${encodeURIComponent(decodedPath)}/${encodeURIComponent(number)}`;
+  const internalUrl = `https://web/internal/h/${encodeURIComponent(host)}/p/${encodeURIComponent(projectPath)}/${encodeURIComponent(number)}`;
   const result = await fetchResult(c.env, internalUrl);
-  const slash = decodedPath.indexOf('/');
-  const owner = slash === -1 ? decodedPath : decodedPath.slice(0, slash);
-  const repo = slash === -1 ? '' : decodedPath.slice(slash + 1);
+  const slash = projectPath.indexOf('/');
+  const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
+  const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
   return renderImage(result, { owner, repo, number });
 });
 
@@ -162,12 +161,18 @@ function ResultCard(r: LookupResult) {
   // the title from result.subject). findReleaseForIssue / the pr path set
   // subject to the issue/PR title; commit results leave it as the commit
   // subject, which the commit card does NOT surface (unchanged behavior).
+  // web-og has no provider terms, so the noun/sigil branches on host: a
+  // GitLab MR unfurls as "Merge request !N" (matching its permalink page, which
+  // pulls the wording from provider.terms), not GitHub's "PR #N". Issues use "#"
+  // on every host, so they need no branch.
   const input = r.input;
   const kindLabel =
     input.kind === 'issue'
       ? `Issue #${input.number}`
       : input.kind === 'pr'
-        ? `PR #${input.number}`
+        ? input.repo.host === 'github.com'
+          ? `PR #${input.number}`
+          : `Merge request !${input.number}`
         : null;
   const title = kindLabel !== null ? (r.subject ?? null) : null;
   // Shrink the release tag when a headline is present so both fit the card.
