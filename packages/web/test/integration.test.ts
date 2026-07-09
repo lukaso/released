@@ -2090,6 +2090,88 @@ describe('resolved issue page surfaces share + per-commit OG card (#54 PR2b)', (
   });
 });
 
+// Regression: a `%25` (lone percent) in the federated projectPath on the PUBLIC
+// permalink + badge routes. Hono already percent-decodes c.req.param() (safe
+// try/catch — verified by repro against installed Hono 4.12.27: `bad%25` arrives
+// as `bad%`), so an explicit decodeURIComponent in repoFromParams is a redundant
+// DOUBLE-decode: decodeURIComponent("bad%") throws URIError. The throw is inside
+// repoFromParams, which each route calls with no try/catch, and there is no
+// app.onError → HTTP 500 on a public surface. repoFromParams must NOT re-decode
+// the already-decoded param.
+//
+// The decode is host-agnostic, so these use gitlab.com (NOT an Anubis host):
+// Anubis hosts route provider fetches through the GitlabRelay Durable Object,
+// whose binding is absent in unit tests, so makeProvider would 500 before the
+// cache check — unrelated noise. gitlab.com constructs without the relay.
+describe('public federated routes — malformed `%` projectPath must not 500', () => {
+  // Seed the cache slot the FIXED route keys on (Hono already decoded bad%25 →
+  // bad%), so the route short-circuits to the cached answer instead of fetching.
+  async function seedBadPercent(slot: string, input: object) {
+    cacheStore.clear();
+    const key = await cacheKey('res', 'gitlab.com/bad%', slot, 'cull', 'nopre');
+    cacheStore.set(
+      `https://released.example/__cache__/${encodeURIComponent(key)}`,
+      new Response(
+        JSON.stringify({
+          input,
+          canonicalSha: 'a'.repeat(40),
+          firstRelease: { tag: '2.88.2', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+          alsoIn: [],
+          releaseNotesHtml: null,
+          rateLimit: null,
+          urls: { repo: 'r', commit: 'c' },
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  }
+
+  it('GET /h/:host/r/:projectPath/c/:sha (commit permalink) — `bad%25` does not 500', async () => {
+    await seedBadPercent('sha:abc1234', {
+      kind: 'commit',
+      repo: { host: 'gitlab.com', projectPath: 'bad%' },
+      sha: 'abc1234',
+    });
+    const res = await app.fetch(
+      new Request('https://released.example/h/gitlab.com/r/bad%25/c/abc1234'),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it('GET /h/:host/r/:projectPath/c/:sha/badge.svg (commit badge) — `bad%25` does not 500', async () => {
+    await seedBadPercent('sha:abc1234', {
+      kind: 'commit',
+      repo: { host: 'gitlab.com', projectPath: 'bad%' },
+      sha: 'abc1234',
+    });
+    const res = await app.fetch(
+      new Request('https://released.example/h/gitlab.com/r/bad%25/c/abc1234/badge.svg'),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('<svg');
+  });
+
+  it('GET /h/:host/i/:projectPath/:number (issue permalink) — `bad%25` does not 500', async () => {
+    await seedBadPercent('issue#1', {
+      kind: 'issue',
+      repo: { host: 'gitlab.com', projectPath: 'bad%' },
+      number: 1,
+    });
+    const res = await app.fetch(new Request('https://released.example/h/gitlab.com/i/bad%25/1'));
+    expect(res.status).toBe(200);
+  });
+
+  it('GET /h/:host/p/:projectPath/:number (PR/MR permalink) — `bad%25` does not 500', async () => {
+    await seedBadPercent('pr#1', {
+      kind: 'pr',
+      repo: { host: 'gitlab.com', projectPath: 'bad%' },
+      number: 1,
+    });
+    const res = await app.fetch(new Request('https://released.example/h/gitlab.com/p/bad%25/1'));
+    expect(res.status).toBe(200);
+  });
+});
+
 afterEachClear();
 function afterEachClear() {
   // No-op helper since vitest's beforeEach/afterEach are picked up at top-level;
