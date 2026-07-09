@@ -33,9 +33,12 @@ import { PrereleaseHint, ResultCard, StaleNotice, StrictHint } from '../ui/resul
 function repoFromParams(c: Context): RepoRef | null {
   const host = c.req.param('host');
   if (host) {
-    const projectPathEnc = c.req.param('projectPath');
-    if (!projectPathEnc) return null;
-    return { host, projectPath: decodeURIComponent(projectPathEnc) };
+    // c.req.param() already percent-decodes (Hono, safe try/catch). Do NOT
+    // decodeURIComponent again — a redundant double-decode throws URIError →
+    // uncaught 500 on a malformed `%`-bearing path (e.g. `bad%25` → `bad%`).
+    const projectPath = c.req.param('projectPath');
+    if (!projectPath) return null;
+    return { host, projectPath };
   }
   const owner = c.req.param('owner');
   const repo = c.req.param('repo');
