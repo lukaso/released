@@ -474,4 +474,55 @@ describe('web-og issue/PR cards (#79)', () => {
     const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.svg'), makeEnv());
     expect(res.status).toBe(404);
   });
+
+  // A federated MR shares the permalink page's "Merge request !N" noun/sigil
+  // (the page pulls them from provider.terms; web-og has no provider terms, so
+  // the PR branch must branch on host). Covers the federated PR route end-to-end
+  // too — previously a copy of the issue route with nothing asserting it.
+  it('federated MR route: calls /internal/h/:host/p/:projectPath/:number and renders "Merge request !N"', async () => {
+    const env = resultEnv({
+      input: {
+        kind: 'pr',
+        repo: { host: 'gitlab.gnome.org', projectPath: 'GNOME/glib' },
+        number: 5678,
+      },
+      canonicalSha: 'a'.repeat(40),
+      subject: 'Merge the GLib fix',
+      firstRelease: { tag: '2.88.2', sha: 's', date: '2024-02-01T00:00:00Z', url: '' },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.gnome.org/p/GNOME%2Fglib/5678.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const calls = (env.WEB.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    expect(String(calls[0]?.[0])).toBe(
+      'https://web/internal/h/gitlab.gnome.org/p/GNOME%2Fglib/5678',
+    );
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Merge request !5678');
+    expect(text).toContain('Merge the GLib fix');
+    expect(text).toContain('2.88.2');
+    expect(text).not.toContain('PR #5678');
+  });
+
+  // Regression: a malformed %-escape in the federated projectPath (e.g. `foo%2`)
+  // must render the placeholder, not throw. Hono's c.req.param() already decodes
+  // safely (try/catch), so an explicit decodeURIComponent is a redundant
+  // double-decode that throws URIError on malformed input → HTTP 500 before the
+  // placeholder can render. A crawler's og:image fetch must get a PNG, not a 500.
+  it('federated issue route: a malformed %-escape renders a placeholder, not a 500', async () => {
+    const env = makeEnv(new Response('not found', { status: 404 }));
+    const res = await app.fetch(
+      new Request('https://og.example/h/gitlab.gnome.org/i/foo%2/9.png'),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    const text = collectText(lastRenderedNode);
+    expect(text).toContain('Looking up…');
+  });
 });
