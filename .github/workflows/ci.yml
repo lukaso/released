@@ -51,26 +51,6 @@ jobs:
       - name: Test
         run: pnpm -r test
 
-      # Neither Worker has a build script, so `pnpm -r build` above never
-      # bundles them and nothing else in CI parses their wrangler.toml. The dry
-      # run bundles both Workers and validates that their config parses. It
-      # contacts no Cloudflare API and deploys nothing.
-      #
-      # It checks LOCAL config only. It cannot see remote state, so a
-      # [[migrations]] tag that conflicts with what is already applied to
-      # released-web, web-og's [[services]] binding naming a Worker that does
-      # not exist, or a missing secret all still first surface in the deploy.
-      #
-      # This is PR-time signal. The step that actually gates production is the
-      # same pair of checks in release.yml: a push to main starts this workflow
-      # and release.yml concurrently, and main has no required status checks, so
-      # a red job here cannot hold back a deploy.
-      - name: Validate deploy config (dry run)
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
-        run: |
-          pnpm --filter @released/web check:deploy-config
-          pnpm --filter @released/web-og check:deploy-config
-
       - name: CLI Windows smoke (no gh installed)
         if: matrix.os == 'windows-latest'
         run: |
@@ -105,6 +85,52 @@ jobs:
   # the FULL history (fetch-depth: 0) and gates the PR. Real .dev.vars secrets
   # are gitignored + never committed, so this is clean unless a token actually
   # lands in a tracked file.
+  # Neither Worker has a build script, so `pnpm -r build` never bundles them and
+  # nothing else in CI parses their wrangler.toml. `pnpm check:deploy-config`
+  # (scripts/check-deploy-config.sh — the SAME script validate.sh and release.yml
+  # run) dry-runs `wrangler deploy` for each: it bundles the Worker, parses the
+  # config and builds the container image, while contacting no Cloudflare API and
+  # deploying nothing.
+  #
+  # Its OWN job, like a11y: as a step in the `test` matrix, any unrelated test
+  # failure would stop the run before it and the PR would show red with nothing
+  # said about the Worker config — the run where you most want the signal.
+  #
+  # PR-only. release.yml runs the same script before it publishes or deploys, and
+  # that copy is the one that gates production (a push to main starts both
+  # workflows concurrently, and main has no required status checks, so a red job
+  # here cannot hold back a deploy). Without this condition every merge would
+  # build the container image twice, in two concurrent workflows, for no signal.
+  #
+  # LOCAL config only — it cannot see remote state: a [[migrations]] tag that
+  # conflicts with what is already applied to released-web, web-og's [[services]]
+  # binding naming a Worker that does not exist, or a missing secret all still
+  # first surface in the deploy itself.
+  deploy-config:
+    name: deploy config (wrangler dry run)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Both Workers import @released/core, and wrangler bundles from its dist.
+      - name: Build core
+        run: pnpm --filter @released/core build
+
+      # Builds packages/web/Dockerfile — ubuntu runners ship Docker, same as the
+      # runner release.yml deploys from.
+      - name: Validate deploy config
+        run: pnpm check:deploy-config
+
   secrets:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
