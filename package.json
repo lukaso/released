@@ -11,6 +11,7 @@
     "validate": "scripts/validate.sh",
     "doctor": "scripts/doctor.sh",
     "check:publish": "scripts/check-publish.sh",
+    "check:deploy-config": "scripts/check-deploy-config.sh",
     "ci:status": "scripts/ci-status.sh",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",

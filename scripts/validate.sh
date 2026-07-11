@@ -45,6 +45,18 @@ else
   echo "  chromium not installed — skipping (CI gates it). pnpm --filter @released/web exec playwright install chromium"
 fi
 
+# Both Workers' deploy config: bundle + parse wrangler.toml + build the container
+# image, deploying nothing (scripts/check-deploy-config.sh — the SAME script CI's
+# deploy-config job and release.yml run). Needs Docker for web's image; skips with
+# a notice when Docker isn't running, like chromium/shellcheck above — CI's
+# deploy-config job is the authoritative gate.
+echo "→ deploy config (wrangler dry run)"
+if docker info >/dev/null 2>&1; then
+  pnpm check:deploy-config
+else
+  echo "  Docker not running — skipping (CI gates it). Start Docker to validate the relay image."
+fi
+
 echo "→ lint"
 pnpm lint
 

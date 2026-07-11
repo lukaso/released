@@ -46,20 +46,19 @@ jobs:
 
       # Fail fast BEFORE anything is published or deployed. Neither Worker has a
       # build script, so nothing above parses their wrangler.toml — a config that
-      # cannot bundle would otherwise first fail inside `Deploy web` below,
-      # leaving a half-release (CLI on npm, or web deployed and web-og not).
+      # cannot bundle, or a Dockerfile that cannot build, would otherwise first
+      # fail inside `Deploy web` below, leaving a half-release (CLI already on
+      # npm, or web deployed and web-og not).
       #
-      # This must live HERE, not in ci.yml: a push to main starts both workflows
-      # concurrently and main has no required status checks, so a red CI job
-      # cannot hold back this deploy. ci.yml runs the same two checks for
-      # PR-time signal; this copy is the one that gates production.
+      # This must live HERE, not only in ci.yml: a push to main starts both
+      # workflows concurrently and main has no required status checks, so a red CI
+      # job cannot hold back this deploy. ci.yml runs the same script for PR-time
+      # signal; this call is the one that gates production.
       #
       # Local config only — it cannot catch a [[migrations]] tag conflicting with
       # what is already applied to released-web, or a missing secret.
       - name: Validate deploy config (dry run)
-        run: |
-          pnpm --filter @released/web check:deploy-config
-          pnpm --filter @released/web-og check:deploy-config
+        run: pnpm check:deploy-config
 
       # Changesets: opens / updates a "Version Packages" PR when changesets are
       # pending; on merge of that PR, publishes the CLI to npm via npm Trusted
