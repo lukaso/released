@@ -151,3 +151,33 @@ jobs:
         env:
           A11Y_BROWSER: "1"
         run: pnpm --filter @released/web exec vitest run test/a11y-contrast.test.ts
+
+  # The two deployed Workers have no build step, so `pnpm -r build` (cli + core)
+  # never bundles them and nothing in CI ever parsed their wrangler.toml. The
+  # deploy runs only on main, so a bad binding, container, or Durable Object
+  # migration reached production unchallenged. The dry run bundles both Workers
+  # and validates their config; it neither contacts the API nor deploys.
+  deploy-config:
+    name: deploy config (dry run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Both Workers import @released/core; wrangler bundles it from its dist.
+      - name: Build core
+        run: pnpm --filter @released/core build
+
+      - name: Validate web config
+        run: pnpm --filter @released/web check:deploy-config
+
+      - name: Validate web-og config
+        run: pnpm --filter @released/web-og check:deploy-config
