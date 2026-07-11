@@ -51,6 +51,26 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      # Neither Worker has a build script, so `pnpm -r build` above never
+      # bundles them and nothing else in CI parses their wrangler.toml. The dry
+      # run bundles both Workers and validates that their config parses. It
+      # contacts no Cloudflare API and deploys nothing.
+      #
+      # It checks LOCAL config only. It cannot see remote state, so a
+      # [[migrations]] tag that conflicts with what is already applied to
+      # released-web, web-og's [[services]] binding naming a Worker that does
+      # not exist, or a missing secret all still first surface in the deploy.
+      #
+      # This is PR-time signal. The step that actually gates production is the
+      # same pair of checks in release.yml: a push to main starts this workflow
+      # and release.yml concurrently, and main has no required status checks, so
+      # a red job here cannot hold back a deploy.
+      - name: Validate deploy config (dry run)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 22
+        run: |
+          pnpm --filter @released/web check:deploy-config
+          pnpm --filter @released/web-og check:deploy-config
+
       - name: CLI Windows smoke (no gh installed)
         if: matrix.os == 'windows-latest'
         run: |
@@ -151,33 +171,3 @@ jobs:
         env:
           A11Y_BROWSER: "1"
         run: pnpm --filter @released/web exec vitest run test/a11y-contrast.test.ts
-
-  # The two deployed Workers have no build step, so `pnpm -r build` (cli + core)
-  # never bundles them and nothing in CI ever parsed their wrangler.toml. The
-  # deploy runs only on main, so a bad binding, container, or Durable Object
-  # migration reached production unchallenged. The dry run bundles both Workers
-  # and validates their config; it neither contacts the API nor deploys.
-  deploy-config:
-    name: deploy config (dry run)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: pnpm/action-setup@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      # Both Workers import @released/core; wrangler bundles it from its dist.
-      - name: Build core
-        run: pnpm --filter @released/core build
-
-      - name: Validate web config
-        run: pnpm --filter @released/web check:deploy-config
-
-      - name: Validate web-og config
-        run: pnpm --filter @released/web-og check:deploy-config

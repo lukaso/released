@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check:deploy-config": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "check:deploy-config": "wrangler deploy --dry-run --containers-rollout none",
     "test": "vitest run",
     "test:watch": "vitest",
     "stats": "node scripts/stats.mjs",
