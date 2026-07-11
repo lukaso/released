@@ -19,19 +19,26 @@
 // to the "use the CLI" card, and a lost INTERNAL_SECRET fails /internal/* closed.
 // The app keeps serving 200s either way.
 //
-// The vars are read with wrangler's OWN config reader, not a hand-rolled TOML
-// parse. That is not a style preference: it is the same parser `wrangler deploy`
-// uses, so the guard agrees with the deploy by construction. A regex parse has to
-// re-derive TOML and silently misses shapes wrangler honours — a trailing comment
-// on `[env.production.vars] # prod overrides` is enough to hide a collision, which
-// is the exact football#110 vector.
+// The vars are read with a real TOML parser, NOT a hand-rolled regex. That is not
+// a style preference: a regex has to re-derive TOML and silently misses shapes
+// wrangler honours on deploy — a trailing comment on `[env.production.vars] # prod
+// overrides` is enough to hide a collision, which is the exact football#110 vector.
+//
+// It parses with `smol-toml` rather than importing wrangler's own config reader,
+// which would otherwise be the obvious choice. Importing `wrangler` anywhere in
+// this repo's module graph is NODE-20-HOSTILE: root package.json pins
+// `pnpm.overrides.undici: ">=7.28.0"` globally (for jsdom), which forces undici 7
+// into wrangler's miniflare, and on Node 20 that throws
+// `webidl.util.markAsUncloneable is not a function` — under plain Node as much as
+// under vitest. CI runs a Node 20 leg, so wrangler cannot be imported here.
+// smol-toml is spec-compliant and dependency-free, and was checked on Node 20
+// against every shape below.
 
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse } from 'smol-toml';
 import { describe, expect, it } from 'vitest';
-import { experimental_readRawConfig } from 'wrangler';
 
 /**
  * Every name this project sets via `wrangler secret put`. Adding a secret? Add it
@@ -72,30 +79,21 @@ function isSecretName(name: string): boolean {
  * top-level ones — football#110 was a NAMED-ENV var block landing on the prod
  * Worker.
  */
-function varNamesFromConfig(configPath: string): string[] {
-  const { rawConfig } = experimental_readRawConfig({ config: configPath });
-  // wrangler types the named-env map loosely (`{}`), so name the one property
-  // this guard reads rather than reaching for `any`.
-  const envs = Object.values(
-    (rawConfig.env ?? {}) as Record<string, { vars?: Record<string, unknown> }>,
-  );
+function varNamesFromToml(toml: string): string[] {
+  // Only the KEYS of a `vars` table are read, never the values — so this never
+  // holds a credential, even when pointed at a config that leaks one.
+  const config = parse(toml) as {
+    vars?: Record<string, unknown>;
+    env?: Record<string, { vars?: Record<string, unknown> } | undefined>;
+  };
   return [
-    ...Object.keys(rawConfig.vars ?? {}),
-    ...envs.flatMap((env) => Object.keys(env?.vars ?? {})),
+    ...Object.keys(config.vars ?? {}),
+    ...Object.values(config.env ?? {}).flatMap((env) => Object.keys(env?.vars ?? {})),
   ];
 }
 
-/** Parse a TOML string by handing wrangler a real config file, as on deploy. */
-function varNamesFromToml(toml: string): string[] {
-  const dir = mkdtempSync(join(tmpdir(), 'released-vars-'));
-  try {
-    const configPath = join(dir, 'wrangler.toml');
-    writeFileSync(configPath, toml);
-    return varNamesFromConfig(configPath);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+const varNamesFromConfig = (configPath: string): string[] =>
+  varNamesFromToml(readFileSync(configPath, 'utf8'));
 
 /** The var names in `toml` that would clobber a secret on deploy. */
 function findSecretCollisions(toml: string): string[] {
@@ -117,16 +115,21 @@ const WORKER_CONFIGS: readonly (readonly [string, string])[] = readdirSync(
   .filter(([, configPath]) => existsSync(configPath));
 
 describe('the guard itself is armed', () => {
-  // A guard that silently stops guarding is worse than none. Both of these fail
-  // LOUD if the ground shifts under it.
-  it('uses wrangler’s own config reader', () => {
-    expect(typeof experimental_readRawConfig).toBe('function');
-  });
+  // A guard that silently stops guarding is worse than none, so pin the two ways
+  // this one could rot into a no-op that still reports green.
 
   it('discovers every Worker config in the repo', () => {
-    // If the glob ever matched nothing, describe.each below would run zero cases
-    // and the suite would still be green — the silent-no-op failure mode.
+    // If discovery ever returned nothing, describe.each below would run zero
+    // cases and the suite would still pass — the silent-no-op failure mode.
     expect(WORKER_CONFIGS.map(([worker]) => worker)).toEqual(['web', 'web-og']);
+  });
+
+  it('actually parses the real configs (not silently reading nothing)', () => {
+    // `web` genuinely declares vars; a parser returning [] for it would make every
+    // collision check below vacuously pass.
+    const [, webConfig] = WORKER_CONFIGS.find(([worker]) => worker === 'web') ?? [];
+    expect(webConfig).toBeDefined();
+    expect(varNamesFromConfig(webConfig as string)).toContain('PROD_HOST');
   });
 });
 
@@ -153,8 +156,8 @@ describe('varNamesFromToml', () => {
 });
 
 // Every case below is valid TOML that wrangler honours on deploy and that a
-// regex parse silently drops on the floor. They are the reason this reads the
-// config through wrangler.
+// regex parse silently drops on the floor. They are the reason this uses a real
+// TOML parser.
 describe('valid-TOML shapes that must not slip past the guard', () => {
   it('sees a var table header carrying a trailing comment', () => {
     const toml = `name = "w"\n[env.production.vars] # prod overrides\nRELAY_SECRET = "leaked"\n`;
