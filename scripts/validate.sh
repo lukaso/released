@@ -45,16 +45,23 @@ else
   echo "  chromium not installed — skipping (CI gates it). pnpm --filter @released/web exec playwright install chromium"
 fi
 
-# Both Workers' deploy config: bundle + parse wrangler.toml + build the container
-# image, deploying nothing (scripts/check-deploy-config.sh — the SAME script CI's
-# deploy-config job and release.yml run). Needs Docker for web's image; skips with
-# a notice when Docker isn't running, like chromium/shellcheck above — CI's
-# deploy-config job is the authoritative gate.
+# The gate's own logic — discovery of every config form + the silent-no-op
+# guards. Fast (needs only node; pnpm is stubbed, no Docker/wrangler). Same test
+# CI's meta-lint job runs, so a regression in the guard fails locally first.
+echo "→ deploy-config gate logic"
+bash scripts/check-deploy-config.test.sh
+
+# Both Workers' deploy config: bundle + parse the wrangler config + build the
+# container image, deploying nothing (scripts/check-deploy-config.sh — the SAME
+# script CI's deploy-config job and release.yml run). Needs Docker for web's
+# image; when Docker isn't running we still validate the Docker-free Workers
+# (web-og) via SKIP_CONTAINER_WORKERS — CI's deploy-config job gates the rest.
 echo "→ deploy config (wrangler dry run)"
 if docker info >/dev/null 2>&1; then
   pnpm check:deploy-config
 else
-  echo "  Docker not running — skipping (CI gates it). Start Docker to validate the relay image."
+  echo "  Docker not running — validating Docker-free Workers only (web's relay image needs Docker; CI gates it)."
+  SKIP_CONTAINER_WORKERS=1 pnpm check:deploy-config
 fi
 
 echo "→ lint"

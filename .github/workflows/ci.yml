@@ -80,11 +80,6 @@ jobs:
       - name: Scan dependencies (gate High/Critical)
         run: bash scripts/osv-check.sh
 
-  # Authoritative secret scan. Runs the SAME scripts/secrets-scan.sh the
-  # pre-commit (staged) + pre-push (history) hooks run locally. Here it scans
-  # the FULL history (fetch-depth: 0) and gates the PR. Real .dev.vars secrets
-  # are gitignored + never committed, so this is clean unless a token actually
-  # lands in a tracked file.
   # Neither Worker has a build script, so `pnpm -r build` never bundles them and
   # nothing else in CI parses their wrangler.toml. `pnpm check:deploy-config`
   # (scripts/check-deploy-config.sh — the SAME script validate.sh and release.yml
@@ -122,15 +117,22 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Both Workers import @released/core, and wrangler bundles from its dist.
-      - name: Build core
-        run: pnpm --filter @released/core build
+      # Match release.yml / validate.sh — wrangler bundles from @released/core's
+      # dist, but either Worker may later import another workspace package, so
+      # build the whole workspace like the other two call sites (`pnpm -r build`).
+      - name: Build
+        run: pnpm -r build
 
       # Builds packages/web/Dockerfile — ubuntu runners ship Docker, same as the
       # runner release.yml deploys from.
       - name: Validate deploy config
         run: pnpm check:deploy-config
 
+  # Authoritative secret scan. Runs the SAME scripts/secrets-scan.sh the
+  # pre-commit (staged) + pre-push (history) hooks run locally. Here it scans
+  # the FULL history (fetch-depth: 0) and gates the PR. Real .dev.vars secrets
+  # are gitignored + never committed, so this is clean unless a token actually
+  # lands in a tracked file.
   secrets:
     name: secret scan (gitleaks)
     runs-on: ubuntu-latest
@@ -161,6 +163,11 @@ jobs:
 
       - name: shellcheck
         run: shellcheck scripts/*.sh .githooks/*
+
+      # The deploy-config gate's own logic (discovery + the silent-no-op guards)
+      # — node ships on the runner; pnpm is stubbed, so no install/Docker needed.
+      - name: deploy-config gate logic
+        run: bash scripts/check-deploy-config.test.sh
 
       - name: actionlint
         run: |
