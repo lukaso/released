@@ -3,11 +3,13 @@
 # that it must NOT silently no-op, so this pins the behaviours that keep it
 # honest: discovery of every config form, dedup of a package holding two forms,
 # a loud failure on a missing script, a loud failure on a config with no
-# package.json, a loud failure when no Worker is found, and the local skip of
-# container Workers.
+# package.json, a loud failure when no Worker is found, a loud failure when a
+# Worker sits outside packages/ (the pnpm-workspace cross-check), and the local
+# skip of container Workers.
 #
 # Stubs `pnpm` so no real wrangler / Docker / network is needed (the script under
-# test only shells out to `pnpm --dir <pkg> run <script>`). Run:
+# test only shells out to `pnpm --dir <pkg> run <script>` and `pnpm -r list`).
+# Run:
 #   bash scripts/check-deploy-config.test.sh
 set -euo pipefail
 
@@ -23,6 +25,15 @@ mkdir -p "$BIN"
 cat > "$BIN/pnpm" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+# `pnpm -r list --depth -1 --parseable` — the workspace cross-check asks pnpm to
+# enumerate workspace packages. Faithful stand-in: list every dir under ROOT_DIR
+# that holds a package.json. Real pnpm lists exactly the workspace members, and
+# the temp tree contains only the packages a test created, so the two coincide.
+case " $* " in
+  *" list "*)
+    node -e 'const fs=require("fs"),path=require("path");const r=process.env.ROOT_DIR||process.cwd();const o=[];(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(!e.isDirectory())continue;const p=path.join(d,e.name);if(fs.existsSync(path.join(p,"package.json")))o.push(p);w(p);}})(r);process.stdout.write(o.join("\n")+(o.length?"\n":""));'
+    exit 0 ;;
+esac
 pkg=""; script=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -120,6 +131,14 @@ mkdir -p "$TMP/packages/newworker"; : > "$TMP/packages/newworker/wrangler.toml" 
 out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
 assert_nonzero "G config-without-package.json fails loudly" "$rc"
 assert_grep "G names the culprit" "no package.json" "$out"
+
+echo "H — a Worker under a non-packages workspace root → caught, not silently skipped"
+rm -rf "$TMP/packages" "$TMP/apps"; mkdir -p "$TMP/packages" "$TMP/apps"
+mkpkg packages/web 1 toml
+mkpkg apps/newworker 1 toml   # under apps/, which the packages/* glob never matches
+out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
+assert_nonzero "H apps/ Worker fails loudly" "$rc"
+assert_grep "H says the glob missed it" "did not cover" "$out"
 
 echo
 echo "pass=$pass fail=$fail"
