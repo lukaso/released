@@ -54,7 +54,14 @@ for cfg in packages/*/wrangler.toml packages/*/wrangler.jsonc packages/*/wrangle
     *":$pkg_dir:"*) continue ;;
   esac
   seen="$seen:$pkg_dir:"
-  [ -f "$pkg_dir/package.json" ] || continue
+  # A wrangler config with no package.json is a half-scaffolded Worker we can't
+  # invoke (pnpm --dir needs package.json). Fail loudly rather than silently
+  # dropping it — the dropped Worker is exactly the silent no-op this gate
+  # exists to forbid.
+  if [ ! -f "$pkg_dir/package.json" ]; then
+    echo "✗ $pkg_dir has a wrangler config but no package.json — cannot run check:deploy-config." >&2
+    exit 1
+  fi
   found=$((found + 1))
 
   # Local-only fast path: when Docker isn't available, skip the Workers whose
@@ -86,4 +93,9 @@ if [ "$ran" -eq 0 ]; then
   exit 0
 fi
 
-echo "✓ check:deploy-config passed — $ran/$found Worker(s) bundle, parse and build${skipped:+ ($skipped skipped)}."
+# Only mention skips when any happened. `${skipped:+ ...}` fires on "0" too —
+# "0" is set and non-empty — which would append "(0 skipped)" to every clean run
+# and weaken the "a skip happened" test assertion. Guard on the integer instead.
+suffix=""
+[ "$skipped" -gt 0 ] && suffix=" ($skipped skipped)"
+echo "✓ check:deploy-config passed — $ran/$found Worker(s) bundle, parse and build${suffix}."

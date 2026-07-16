@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Regression tests for scripts/check-deploy-config.sh — the gate's whole value is
-# that it must NOT silently no-op, so this pins the four behaviours that keep it
-# honest: discovery of every config form, a loud failure on a missing script, a
-# loud failure when no Worker is found, and the local skip of container Workers.
+# that it must NOT silently no-op, so this pins the behaviours that keep it
+# honest: discovery of every config form, dedup of a package holding two forms,
+# a loud failure on a missing script, a loud failure on a config with no
+# package.json, a loud failure when no Worker is found, and the local skip of
+# container Workers.
 #
 # Stubs `pnpm` so no real wrangler / Docker / network is needed (the script under
 # test only shells out to `pnpm --dir <pkg> run <script>`). Run:
@@ -97,8 +99,27 @@ rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
 mkpkg packages/web 1 toml docker; mkpkg packages/web-og 1 toml
 out=$(ROOT_DIR="$TMP" SKIP_CONTAINER_WORKERS=1 bash "$TARGET" 2>&1) && rc=0 || rc=$?
 assert_exit "E exit 0" 0 "$rc"
-assert_grep "E skipped web" "skipped" "$out"
-assert_grep "E still ran web-og" "web-og" "$out"
+# Precise patterns: "web-og" alone also matches a skip line, and "skipped" alone
+# matches the success banner — so they pass whether the skip logic skipped
+# nothing, skipped web (correct), or skipped everything. Anchor on the actual
+# ran/skip lines so the assertions can tell those apart.
+assert_grep "E skipped web" "web — skipped" "$out"
+assert_grep "E still ran web-og" "web-og — wrangler dry run" "$out"
+
+echo "F — a package holding two config forms → dedups to one dry run"
+rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
+mkpkg packages/web 1 toml; : > "$TMP/packages/web/wrangler.jsonc"   # second form, same package
+out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
+assert_exit "F exit 0" 0 "$rc"
+assert_grep "F counts one Worker" "1/1 Worker" "$out"
+
+echo "G — a wrangler config with no package.json → exit 1 (not silently dropped)"
+rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
+mkpkg packages/web 1 toml
+mkdir -p "$TMP/packages/newworker"; : > "$TMP/packages/newworker/wrangler.toml"   # config, NO package.json
+out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
+assert_nonzero "G config-without-package.json fails loudly" "$rc"
+assert_grep "G names the culprit" "no package.json" "$out"
 
 echo
 echo "pass=$pass fail=$fail"
