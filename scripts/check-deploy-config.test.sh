@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Regression tests for scripts/check-deploy-config.sh — the gate's whole value is
 # that it must NOT silently no-op, so this pins the behaviours that keep it
-# honest: discovery of every config form, dedup of a package holding two forms,
-# a loud failure on a missing script, a loud failure on a config with no
-# package.json, a loud failure when no Worker is found, a loud failure when a
-# Worker sits outside packages/ (the pnpm-workspace cross-check), and the local
-# skip of container Workers.
+# honest. A static guard (test 0) reads the REAL repo package.json files and
+# fails if any Worker's check:deploy-config sets `--containers-rollout` in any
+# form (`none`/`=none` skips the image build this gate exists to exercise). The rest
+# stub `pnpm` to assert, with no real wrangler/Docker: discovery of every config
+# form, dedup of a package holding two forms, a loud failure on a missing script,
+# a loud failure on a config with no package.json, a loud failure when no Worker
+# is found, a loud failure when pnpm-workspace.yaml declares a root outside
+# packages/ (the discovery-scope contract, enforced not documented), the local
+# skip of one container Worker, and the all-skipped exit-0-with-caveat path.
 #
-# Stubs `pnpm` so no real wrangler / Docker / network is needed (the script under
-# test only shells out to `pnpm --dir <pkg> run <script>` and `pnpm -r list`).
-# Run:
-#   bash scripts/check-deploy-config.test.sh
+# Run: bash scripts/check-deploy-config.test.sh
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -25,15 +26,6 @@ mkdir -p "$BIN"
 cat > "$BIN/pnpm" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
-# `pnpm -r list --depth -1 --parseable` — the workspace cross-check asks pnpm to
-# enumerate workspace packages. Faithful stand-in: list every dir under ROOT_DIR
-# that holds a package.json. Real pnpm lists exactly the workspace members, and
-# the temp tree contains only the packages a test created, so the two coincide.
-case " $* " in
-  *" list "*)
-    node -e 'const fs=require("fs"),path=require("path");const r=process.env.ROOT_DIR||process.cwd();const o=[];(function w(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){if(!e.isDirectory())continue;const p=path.join(d,e.name);if(fs.existsSync(path.join(p,"package.json")))o.push(p);w(p);}})(r);process.stdout.write(o.join("\n")+(o.length?"\n":""));'
-    exit 0 ;;
-esac
 pkg=""; script=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -77,6 +69,36 @@ mkpkg() { # <dir> <with-script> <ext> [<dockerfile>]
 }
 # Run the script under test in a subshell; capture its real exit code into $rc
 # without set -e killing the harness (`cmd && rc=0 || rc=$?` is set -e-safe).
+
+# Static guard reading the REAL repo (not the stub tree below): the gate's whole
+# value is that the dry run BUILDS the container image, and a `--containers-rollout`
+# flag has no place in a validation dry-run. ` none` / `=none` makes wrangler skip
+# that build (verified in wrangler 4.105 cli.js — both verifyDockerInstalled() and
+# buildContainer() are gated on containersRollout), the one regression this gate
+# exists to catch — it already bit once (removed in ca75e17) — and any other value
+# is a deliberate rollout override. The pnpm stub below can't see a wrangler flag,
+# so ban the substring (spaced or `=value`) statically against the real package.json.
+echo "0 — no Worker pins --containers-rollout (any form skips/overrides the image build)"
+violators=""
+for pj in "$REPO"/packages/*/package.json; do
+  [ -f "$pj" ] || continue
+  script=$(node -e "try{const s=require(process.argv[1]).scripts||{};process.stdout.write(s['check:deploy-config']||'')}catch(e){}" "$pj" 2>/dev/null || echo "")
+  # Ban the flag in ANY form: `none` skips the image build outright in wrangler
+  # 4.105, and any other value is a deliberate rollout override. A validation
+  # dry-run wants the default build, so the bare substring (spaced or `=value`)
+  # is the defect — matching only `[[:space:]]+none` would let `=none` through.
+  if printf '%s' "$script" | grep -Eq -- '--containers-rollout'; then
+    violators="$violators $pj"
+  fi
+done
+if [ -n "$violators" ]; then
+  echo "  FAIL  0 — check:deploy-config sets --containers-rollout in:$violators"
+  fail=$((fail+1))
+else
+  echo "  PASS  0 — no Worker's check:deploy-config sets --containers-rollout"
+  pass=$((pass+1))
+fi
+
 echo "A — two valid Workers → discovered, exit 0"
 rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
 mkpkg packages/web 1 toml; mkpkg packages/web-og 1 toml
@@ -132,13 +154,26 @@ out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
 assert_nonzero "G config-without-package.json fails loudly" "$rc"
 assert_grep "G names the culprit" "no package.json" "$out"
 
-echo "H — a Worker under a non-packages workspace root → caught, not silently skipped"
-rm -rf "$TMP/packages" "$TMP/apps"; mkdir -p "$TMP/packages" "$TMP/apps"
+echo "H — every Worker skipped (all Dockerfiles + SKIP_CONTAINER_WORKERS) → exit 0, 'validated none'"
+rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
+mkpkg packages/web 1 toml docker; mkpkg packages/web-og 1 toml docker
+out=$(ROOT_DIR="$TMP" SKIP_CONTAINER_WORKERS=1 bash "$TARGET" 2>&1) && rc=0 || rc=$?
+assert_exit "H exit 0 (local-only; CI gates)" 0 "$rc"
+assert_grep "H says validated none" "validated none" "$out"
+
+echo "I — a workspace root outside packages/ fails loud; packages/*-only does not"
+rm -rf "$TMP/packages"; mkdir -p "$TMP/packages"
 mkpkg packages/web 1 toml
-mkpkg apps/newworker 1 toml   # under apps/, which the packages/* glob never matches
+# A legit workspace (only packages/*) must NOT trip the check — no false positive.
+printf 'packages:\n  - "packages/*"\n' > "$TMP/pnpm-workspace.yaml"
 out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
-assert_nonzero "H apps/ Worker fails loudly" "$rc"
-assert_grep "H says the glob missed it" "did not cover" "$out"
+assert_exit "I packages/*-only exit 0" 0 "$rc"
+# A second root discovery does not glob → fail loud instead of silently skipping.
+printf 'packages:\n  - "packages/*"\n  - "apps/*"\n' > "$TMP/pnpm-workspace.yaml"
+out=$(ROOT_DIR="$TMP" bash "$TARGET" 2>&1) && rc=0 || rc=$?
+assert_nonzero "I apps/ root fails loudly" "$rc"
+assert_grep "I names the missed root" "outside packages/" "$out"
+rm -f "$TMP/pnpm-workspace.yaml"
 
 echo
 echo "pass=$pass fail=$fail"
