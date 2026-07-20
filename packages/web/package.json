@@ -15,11 +15,11 @@
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
     "@released/core": "workspace:*",
-    "hono": "^4.12.27"
+    "hono": "^4.12.30"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
-    "@cloudflare/workers-types": "^4.20260627.1",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "@types/jsdom": "^28.0.3",
     "axe-core": "^4.12.1",
     "jsdom": "^29.1.1",
@@ -27,7 +27,7 @@
     "playwright": "^1.61.1",
     "smol-toml": "^1.7.0",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9",
-    "wrangler": "^4.105.0"
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
   }
 }
