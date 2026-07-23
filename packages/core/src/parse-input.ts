@@ -14,7 +14,7 @@ import {
   UnsupportedHostError,
 } from './errors.js';
 import { findProjectByAlias, type KnownProject } from './known-projects.js';
-import { KNOWN_GITLAB_HOSTS } from './providers/index.js';
+import { KNOWN_GITEA_HOSTS, KNOWN_GITLAB_HOSTS } from './providers/index.js';
 import type { LookupInput, RepoRef } from './types.js';
 
 /**
@@ -111,6 +111,19 @@ const GITLAB_ISSUE_URL_RE =
   /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:issues|work_items)\/(\d+)(?:\/.*)?$/i;
 const ANY_GITLAB_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(?:.+?)\/-\//i;
 
+// Gitea/Forgejo URL shapes. Gitea uses GitHub-style paths (NO `/-/` infix), so
+// these look like the GitHub regexes above but capture a HOST as the first
+// segment (Gitea is self-hosted, like GitLab federation). Forgejo (codeberg.org)
+// shares these shapes; it accepts both /pulls and /pull for PRs.
+//   /<owner>/<repo>/commit|commits|src/commit/{sha}[/path][.patch|.diff]
+//   /<owner>/<repo>/pulls|pull/{N}[/files|commits|...]
+//   /<owner>/<repo>/issues/{N}[/...]
+// `(.+?)` captures the project path (incl. nested org/sub/repo) non-greedily.
+const GITEA_SHA_URL_RE =
+  /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/(?:commit|commits|src\/commit)\/([0-9a-f]{7,40})(?:\.(?:patch|diff))?(?:\/.*)?$/i;
+const GITEA_PR_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/(?:pulls|pull)\/(\d+)(?:\/.*)?$/i;
+const GITEA_ISSUE_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/issues\/(\d+)(?:\/.*)?$/i;
+
 const GITHUB_HOST = 'github.com';
 
 /**
@@ -199,6 +212,30 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     const [hostRaw, projectPath, num] = captures(gitlabIssue, 3);
     const host = hostRaw.toLowerCase();
     if (!isKnownGitlabHost(host)) throw unsupportedHost(host);
+    return { kind: 'issue', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
+  }
+
+  // Gitea/Forgejo URL shapes — GitHub-style paths on a known Gitea host. Checked
+  // after GitLab (which requires the /-/ infix, so the two tables never overlap).
+  const giteaSha = stripped.match(GITEA_SHA_URL_RE);
+  if (giteaSha) {
+    const [hostRaw, projectPath, sha] = captures(giteaSha, 3);
+    const host = hostRaw.toLowerCase();
+    if (!isKnownGiteaHost(host)) throw unsupportedHost(host);
+    return { kind: 'commit', repo: { host, projectPath }, sha: sha.toLowerCase() };
+  }
+  const giteaPr = stripped.match(GITEA_PR_URL_RE);
+  if (giteaPr) {
+    const [hostRaw, projectPath, num] = captures(giteaPr, 3);
+    const host = hostRaw.toLowerCase();
+    if (!isKnownGiteaHost(host)) throw unsupportedHost(host);
+    return { kind: 'pr', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
+  }
+  const giteaIssue = stripped.match(GITEA_ISSUE_URL_RE);
+  if (giteaIssue) {
+    const [hostRaw, projectPath, num] = captures(giteaIssue, 3);
+    const host = hostRaw.toLowerCase();
+    if (!isKnownGiteaHost(host)) throw unsupportedHost(host);
     return { kind: 'issue', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
   }
 
@@ -317,8 +354,12 @@ function isKnownGitlabHost(host: string): boolean {
   return KNOWN_GITLAB_HOSTS.has(host);
 }
 
+function isKnownGiteaHost(host: string): boolean {
+  return KNOWN_GITEA_HOSTS.has(host);
+}
+
 function unsupportedHost(host: string): UnsupportedHostError {
-  const supported = ['github.com', ...KNOWN_GITLAB_HOSTS];
+  const supported = ['github.com', ...KNOWN_GITLAB_HOSTS, ...KNOWN_GITEA_HOSTS];
   return new UnsupportedHostError(host, supported);
 }
 
@@ -328,7 +369,7 @@ function unsupportedHost(host: string): UnsupportedHostError {
  *  supported). Surface a shape problem instead. Otherwise it's a genuinely
  *  unsupported host. */
 function unknownShapeOrUnsupportedHost(host: string, input: string): ReleasedError {
-  if (host === GITHUB_HOST || isKnownGitlabHost(host)) {
+  if (host === GITHUB_HOST || isKnownGitlabHost(host) || isKnownGiteaHost(host)) {
     return new InvalidInputError(
       `${input} — that's a ${host} URL but not a shape I recognize. ` +
         `Paste the commit/MR URL itself, or a SHA / PR-MR number.`,

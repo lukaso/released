@@ -376,6 +376,99 @@ describe('parseInput — GitLab URL shapes (federation)', () => {
   });
 });
 
+describe('parseInput — Gitea/Forgejo URL shapes (GitHub-style paths, host-prefixed)', () => {
+  // Gitea/Forgejo use GitHub-style paths (NO /-/ infix): /commit, /pulls, /issues.
+  // The host is the first segment (self-hosted, like GitLab federation).
+  it('parses a codeberg.org commit URL', () => {
+    expect(parseInput('https://codeberg.org/forgejo/forgejo/commit/b3d7e4ac')).toEqual({
+      kind: 'commit',
+      repo: GL('codeberg.org', 'forgejo/forgejo'),
+      sha: 'b3d7e4ac',
+    });
+  });
+
+  it('parses a schemeless gitea.com commit URL', () => {
+    expect(parseInput('gitea.com/owner/repo/commit/abc1234')).toEqual({
+      kind: 'commit',
+      repo: GL('gitea.com', 'owner/repo'),
+      sha: 'abc1234',
+    });
+  });
+
+  it('parses a Gitea /pulls/{n} PR URL', () => {
+    expect(parseInput('https://codeberg.org/forgejo/forgejo/pulls/13580')).toEqual({
+      kind: 'pr',
+      repo: GL('codeberg.org', 'forgejo/forgejo'),
+      number: 13580,
+    });
+  });
+
+  it('parses a Forgejo /pull/{n} (singular) PR URL', () => {
+    // Forgejo accepts both /pulls and /pull.
+    expect(parseInput('https://codeberg.org/forgejo/forgejo/pull/13580')).toEqual({
+      kind: 'pr',
+      repo: GL('codeberg.org', 'forgejo/forgejo'),
+      number: 13580,
+    });
+  });
+
+  it('parses a Gitea /issues/{n} URL', () => {
+    expect(parseInput('https://codeberg.org/forgejo/forgejo/issues/42')).toEqual({
+      kind: 'issue',
+      repo: GL('codeberg.org', 'forgejo/forgejo'),
+      number: 42,
+    });
+  });
+
+  it('parses a nested-org Gitea commit URL (org/sub/repo)', () => {
+    expect(parseInput('https://gitea.com/org/team/repo/commit/abc1234')).toEqual({
+      kind: 'commit',
+      repo: GL('gitea.com', 'org/team/repo'),
+      sha: 'abc1234',
+    });
+  });
+
+  it('parses the /src/commit/{sha}/{path} file-view form as a commit', () => {
+    expect(parseInput('https://codeberg.org/forgejo/forgejo/src/commit/abc1234/main.go')).toEqual({
+      kind: 'commit',
+      repo: GL('codeberg.org', 'forgejo/forgejo'),
+      sha: 'abc1234',
+    });
+  });
+
+  it('parses a Gitea commit URL with a trailing .patch suffix', () => {
+    expect(parseInput('https://codeberg.org/x/y/commit/abc1234.patch')).toEqual({
+      kind: 'commit',
+      repo: GL('codeberg.org', 'x/y'),
+      sha: 'abc1234',
+    });
+  });
+
+  it('throws UnsupportedHostError for a Gitea-shaped URL on an UNKNOWN host', () => {
+    try {
+      parseInput('https://gitea.example.com/x/y/commit/abc1234');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(UnsupportedHostError);
+      expect((err as UnsupportedHostError).host).toBe('gitea.example.com');
+      // Supported list names the Gitea hosts so the user knows what works.
+      expect((err as UnsupportedHostError).supportedHosts).toContain('codeberg.org');
+      expect((err as UnsupportedHostError).supportedHosts).toContain('gitea.com');
+    }
+  });
+
+  it('a KNOWN gitea host with an unrecognized shape is InvalidInput, not a self-contradictory UnsupportedHost', () => {
+    try {
+      parseInput('codeberg.org/forgejo/forgejo/releases');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(InvalidInputError);
+      expect(err).not.toBeInstanceOf(UnsupportedHostError);
+      expect((err as InvalidInputError).message).toContain('codeberg.org');
+    }
+  });
+});
+
 describe('parseInput — explicit two-arg form (repo, ref) — GitHub only', () => {
   it('accepts repoUrl + commit SHA separately', () => {
     expect(parseInput('facebook/react', 'abc1234')).toEqual({

@@ -24,7 +24,7 @@ export interface Provider {
   /** The hostname this provider talks to: 'github.com' | 'gitlab.gnome.org' | … */
   readonly host: string;
   /** Family tag — UI rarely needs this; prefer reading `terms` for vocabulary. */
-  readonly kind: 'github' | 'gitlab';
+  readonly kind: 'github' | 'gitlab' | 'gitea';
   /** Display vocabulary — UI reads these instead of switching on `kind`. Future
    *  providers (Bitbucket, Gitea, Sourcehut) self-describe their terms. */
   readonly terms: {

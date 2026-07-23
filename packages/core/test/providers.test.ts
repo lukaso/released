@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { UnsupportedHostError } from '../src/errors.js';
-import { isKnownHost, KNOWN_GITLAB_HOSTS, providerFor } from '../src/providers/index.js';
+import {
+  isKnownHost,
+  KNOWN_GITEA_HOSTS,
+  KNOWN_GITLAB_HOSTS,
+  providerFor,
+} from '../src/providers/index.js';
 
 describe('providerFor — host dispatch', () => {
   it('returns a GithubProvider for github.com', () => {
@@ -67,6 +72,56 @@ describe('providerFor — host dispatch', () => {
   });
 });
 
+describe('providerFor — Gitea/Forgejo dispatch', () => {
+  it('returns a GiteaProvider for codeberg.org (Forgejo shares the Gitea API)', () => {
+    const p = providerFor('codeberg.org');
+    expect(p.host).toBe('codeberg.org');
+    expect(p.kind).toBe('gitea');
+    expect(p.terms.mergeRequest).toBe('Pull request');
+    expect(p.terms.mergeRequestPrefix).toBe('#');
+  });
+
+  it('returns a GiteaProvider for gitea.com', () => {
+    const p = providerFor('gitea.com');
+    expect(p.host).toBe('gitea.com');
+    expect(p.kind).toBe('gitea');
+  });
+
+  it('returns a GiteaProvider for every known Gitea host', () => {
+    for (const host of KNOWN_GITEA_HOSTS) {
+      expect(providerFor(host).kind).toBe('gitea');
+    }
+  });
+
+  it('extraGiteaHosts extends the allowlist without code changes', () => {
+    expect(() => providerFor('gitea.example.com')).toThrow(UnsupportedHostError);
+    const p = providerFor('gitea.example.com', { extraGiteaHosts: ['gitea.example.com'] });
+    expect(p.kind).toBe('gitea');
+    expect(p.host).toBe('gitea.example.com');
+  });
+
+  it('URL builders use GitHub-style paths (no /-/ infix) on the resolved host', () => {
+    const gt = providerFor('codeberg.org');
+    const repo = { host: 'codeberg.org', projectPath: 'forgejo/forgejo' };
+    expect(gt.urls.commit(repo, 'abc')).toBe('https://codeberg.org/forgejo/forgejo/commit/abc');
+    expect(gt.urls.pullRequest(repo, 42)).toBe('https://codeberg.org/forgejo/forgejo/pulls/42');
+    expect(gt.urls.issue(repo, 7)).toBe('https://codeberg.org/forgejo/forgejo/issues/7');
+    expect(gt.urls.release(repo, 'v1.0.0')).toBe(
+      'https://codeberg.org/forgejo/forgejo/releases/tag/v1.0.0',
+    );
+  });
+
+  it('UnsupportedHostError.supportedHosts includes the Gitea hosts', () => {
+    try {
+      providerFor('bitbucket.org');
+      throw new Error('expected throw');
+    } catch (err) {
+      expect((err as UnsupportedHostError).supportedHosts).toContain('codeberg.org');
+      expect((err as UnsupportedHostError).supportedHosts).toContain('gitea.com');
+    }
+  });
+});
+
 describe('isKnownHost — predicate', () => {
   it('returns true for github.com and every known GitLab', () => {
     expect(isKnownHost('github.com')).toBe(true);
@@ -77,5 +132,13 @@ describe('isKnownHost — predicate', () => {
   it('returns false for unknown hosts unless extraGitlabHosts opts them in', () => {
     expect(isKnownHost('gitlab.example.com')).toBe(false);
     expect(isKnownHost('gitlab.example.com', ['gitlab.example.com'])).toBe(true);
+  });
+
+  it('returns true for known Gitea hosts and accepts extraGiteaHosts', () => {
+    expect(isKnownHost('codeberg.org')).toBe(true);
+    expect(isKnownHost('gitea.com')).toBe(true);
+    expect(isKnownHost('gitea.example.com')).toBe(false);
+    // extraGitlabHosts and extraGiteaHosts are independent options on isKnownHost.
+    expect(isKnownHost('gitea.example.com', [], ['gitea.example.com'])).toBe(true);
   });
 });
