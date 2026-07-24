@@ -15,7 +15,7 @@
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
     "@released/core": "workspace:*",
-    "hono": "^4.12.30"
+    "hono": "^4.12.31"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
@@ -28,6 +28,6 @@
     "smol-toml": "^1.7.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10",
-    "wrangler": "^4.110.0"
+    "wrangler": "^4.112.0"
   }
 }
