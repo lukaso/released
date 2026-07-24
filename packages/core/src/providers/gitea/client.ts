@@ -32,9 +32,13 @@ import {
 import { callWithRetry, enc, readJson } from '../http.js';
 import { makeGiteaUrls } from './urls.js';
 
-/** Pagination cap: 5 pages × 100 = 500 newest tags covers years of history in
- *  even the largest repos while keeping the deadline budget intact. Matches
- *  the GitLab provider's bound. */
+/** Pagination cap. We request limit=100/page, but Gitea/Forgejo clamp that to
+ *  the instance's MaxResponseItems (default 50) and signal the next page with a
+ *  Link: rel="next" header — so the walk follows the Link header. A short-page
+ *  heuristic (break when body.length < requested limit) would stop after ONE
+ *  page on the default clamp and silently drop older tags. 5 pages ≈ 250 newest
+ *  tags on the default cap: enough for the date-culled walk on the largest repos
+ *  while keeping the deadline budget intact. Matches the GitLab provider's bound. */
 const MAX_TAG_PAGES = 5;
 const PAGE_SIZE = 100;
 
@@ -167,9 +171,17 @@ export function makeGiteaProvider(host: string, opts: ProviderOpts = {}): Provid
   async function listTagsWithDates(repo: RepoRef) {
     const tags: TagWithDate[] = [];
     let rateLimit: RateLimitInfo | null = null;
-    for (let page = 1; page <= MAX_TAG_PAGES; page++) {
-      const url = `${restBase}/repos/${repoPath(repo)}/tags?limit=${PAGE_SIZE}&page=${page}`;
-      const res: Response = await call(url, { headers: baseHeaders() });
+    // Follow the Link: rel="next" header (every Gitea/Forgejo instance returns
+    // one on a multi-page response) rather than a short-page heuristic: Gitea
+    // clamps ?limit= to MaxResponseItems (default 50), so "body.length <
+    // requested limit" fires on the very first page and silently truncates the
+    // tag list — reporting older commits as "not yet released." MAX_TAG_PAGES
+    // bounds the deadline budget. Same shape as the GitLab provider.
+    let pageUrl: string | null =
+      `${restBase}/repos/${repoPath(repo)}/tags?limit=${PAGE_SIZE}&page=1`;
+    let pages = 0;
+    while (pageUrl !== null && pages < MAX_TAG_PAGES) {
+      const res: Response = await call(pageUrl, { headers: baseHeaders() });
       rateLimit = parseRateLimit(res) ?? rateLimit;
       if (!res.ok) throw new ProviderServerError(host, res.status, res.statusText);
       const body = await readJson<GiteaTag[]>(res);
@@ -177,9 +189,8 @@ export function makeGiteaProvider(host: string, opts: ProviderOpts = {}): Provid
         const decoded = decodeTag(t);
         if (decoded) tags.push(decoded);
       }
-      // A short page is the last one. (Gitea also returns x-total-count, but the
-      // short-page heuristic is robust and matches the GitHub provider's approach.)
-      if (body.length < PAGE_SIZE) break;
+      pageUrl = nextPageFromLinkHeader(res.headers.get('link'));
+      pages++;
     }
     return { tags, rateLimit };
   }
@@ -194,7 +205,9 @@ export function makeGiteaProvider(host: string, opts: ProviderOpts = {}): Provid
     //   total_commits > 0                    → ahead    (not contained; diverged
     //                                                   collapses safely into ahead,
     //                                                   matching the GitLab provider)
-    const url = `${restBase}/repos/${repoPath(repo)}/compare/${base}...${head}`;
+    // base/head are SHAs in practice, but encode defensively for consistency
+    // with every other path segment (and the GitLab provider's compare call).
+    const url = `${restBase}/repos/${repoPath(repo)}/compare/${enc(base)}...${enc(head)}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
     if (res.status === 404) return { status: 'diverged' as const, rateLimit };
@@ -253,4 +266,17 @@ function decodeTag(t: GiteaTag): TagWithDate | null {
 function paramInt(header: string, key: string): number | null {
   const m = header.match(new RegExp(`${key}=(\\d+)`));
   return m?.[1] ? Number.parseInt(m[1], 10) : null;
+}
+
+/** Parse the next-page URL out of Gitea's Link header.
+ *  Format: <https://codeberg.org/api/v1/repos/.../tags?limit=50&page=2>; rel="next" */
+function nextPageFromLinkHeader(linkHeader: string | null): string | null {
+  if (!linkHeader) return null;
+  // Each entry is "<URL>; rel=\"REL\"". Split on commas not inside <>.
+  const entries = linkHeader.split(',');
+  for (const entry of entries) {
+    const m = entry.match(/<([^>]+)>;\s*rel="?next"?/i);
+    if (m) return m[1] ?? null;
+  }
+  return null;
 }

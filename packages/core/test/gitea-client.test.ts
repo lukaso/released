@@ -25,6 +25,7 @@ function jsonResp(
     status?: number;
     remaining?: number;
     limit?: number;
+    link?: string;
   } = {},
 ): Response {
   const remaining = init.remaining ?? 1992;
@@ -34,6 +35,7 @@ function jsonResp(
     ratelimit: `"baseline";r=${remaining};t=600`,
     'ratelimit-policy': `"baseline";q=${limit};w=600`,
   };
+  if (init.link) headers.link = init.link;
   return new Response(JSON.stringify(body), { status: init.status ?? 200, headers });
 }
 
@@ -160,31 +162,42 @@ describe('GiteaProvider.listTagsWithDates', () => {
     expect(tags[0]?.isPrerelease).toBe(false);
   });
 
-  it('paginates by incrementing page= until a short page arrives', async () => {
-    // Gitea paginates with ?limit=&page= (no Link header needed). A full page
-    // (== limit) means another page may exist; a short page ends the walk.
-    const page = (n: number, count: number) => {
+  it('follows the Link rel="next" header across pages (server clamps limit to 50)', async () => {
+    // Gitea/Forgejo CLAMP ?limit= to the instance's MaxResponseItems (default 50)
+    // and signal the next page with a Link: rel="next" header (verified live on
+    // codeberg.org: ?limit=100 returns 50 + a next-link). A short-page heuristic
+    // (break when body.length < requested limit) stops after ONE page here —
+    // silently truncating to the 50 newest tags and reporting older commits as
+    // "not yet released" — so the provider MUST follow the Link header instead.
+    const page = (n: number, count: number, nextUrl: string | null) => {
       const tags = Array.from({ length: count }, (_, i) => ({
         name: `v${n}.${i}`,
         commit: { sha: `s${n}${i}`, created: '2026-01-01T00:00:00Z' },
       }));
-      return jsonResp(tags);
+      return jsonResp(tags, nextUrl ? { link: `<${nextUrl}>; rel="next"` } : {});
     };
-    // limit=100: page 1 returns 100 (full) → fetch page 2; page 2 returns 2 (short) → stop.
-    const fetch = queuedFetch(page(1, 100), page(2, 2));
+    // Page 1 returns the clamped 50 WITH a next-link to page 2; page 2 returns 2
+    // with NO next-link → stop. (50 < requested 100 would wrongly stop at page 1.)
+    const next = 'https://codeberg.org/api/v1/repos/forgejo/forgejo/tags?limit=100&page=2';
+    const fetch = queuedFetch(page(1, 50, next), page(2, 2, null));
     const c = makeGiteaProvider('codeberg.org', { fetch });
     const { tags } = await c.listTagsWithDates(FORGEJO);
-    expect(tags).toHaveLength(102);
+    expect(tags).toHaveLength(52); // both pages, NOT just the first 50
+    expect(tags.some((t) => t.name === 'v2.0')).toBe(true); // a page-2 tag survived
   });
 
   it('caps pagination at MAX_TAG_PAGES (5) — never eats the deadline budget', async () => {
-    // Every page full (100) → would walk forever without the cap.
+    // Every page returns a next-link, so without the cap the walk would continue
+    // until the server stops linking. The cap bounds it to 5 round-trips.
     const fullPage = (n: number) =>
       jsonResp(
         Array.from({ length: 100 }, (_, i) => ({
           name: `v${n}.${i}`,
           commit: { sha: `s${n}${i}`, created: '2026-01-01T00:00:00Z' },
         })),
+        {
+          link: `<https://codeberg.org/api/v1/repos/forgejo/forgejo/tags?limit=100&page=${n + 1}>; rel="next"`,
+        },
       );
     const fetch = queuedFetch(fullPage(1), fullPage(2), fullPage(3), fullPage(4), fullPage(5));
     const c = makeGiteaProvider('codeberg.org', { fetch });
@@ -271,6 +284,17 @@ describe('GiteaProvider.compareCommits', () => {
     const c = makeGiteaProvider('codeberg.org', { fetch: mockFetch });
     await c.compareCommits(FORGEJO, 'baseSHA', 'headSHA');
     expect(calls[0]).toContain('/compare/baseSHA...headSHA');
+  });
+
+  it('URL-encodes base/head path segments (defensive for non-hex refs)', async () => {
+    const calls: string[] = [];
+    const mockFetch = vi.fn(async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return jsonResp({ total_commits: 0, commits: [] });
+    }) as unknown as typeof fetch;
+    const c = makeGiteaProvider('codeberg.org', { fetch: mockFetch });
+    await c.compareCommits(FORGEJO, 'fea/ture', 'v1.0');
+    expect(calls[0]).toContain('/compare/fea%2Fture...v1.0');
   });
 });
 
