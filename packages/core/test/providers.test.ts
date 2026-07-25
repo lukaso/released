@@ -32,15 +32,25 @@ describe('providerFor — host dispatch', () => {
     }
   });
 
+  it('returns a BitbucketProvider for bitbucket.org', () => {
+    const p = providerFor('bitbucket.org');
+    expect(p.host).toBe('bitbucket.org');
+    expect(p.kind).toBe('bitbucket');
+    expect(p.terms.mergeRequest).toBe('Pull request');
+    expect(p.terms.mergeRequestPrefix).toBe('#');
+  });
+
   it('throws UnsupportedHostError for unknown hosts with the supported list in the message', () => {
     try {
-      providerFor('bitbucket.org');
+      providerFor('sourcehut.example');
       throw new Error('expected throw');
     } catch (err) {
       expect(err).toBeInstanceOf(UnsupportedHostError);
-      expect((err as UnsupportedHostError).host).toBe('bitbucket.org');
+      expect((err as UnsupportedHostError).host).toBe('sourcehut.example');
       expect((err as UnsupportedHostError).supportedHosts).toContain('github.com');
       expect((err as UnsupportedHostError).supportedHosts).toContain('gitlab.gnome.org');
+      // Bitbucket is now a supported built-in host — listed in the error.
+      expect((err as UnsupportedHostError).supportedHosts).toContain('bitbucket.org');
     }
   });
 
@@ -68,8 +78,9 @@ describe('providerFor — host dispatch', () => {
 });
 
 describe('isKnownHost — predicate', () => {
-  it('returns true for github.com and every known GitLab', () => {
+  it('returns true for github.com, bitbucket.org, and every known GitLab', () => {
     expect(isKnownHost('github.com')).toBe(true);
+    expect(isKnownHost('bitbucket.org')).toBe(true);
     expect(isKnownHost('gitlab.com')).toBe(true);
     expect(isKnownHost('gitlab.gnome.org')).toBe(true);
   });

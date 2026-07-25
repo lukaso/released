@@ -4,6 +4,7 @@ import { parseInput } from '../src/parse-input.js';
 
 const GH = (projectPath: string) => ({ host: 'github.com', projectPath });
 const GL = (host: string, projectPath: string) => ({ host, projectPath });
+const BB = (projectPath: string) => ({ host: 'bitbucket.org', projectPath });
 
 describe('parseInput — GitHub single-arg smart input (CP5)', () => {
   it('parses an https GitHub commit URL', () => {
@@ -198,6 +199,61 @@ describe('parseInput — GitHub single-arg smart input (CP5)', () => {
       expect((err as BareShaError).sha).toBe('abc1234');
       expect((err as BareShaError).message).toContain('owner/repo abc1234');
     }
+  });
+});
+
+describe('parseInput — Bitbucket Cloud URL shapes', () => {
+  it('parses a bitbucket.org commit URL (/commits/{sha})', () => {
+    expect(parseInput('https://bitbucket.org/atlassian/confluence/commits/abc1234')).toEqual({
+      kind: 'commit',
+      repo: BB('atlassian/confluence'),
+      sha: 'abc1234',
+    });
+  });
+
+  it('parses a bitbucket.org /src/{sha} file-view URL as a commit', () => {
+    expect(parseInput('https://bitbucket.org/atlassian/confluence/src/deadbeef/README.md')).toEqual(
+      {
+        kind: 'commit',
+        repo: BB('atlassian/confluence'),
+        sha: 'deadbeef',
+      },
+    );
+  });
+
+  it('parses a bitbucket.org pull-request URL (hyphenated pull-requests)', () => {
+    expect(parseInput('https://bitbucket.org/atlassian/confluence/pull-requests/7')).toEqual({
+      kind: 'pr',
+      repo: BB('atlassian/confluence'),
+      number: 7,
+    });
+  });
+
+  it('parses a bitbucket.org issue URL', () => {
+    expect(parseInput('https://bitbucket.org/atlassian/confluence/issues/12')).toEqual({
+      kind: 'issue',
+      repo: BB('atlassian/confluence'),
+      number: 12,
+    });
+  });
+
+  it('parses a schemeless bitbucket.org commit URL', () => {
+    expect(parseInput('bitbucket.org/atlassian/confluence/commits/abc1234567')).toEqual({
+      kind: 'commit',
+      repo: BB('atlassian/confluence'),
+      sha: 'abc1234567',
+    });
+  });
+
+  it('surfaces a shape error (not UnsupportedHostError) for an unrecognized bitbucket.org URL', () => {
+    // bitbucket.org IS supported, so the honest error is "shape I don't recognize",
+    // not "unsupported host".
+    expect(() => parseInput('https://bitbucket.org/atlassian/confluence/whatever')).toThrow(
+      /Bitbucket URL but not a shape I recognize/,
+    );
+    expect(() => parseInput('https://bitbucket.org/atlassian/confluence/whatever')).not.toThrow(
+      UnsupportedHostError,
+    );
   });
 });
 
@@ -424,8 +480,9 @@ describe('parseInput — explicit two-arg form (repo, ref) — GitHub only', () 
 });
 
 describe('parseInput — rejection', () => {
-  it('rejects a Bitbucket URL with UnsupportedHostError', () => {
-    expect(() => parseInput('https://bitbucket.org/atlassian/jira/commits/abc1234')).toThrow(
+  it('rejects a Sourcehut URL with UnsupportedHostError (not yet a supported host)', () => {
+    // Bitbucket is now supported; Sourcehut is on the roadmap (#5) but not yet.
+    expect(() => parseInput('https://git.sr.ht/~project/repo/commit/abc1234')).toThrow(
       UnsupportedHostError,
     );
   });

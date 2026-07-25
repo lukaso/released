@@ -111,7 +111,22 @@ const GITLAB_ISSUE_URL_RE =
   /^(?:https?:\/\/)?([\w.-]+)\/(.+?)\/-\/(?:issues|work_items)\/(\d+)(?:\/.*)?$/i;
 const ANY_GITLAB_URL_RE = /^(?:https?:\/\/)?([\w.-]+)\/(?:.+?)\/-\//i;
 
+// Bitbucket Cloud URL shapes. Flat `workspace/repo` path (no subgroups) and NO
+// `/-/` infix — the resource type is a plain segment. Hyphenated `pull-requests`.
+//   bitbucket.org/{workspace}/{repo}/commits/{sha}[/...]   — commit detail page
+//   bitbucket.org/{workspace}/{repo}/src/{sha}[/{path}]    — file/tree view at SHA
+//   bitbucket.org/{workspace}/{repo}/pull-requests/{N}[/...]
+//   bitbucket.org/{workspace}/{repo}/issues/{N}[/...]
+const BITBUCKET_SHA_URL_RE =
+  /^(?:https?:\/\/)?bitbucket\.org\/([\w.-]+)\/([\w.-]+)\/(?:commits|src)\/([0-9a-f]{7,40})(?:\/.*)?$/i;
+const BITBUCKET_PR_URL_RE =
+  /^(?:https?:\/\/)?bitbucket\.org\/([\w.-]+)\/([\w.-]+)\/pull-requests\/(\d+)(?:\/.*)?$/i;
+const BITBUCKET_ISSUE_URL_RE =
+  /^(?:https?:\/\/)?bitbucket\.org\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+)(?:\/.*)?$/i;
+const ANY_BITBUCKET_URL_RE = /^(?:https?:\/\/)?bitbucket\.org\//i;
+
 const GITHUB_HOST = 'github.com';
+const BITBUCKET_HOST = 'bitbucket.org';
 
 /**
  * Parse user input into a canonical {@link LookupInput}.
@@ -202,6 +217,23 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
     return { kind: 'issue', repo: { host, projectPath }, number: Number.parseInt(num, 10) };
   }
 
+  // Bitbucket Cloud URL shapes — single fixed host, flat workspace/repo path.
+  const bbSha = stripped.match(BITBUCKET_SHA_URL_RE);
+  if (bbSha) {
+    const [workspace, repo, sha] = captures(bbSha, 3);
+    return { kind: 'commit', repo: bitbucketRef(workspace, repo), sha: sha.toLowerCase() };
+  }
+  const bbPr = stripped.match(BITBUCKET_PR_URL_RE);
+  if (bbPr) {
+    const [workspace, repo, num] = captures(bbPr, 3);
+    return { kind: 'pr', repo: bitbucketRef(workspace, repo), number: Number.parseInt(num, 10) };
+  }
+  const bbIssue = stripped.match(BITBUCKET_ISSUE_URL_RE);
+  if (bbIssue) {
+    const [workspace, repo, num] = captures(bbIssue, 3);
+    return { kind: 'issue', repo: bitbucketRef(workspace, repo), number: Number.parseInt(num, 10) };
+  }
+
   const atSha = stripped.match(OWNER_REPO_AT_SHA_RE);
   if (atSha) {
     const [owner, repo, sha] = captures(atSha, 3);
@@ -259,6 +291,12 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
         `I can read /-/commit/{sha}, /-/blob|tree|blame|raw/{sha}/..., /-/merge_requests/{N}, and /-/issues/{N} (or /-/work_items/{N}).`,
     );
   }
+  if (ANY_BITBUCKET_URL_RE.test(trimmed)) {
+    throw new InvalidInputError(
+      `${input} — that's a Bitbucket URL but not a shape I recognize. ` +
+        `I can read /commits/{sha}, /src/{sha}/..., /pull-requests/{N}, and /issues/{N}.`,
+    );
+  }
   if (looksLikeUrl(trimmed)) {
     // Capture the host so the error message names it.
     const host = extractHost(trimmed);
@@ -270,6 +308,10 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
 
 function githubRef(owner: string, repo: string): RepoRef {
   return { host: GITHUB_HOST, projectPath: `${owner}/${repo}` };
+}
+
+function bitbucketRef(workspace: string, repo: string): RepoRef {
+  return { host: BITBUCKET_HOST, projectPath: `${workspace}/${repo}` };
 }
 
 function parseGithubRepoRef(s: string): RepoRef {
@@ -318,7 +360,7 @@ function isKnownGitlabHost(host: string): boolean {
 }
 
 function unsupportedHost(host: string): UnsupportedHostError {
-  const supported = ['github.com', ...KNOWN_GITLAB_HOSTS];
+  const supported = ['github.com', BITBUCKET_HOST, ...KNOWN_GITLAB_HOSTS];
   return new UnsupportedHostError(host, supported);
 }
 
@@ -328,7 +370,7 @@ function unsupportedHost(host: string): UnsupportedHostError {
  *  supported). Surface a shape problem instead. Otherwise it's a genuinely
  *  unsupported host. */
 function unknownShapeOrUnsupportedHost(host: string, input: string): ReleasedError {
-  if (host === GITHUB_HOST || isKnownGitlabHost(host)) {
+  if (host === GITHUB_HOST || host === BITBUCKET_HOST || isKnownGitlabHost(host)) {
     return new InvalidInputError(
       `${input} — that's a ${host} URL but not a shape I recognize. ` +
         `Paste the commit/MR URL itself, or a SHA / PR-MR number.`,

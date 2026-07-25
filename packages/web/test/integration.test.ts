@@ -191,7 +191,7 @@ describe('web Worker — basic routing', () => {
     expect(res.headers.get('location')).toContain('reason=unsupported_host');
   });
 
-  it('GET /lookup?q=<bitbucket URL> bounces with reason=unsupported_host', async () => {
+  it('GET /lookup?q=<bitbucket URL> redirects to the Bitbucket commit permalink (now supported)', async () => {
     const res = await app.fetch(
       new Request(
         'https://released.example/lookup?q=' +
@@ -199,7 +199,7 @@ describe('web Worker — basic routing', () => {
       ),
     );
     expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toContain('reason=unsupported_host');
+    expect(res.headers.get('location')).toBe('/h/bitbucket.org/r/atlassian%2Fjira/c/abc1234');
   });
 
   it('homepage placeholder mentions GitHub forms first, GitLab abbreviated last (GitHub-default constraint)', async () => {
