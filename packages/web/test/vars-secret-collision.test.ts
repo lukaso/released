@@ -388,6 +388,33 @@ describe('every binding is classified as a secret or as public config', () => {
   });
 });
 
+describe('every armed secret is a declared binding (the reverse of the classification above)', () => {
+  // The classification test proves every binding in src/env.ts is classified as a
+  // secret or as public — but that only runs ONE direction (env.ts → classified).
+  // It cannot catch a name that is ARMED here in SECRET_NAMES yet never actually
+  // declared on any Env type, which is exactly how INTERNAL_SECRET sat for months:
+  // read via an inline `as Env & { INTERNAL_SECRET?: string }` cast in
+  // routes/internal.ts instead of from the typed Env. A secret that lives only in
+  // an inline cast escapes the type registry entirely — neither type-checked nor
+  // visible to the classification test — so this pins the reverse: every name we
+  // arm the guard against must be a real, typed binding on some Worker's Env.
+  it('every SECRET_NAME is declared on at least one Worker Env type', () => {
+    const declared = new Set<string>();
+    for (const [, envPath] of ENV_TYPES) {
+      for (const name of bindingNamesFromEnvTs(readFileSync(envPath, 'utf8'))) {
+        declared.add(name);
+      }
+    }
+    const untyped = (SECRET_NAMES as readonly string[]).filter((name) => !declared.has(name));
+    expect(
+      untyped,
+      `${untyped.join(', ')} armed in SECRET_NAMES but declared on no Env type. A secret that ` +
+        'is not a typed binding escapes the registry (and is read via an inline cast). Declare it ' +
+        'on the Worker Env that reads it.',
+    ).toEqual([]);
+  });
+});
+
 describe.each(WORKER_CONFIGS)('%s wrangler config', (worker, configPath) => {
   it('declares no var that would overwrite a secret on deploy', () => {
     const collisions = varEntriesFromConfig(configPath).filter((v) => isSecretName(v.name));

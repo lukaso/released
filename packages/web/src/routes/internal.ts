@@ -23,7 +23,7 @@ const SVC_HEADER = 'x-released-internal';
  *  (via .dev.vars) always set it; set with `wrangler secret put INTERNAL_SECRET`,
  *  matching web-og's. */
 function isServiceBinding(c: Context): boolean {
-  const env = (c.env ?? {}) as Env & { INTERNAL_SECRET?: string };
+  const env = (c.env ?? {}) as Env;
   const secret = env.INTERNAL_SECRET;
   if (!secret) return false;
   const marker = c.req.raw.headers.get(SVC_HEADER);
