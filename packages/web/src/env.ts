@@ -44,6 +44,13 @@ export type Env = {
    *  container env. */
   RELAY_SECRET?: string;
 
+  /** Shared secret for the web↔web-og Service Binding handshake. web-og sets the
+   *  `x-released-internal` marker header to this value; `isServiceBinding()`
+   *  (routes/internal.ts) compares against it and DENYs when it is unset (fails
+   *  closed — never falls back to a guessable default). Set via
+   *  `wrangler secret put INTERNAL_SECRET`; MUST match the value set on web-og. */
+  INTERNAL_SECRET?: string;
+
   /** Comma-separated hosts to route through the relay container (Anubis-
    *  protected). Defaults to gitlab.freedesktop.org,gitlab.gnome.org when unset;
    *  an explicit empty string disables the relay. */
