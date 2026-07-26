@@ -111,6 +111,21 @@ describe('BitbucketProvider.getPullRequest', () => {
 });
 
 describe('BitbucketProvider.getCommit', () => {
+  // Singular vs plural endpoint: /commit/{sha} returns ONE object
+  // {hash,date,message}; /commits/{sha} returns a paginated {values:[...]}.
+  // Reading body.hash off the plural list endpoint yields undefined → fullSha
+  // undefined → every Bitbucket commit/PR lookup silently reports "not yet
+  // released". Lock the SINGULAR path so it can't regress to the list endpoint.
+  it('requests the singular /commit/{sha} endpoint, not the plural /commits list', async () => {
+    const fetch = queuedFetch(
+      jsonResp({ hash: 'abcdef1234567890', date: '2024-03-15T10:00:00+00:00', message: 'x' }),
+    );
+    const c = makeBitbucketProvider({ fetch });
+    await c.getCommit(ATLAS, 'abcdef12');
+    expect(lastUrl).toMatch(/\/commit\/abcdef12/);
+    expect(lastUrl).not.toMatch(/\/commits\/abcdef12/);
+  });
+
   it('returns full hash + committed date + first-line subject from message', async () => {
     const fetch = queuedFetch(
       jsonResp({

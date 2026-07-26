@@ -148,7 +148,12 @@ export function makeBitbucketProvider(opts: ProviderOpts = {}): Provider {
   }
 
   async function getCommit(repo: RepoRef, sha: string) {
-    const url = `${restBase}/repositories/${repoPath(repo)}/commits/${enc(sha)}`;
+    // Singular /commit/{sha} returns ONE commit object ({hash,date,message}).
+    // The plural /commits/{revision} is a paginated LIST ({values:[...]}); using
+    // it here would leave body.hash undefined → fullSha undefined → every commit
+    // and PR lookup silently reports "not yet released". compareCommits and
+    // listTagsWithDates DO want the plural list endpoint (they read body.values).
+    const url = `${restBase}/repositories/${repoPath(repo)}/commit/${enc(sha)}`;
     const res = await call(url, { headers: baseHeaders() });
     const rateLimit = parseRateLimit(res);
     if (res.status === 404) throw new CommitNotFoundError(sha);
