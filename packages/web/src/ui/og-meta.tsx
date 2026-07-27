@@ -73,6 +73,21 @@ export function ogImageUrlForCommit(repo: RepoRef, sha: string, ogBaseUrl: strin
   return commitImageUrl(repo.host, repo.projectPath, shortSha(sha), ogBaseUrl);
 }
 
+/** Build the dynamic title-aware OG image URL for an ISSUE permalink straight
+ *  from route params, with no resolved result (#92 follow-up to #79, the
+ *  bot-deferred path). Produces the same URL a resolved issue result would;
+ *  web-og resolves the issue itself and falls back to its own placeholder. */
+export function ogImageUrlForIssue(repo: RepoRef, number: number, ogBaseUrl: string): string {
+  return numberImageUrl(repo.host, repo.projectPath, 'i', number, ogBaseUrl);
+}
+
+/** Build the dynamic title-aware OG image URL for a PR permalink straight from
+ *  route params, with no resolved result (#92 follow-up to #79, the bot-deferred
+ *  path). Produces the same URL a resolved PR result would. */
+export function ogImageUrlForPr(repo: RepoRef, number: number, ogBaseUrl: string): string {
+  return numberImageUrl(repo.host, repo.projectPath, 'p', number, ogBaseUrl);
+}
+
 export function OgMeta(props: OgMetaInput) {
   const { ogBaseUrl, publicUrl, result, fallbackTitle, imageOverride } = props;
   const title = result?.firstRelease

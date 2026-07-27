@@ -530,6 +530,43 @@ describe('web Worker — basic routing', () => {
   });
 });
 
+// #92 follow-up: a cold-cache unfurl of an issue/PR permalink must advertise the
+// DYNAMIC title-aware card (the /i/ or /p/ image web-og resolves itself), NOT the
+// generic placeholder — mirroring the commit deferred guard above. Without this,
+// the FIRST share of any uncomputed issue/PR unfurls blank-generic even though
+// the resolved (warm) page shows the right card.
+describe('issue/PR deferred (cold-share) OG image — #92 follow-up', () => {
+  it('GET /i/:o/:r/:n for an unfurl bot with no cache advertises the dynamic /i/ card, not placeholder', async () => {
+    cacheStore.clear();
+    const res = await app.fetch(
+      new Request('https://released.example/i/honojs/hono/555', {
+        headers: { 'user-agent': 'Slackbot 1.0 (+https://api.slack.com/robots)' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    const body = await res.text();
+    expect(body).toContain('Looking up');
+    expect(body).toMatch(/<meta property="og:image" content="[^"]*\/i\/honojs\/hono\/555\.png/);
+    expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/placeholder\.png/);
+  });
+
+  it('GET /p/:o/:r/:n for an unfurl bot with no cache advertises the dynamic /p/ card, not placeholder', async () => {
+    cacheStore.clear();
+    const res = await app.fetch(
+      new Request('https://released.example/p/honojs/hono/555', {
+        headers: { 'user-agent': 'Slackbot 1.0 (+https://api.slack.com/robots)' },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    const body = await res.text();
+    expect(body).toContain('Looking up');
+    expect(body).toMatch(/<meta property="og:image" content="[^"]*\/p\/honojs\/hono\/555\.png/);
+    expect(body).not.toMatch(/<meta property="og:image" content="[^"]*\/placeholder\.png/);
+  });
+});
+
 // Issue #1: nav + footer linked to /how-it-works but no route existed. It was a
 // 301 to the README; now it's a real, indexable content page (an SEO usage-loop
 // entry point). Full coverage lives in seo.test.ts; this just locks in that it

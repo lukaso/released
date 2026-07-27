@@ -5,7 +5,12 @@
 
 import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
 import { describe, expect, it } from 'vitest';
-import { ogImageUrl, ogImageUrlForCommit } from '../src/ui/og-meta.js';
+import {
+  ogImageUrl,
+  ogImageUrlForCommit,
+  ogImageUrlForIssue,
+  ogImageUrlForPr,
+} from '../src/ui/og-meta.js';
 
 const BASE = 'https://og.example';
 
@@ -135,6 +140,58 @@ describe('ogImageUrlForCommit', () => {
     const sha = 'a'.repeat(40);
     expect(ogImageUrlForCommit(ref, sha, BASE)).toBe(
       ogImageUrl(resultFor(ref.host, ref.projectPath), BASE),
+    );
+  });
+});
+
+// #92 follow-up: the bot-deferred path for issue/PR permalinks has no resolved
+// result yet, but it DOES know the repo + number from the route params — exactly
+// like ogImageUrlForCommit. These build the same dynamic title-aware card URL
+// from raw params (no LookupResult), so a cold-cache unfurl advertises the real
+// /i/ or /p/ card instead of the generic placeholder. web-og resolves the
+// issue/PR itself and falls back to its own placeholder if it can't.
+describe('ogImageUrlForIssue', () => {
+  it('mirrors the resolved GitHub issue scheme, keyed by the number', () => {
+    const url = ogImageUrlForIssue({ host: 'github.com', projectPath: 'honojs/hono' }, 11, BASE);
+    expect(url).toBe(`${BASE}/i/honojs/hono/11.png?v=${OG_TEMPLATE_VERSION}`);
+  });
+
+  it('mirrors the federated scheme for a GitLab issue', () => {
+    const url = ogImageUrlForIssue(
+      { host: 'gitlab.gnome.org', projectPath: 'GNOME/glib' },
+      1234,
+      BASE,
+    );
+    expect(url).toBe(`${BASE}/h/gitlab.gnome.org/i/GNOME%2Fglib/1234.png?v=${OG_TEMPLATE_VERSION}`);
+  });
+
+  it('produces the SAME url a resolved issue result would', () => {
+    const ref = { host: 'github.com', projectPath: 'honojs/hono' };
+    expect(ogImageUrlForIssue(ref, 11, BASE)).toBe(
+      ogImageUrl(issueResult(ref.host, ref.projectPath, 11), BASE),
+    );
+  });
+});
+
+describe('ogImageUrlForPr', () => {
+  it('mirrors the resolved GitHub PR scheme, keyed by the number', () => {
+    const url = ogImageUrlForPr({ host: 'github.com', projectPath: 'honojs/hono' }, 17, BASE);
+    expect(url).toBe(`${BASE}/p/honojs/hono/17.png?v=${OG_TEMPLATE_VERSION}`);
+  });
+
+  it('mirrors the federated scheme for a GitLab MR', () => {
+    const url = ogImageUrlForPr(
+      { host: 'gitlab.gnome.org', projectPath: 'GNOME/glib' },
+      5678,
+      BASE,
+    );
+    expect(url).toBe(`${BASE}/h/gitlab.gnome.org/p/GNOME%2Fglib/5678.png?v=${OG_TEMPLATE_VERSION}`);
+  });
+
+  it('produces the SAME url a resolved PR result would', () => {
+    const ref = { host: 'github.com', projectPath: 'honojs/hono' };
+    expect(ogImageUrlForPr(ref, 17, BASE)).toBe(
+      ogImageUrl(prResult(ref.host, ref.projectPath, 17), BASE),
     );
   });
 });
