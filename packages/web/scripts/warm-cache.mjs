@@ -83,6 +83,45 @@ export function buildWarmPayload(repo, sha) {
   return { input: repo, ref: sha };
 }
 
+/** Reduce a /api/lookup response into a summary row. A non-2xx response (Worker
+ *  429 when its own GITHUB_TOKEN is exhausted, a 503, …) sets `error` so the run
+ *  counts it as failed — without this, HTTP errors fall into none of the
+ *  warmed/cached/fail buckets and the summary silently shows "0 failed". */
+export function summarizeLookupResponse({ ok, status, json, ms }) {
+  if (ok) {
+    return {
+      status,
+      ms,
+      tag: json?.result?.firstRelease?.tag ?? null,
+      cacheHit: json?.cacheHit === true,
+      error: null,
+    };
+  }
+  return { status, ms, tag: null, cacheHit: null, error: `http ${status}` };
+}
+
+/** Parse a CLI int that must be a positive integer (concurrency/limit/days).
+ *  Rejects NaN/non-integer/non-positive at the parse site instead of letting a
+ *  `NaN` concurrency create zero pMap workers and crash `fmtRepoLine(undefined)`. */
+export function parsePositiveInt(raw, name) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(`--${name} requires a positive integer, got "${raw}"`);
+  }
+  return n;
+}
+
+/** Parse the Analytics Engine SQL response body. Guards non-JSON (a gateway
+ *  error page or truncated response) with a clear message — the bare JSON.parse
+ *  this replaces threw an opaque SyntaxError. Mirrors scripts/stats.mjs. */
+export function parseAeResponse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`AE non-JSON response: ${text.slice(0, 300)}`);
+  }
+}
+
 // ── credentials (same source + pattern as scripts/stats.mjs) ────────────────
 
 function loadDevVars() {
@@ -148,16 +187,16 @@ function parseArgs(argv) {
         opts.base = next();
         break;
       case '--limit':
-        opts.limit = Number.parseInt(next(), 10);
+        opts.limit = parsePositiveInt(next(), 'limit');
         break;
       case '--days':
-        opts.days = Number.parseInt(next(), 10);
+        opts.days = parsePositiveInt(next(), 'days');
         break;
       case '--repos':
         opts.repos = next();
         break;
       case '--concurrency':
-        opts.concurrency = Number.parseInt(next(), 10);
+        opts.concurrency = parsePositiveInt(next(), 'concurrency');
         break;
       case '--delay':
         opts.delay = Number.parseInt(next(), 10);
@@ -188,13 +227,18 @@ Options:
   --days N          AE lookback window in days (default: 30)
   --repos LIST      Comma-separated owner/repo list; skips AE (e.g. "a/b,c/d")
   --concurrency N   In-flight warm requests (default: 4)
-  --delay MS        Wait this many ms before each dispatch (rate-limit pacing)
+  --delay MS        Per-worker pause before each dispatch (see "Rate pacing" below)
   --dry-run         Resolve targets, print them, warm nothing
   -h, --help        Show this help
 
 Credentials (in packages/web/.dev.vars or env):
   CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_ANALYTICS_TOKEN  (AE; only for --limit top-N)
   GITHUB_TOKEN | GH_TOKEN                             (release-tag SHA fetch; optional)
+
+Rate pacing: --delay is a PER-WORKER pause, so the steady-state request rate is
+roughly --concurrency / --delay (e.g. --concurrency 4 --delay 1000 ≈ 4 req/s).
+To hold a strict global cap (GitHub's 60/hr anonymous limit ≈ 1 req/60s), pass
+--concurrency 1 so the single worker's delay IS the global rate.
 `;
 
 // `dataset` is intentionally NOT a param here: it's baked into the SQL by
@@ -208,7 +252,7 @@ async function aeQuery({ accountId, apiToken }, sql) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`AE HTTP ${res.status}: ${text.slice(0, 300)}`);
-  const json = JSON.parse(text);
+  const json = parseAeResponse(text);
   return json.data ?? [];
 }
 
@@ -219,9 +263,15 @@ async function fetchTopRepos(aeCreds, days, limit) {
 
 // Resolve the commit SHA to warm. We pick the LATEST RELEASE TAG's commit, not
 // the default-branch HEAD: HEAD is usually newer than any release, so the lookup
-// returns `not_yet_released` (a 404 the Worker does NOT cache) and warms nothing
-// useful. A release-tag commit is contained by a release → a 200 the Worker
-// caches for 30min, warming both the `tags` list and the result.
+// returns `not_yet_released` (a 404 the Worker does NOT cache) and warms nothing.
+// A release-tag commit is contained by a release → a 200 the Worker caches.
+//
+// Scope (read this): this warms the per-SHA LookupResult for that ONE commit.
+// The edge cache is keyed per-SHA (res:{host}/{repo}:sha:{sha}, src/cache.ts);
+// the tags list is fetched per-lookup and memoized in-memory only, so this does
+// NOT "warm the tags list." Most user lookups are for commits that land AFTER a
+// release and stay cold — this primes the single highest-traffic SHA per repo,
+// not the long tail. See issue #6 for the broader warming strategy.
 async function resolveWarmSha(repo, token) {
   const { owner, name } = splitOwnerRepo(repo);
   const headers = { accept: 'application/vnd.github+json', 'user-agent': 'released-warm-cache' };
@@ -255,14 +305,8 @@ async function warmOne(base, repo, sha) {
     body: JSON.stringify(buildWarmPayload(repo, sha)),
   });
   const ms = Date.now() - start;
-  let tag = null;
-  let cacheHit = null;
-  if (res.ok) {
-    const json = await res.json().catch(() => null);
-    tag = json?.result?.firstRelease?.tag ?? null;
-    cacheHit = json?.cacheHit === true;
-  }
-  return { status: res.status, ms, tag, cacheHit };
+  const json = res.ok ? await res.json().catch(() => null) : null;
+  return summarizeLookupResponse({ ok: res.ok, status: res.status, json, ms });
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -336,12 +380,18 @@ async function main() {
   }
 
   const startedAt = Date.now();
+  // Circuit breaker: once GitHub returns 403/429 the rest of the batch's SHA
+  // fetches are doomed (each would burn 2 GitHub calls waiting on a 403). Flag
+  // it on the first rate-limit signal and short-circuit the remaining repos.
+  let rateLimited = false;
   const results = await pMap(targets, opts.concurrency, async (t) => {
+    if (rateLimited) return { repo: t.repo, n: t.n, error: 'skipped: github rate_limited' };
     if (opts.delay) await sleep(opts.delay);
     let sha;
     try {
       sha = await resolveWarmSha(t.repo, ghToken);
     } catch (err) {
+      if (err.message === 'github rate_limited') rateLimited = true;
       return { repo: t.repo, n: t.n, error: `sha: ${err.message}` };
     }
     try {

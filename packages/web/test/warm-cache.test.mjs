@@ -12,8 +12,11 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTopReposSql,
   buildWarmPayload,
+  parseAeResponse,
+  parsePositiveInt,
   parseReposArg,
   splitOwnerRepo,
+  summarizeLookupResponse,
 } from '../scripts/warm-cache.mjs';
 
 describe('parseReposArg', () => {
@@ -75,5 +78,66 @@ describe('splitOwnerRepo', () => {
 
   it('throws on a value with no owner/name slash', () => {
     expect(() => splitOwnerRepo('nope')).toThrow();
+  });
+});
+
+// These guard the parts with silent-failure risk in the I/O layer: a non-2xx
+// Worker response that falls out of every summary bucket (#119 review), a NaN
+// from a bad --concurrency that crashes the run, and an opaque SyntaxError from
+// a non-JSON AE body. Each is extracted as a pure helper so it's unit-testable.
+describe('summarizeLookupResponse', () => {
+  it('on a 2xx with a release, returns the tag + cacheHit and NO error', () => {
+    expect(
+      summarizeLookupResponse({
+        ok: true,
+        status: 200,
+        ms: 42,
+        json: { result: { firstRelease: { tag: 'v1.2.3' } }, cacheHit: false },
+      }),
+    ).toEqual({ status: 200, ms: 42, tag: 'v1.2.3', cacheHit: false, error: null });
+  });
+
+  it('marks already-cached hits', () => {
+    const s = summarizeLookupResponse({ ok: true, status: 200, ms: 5, json: { cacheHit: true } });
+    expect(s.cacheHit).toBe(true);
+    expect(s.tag).toBe(null);
+    expect(s.error).toBe(null);
+  });
+
+  it('on a non-2xx Worker response (429/503), sets error so the run counts it as failed', () => {
+    // Without this, an exhausted Worker GITHUB_TOKEN (every /api/lookup → 429)
+    // renders "Done: 0 warmed, 0 cached, 0 failed" — the silent-drop bug.
+    const s429 = summarizeLookupResponse({ ok: false, status: 429, ms: 10, json: null });
+    expect(s429.error).toBe('http 429');
+    expect(s429.tag).toBe(null);
+    expect(s429.cacheHit).toBe(null);
+    const s503 = summarizeLookupResponse({ ok: false, status: 503, ms: 10, json: null });
+    expect(s503.error).toBe('http 503');
+  });
+});
+
+describe('parsePositiveInt', () => {
+  it('accepts a positive integer string', () => {
+    expect(parsePositiveInt('4', 'concurrency')).toBe(4);
+    expect(parsePositiveInt('100', 'limit')).toBe(100);
+  });
+
+  it('rejects non-numeric / non-integer / non-positive input with a message naming the flag', () => {
+    // --concurrency foo → NaN → zero pMap workers → fmtRepoLine(undefined) crash.
+    for (const bad of ['foo', '', '0', '-3', '3.5', '   ']) {
+      expect(() => parsePositiveInt(bad, 'concurrency')).toThrow(/concurrency/);
+    }
+  });
+});
+
+describe('parseAeResponse', () => {
+  it('parses valid JSON', () => {
+    expect(parseAeResponse('{"data":[1,2]}')).toEqual({ data: [1, 2] });
+  });
+
+  it('raises a clear error on a non-JSON body (gateway page / truncation)', () => {
+    // Bare JSON.parse would throw an opaque SyntaxError; stats.mjs guards this.
+    expect(() => parseAeResponse('<html>gateway timeout</html>')).toThrow(/non-JSON/);
+    expect(() => parseAeResponse('')).toThrow(/non-JSON/);
   });
 });
