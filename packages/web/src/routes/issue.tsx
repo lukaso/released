@@ -423,7 +423,8 @@ function renderDeferred(args: {
 }): Response {
   const { pubBase, ogBase, nonce, repo, numberStr } = args;
   const displayName = repo.projectPath;
-  const permalink = `${pubBase}${issuePermalinkPath(repo, Number.parseInt(numberStr, 10))}`;
+  const num = Number.parseInt(numberStr, 10);
+  const permalink = `${pubBase}${issuePermalinkPath(repo, num)}`;
   const page = (
     <Layout
       title={`looking up — ${displayName}#${numberStr}`}
@@ -431,7 +432,7 @@ function renderDeferred(args: {
       ogBaseUrl={ogBase}
       publicUrl={permalink}
       ogFallbackTitle={`released — looking up ${displayName}#${numberStr}`}
-      ogImageOverride={ogImageUrlForIssue(repo, Number.parseInt(numberStr, 10), ogBase)}
+      ogImageOverride={ogImageUrlForIssue(repo, num, ogBase)}
     >
       <Nav />
       <main>
