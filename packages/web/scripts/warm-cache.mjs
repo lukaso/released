@@ -1,5 +1,7 @@
-#!/usr/bin/env node
-// Cache-warming tool for the `released` web Worker.
+// Cache-warming tool for the `released` web Worker. Run via `pnpm warm` or
+// `node scripts/warm-cache.mjs`. No shebang: this file is imported by
+// test/warm-cache.test.mjs, and a `#!` line parses fine on LF but throws
+// `SyntaxError: Invalid or unexpected token` under a Windows CRLF checkout.
 //
 // Bumping `CACHE_NS` (packages/core/src/types.ts) re-keys every cache entry, so
 // the whole edge cache goes cold on the next deploy and every lookup recomputes
