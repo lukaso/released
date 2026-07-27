@@ -191,6 +191,25 @@ describe('the guard itself is armed', () => {
     expect(workers).toEqual(expect.arrayContaining(['web', 'web-og']));
   });
 
+  it('covers every Worker config with a src/env.ts (else its bindings are unguarded)', () => {
+    // ENV_TYPES maps each Worker config to <pkg>/src/env.ts and drops any Worker
+    // that lacks one. web-og used to declare Env inline in index.tsx, so it was
+    // dropped — leaving its bindings unguarded in BOTH directions: an
+    // unclassified string binding walked past the classification test below, and
+    // a web-og-only armed secret would false-positive as "declared on no Env
+    // type". The fix is structural (every Worker's Env lives in src/env.ts), and
+    // this pins it so a future inline-Env Worker can't silently slip out again.
+    const withConfig = WORKER_CONFIGS.map(([worker]) => worker);
+    const withEnv = ENV_TYPES.map(([worker]) => worker);
+    const uncovered = withConfig.filter((w) => !withEnv.includes(w));
+    expect(
+      uncovered,
+      `${uncovered.join(', ')} ${uncovered.length === 1 ? 'has' : 'have'} a wrangler config but no ` +
+        'src/env.ts — their bindings are unguarded by both directions of this suite. Move the Env ' +
+        'type into <pkg>/src/env.ts (see packages/web/src/env.ts).',
+    ).toEqual([]);
+  });
+
   it('resolves a package config the way wrangler does (json > jsonc > toml)', () => {
     // Pins the precedence read out of wrangler's own findWranglerConfig. If a future
     // wrangler reorders it, this fails and the guard gets re-pointed at whichever
