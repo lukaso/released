@@ -253,6 +253,25 @@ pnpm --filter @released/web deploy
 pnpm --filter @released/web-og deploy
 ```
 
+### Cache warming (optional)
+
+Bumping `CACHE_NS` (`packages/core/src/types.ts`) re-keys the edge cache, so the
+next deploy goes cold and high-traffic repos recompute until they re-warm. Warm
+them ahead of users, right after the deploy lands:
+
+```bash
+cd packages/web
+pnpm warm                                       # top 100 GitHub repos by AE traffic
+pnpm warm -- --limit 25 --dry-run              # preview the targets, warm nothing
+pnpm warm -- --repos honojs/hono,facebook/react
+```
+
+It reuses the same Analytics Engine credentials as `pnpm stats` (in `.dev.vars`),
+plus an optional `GITHUB_TOKEN`/`GH_TOKEN` for the HEAD-SHA fetch. The Worker's
+cache is per-colo, so a run warms the colo nearest the runner, not every edge
+location. See `packages/web/scripts/warm-cache.mjs` for the rate-limit and
+per-colo notes.
+
 ### CI/CD
 
 `.github/workflows/release.yml` runs on every push to `main`. Depending on

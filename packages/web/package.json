@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "stats": "node scripts/stats.mjs",
+    "warm": "node scripts/warm-cache.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
