@@ -42,6 +42,7 @@ import { makeProvider } from '../provider.js';
 import { resolveLookup } from '../resolve.js';
 import { makeNonce, securityHeaders } from '../security.js';
 import { Layout } from '../ui/layout.js';
+import { ogImageUrlForIssue } from '../ui/og-meta.js';
 import { ResultCard, StaleNotice } from '../ui/result-card.js';
 
 function repoFromParams(c: Context): RepoRef | null {
@@ -430,6 +431,7 @@ function renderDeferred(args: {
       ogBaseUrl={ogBase}
       publicUrl={permalink}
       ogFallbackTitle={`released — looking up ${displayName}#${numberStr}`}
+      ogImageOverride={ogImageUrlForIssue(repo, Number.parseInt(numberStr, 10), ogBase)}
     >
       <Nav />
       <main>
