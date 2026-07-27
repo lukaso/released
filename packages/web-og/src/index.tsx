@@ -10,11 +10,7 @@
 import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
 import { Hono } from 'hono';
 import { ImageResponse } from 'workers-og';
-
-type Env = {
-  WEB: Fetcher;
-  INTERNAL_SECRET?: string;
-};
+import type { Env } from './env.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
