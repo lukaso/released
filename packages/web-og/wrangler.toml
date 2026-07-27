@@ -13,3 +13,17 @@ service = "released-web"
 # Shared secret marker so the web Worker can reject direct public hits to
 # /internal/result/* and only accept calls coming through this binding.
 # Set with: wrangler secret put INTERNAL_SECRET (must match the value set on web).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Preview environment — isolated preview Worker paired with released-web-preview
+# (issue #70). Bindings are non-inheritable in a named env, so the Service
+# Binding is re-declared here pointed at the PREVIEW web Worker (not prod), so an
+# OG render on the preview exercises the preview web's branch end-to-end.
+# Deployed from .github/workflows/preview.yml AFTER released-web-preview (the
+# binding target must exist first). INTERNAL_SECRET is set per-env (see below).
+[env.preview]
+name = "released-web-og-preview"
+
+[[env.preview.services]]
+binding = "WEB"
+service = "released-web-preview"
