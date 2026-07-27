@@ -271,7 +271,8 @@ function renderDeferred(args: {
   const { pubBase, ogBase, nonce, repo, numberStr, provider } = args;
   const displayName = repo.projectPath;
   const prefix = provider.terms.mergeRequestPrefix;
-  const permalink = `${pubBase}${prPermalinkPath(repo, Number.parseInt(numberStr, 10))}`;
+  const num = Number.parseInt(numberStr, 10);
+  const permalink = `${pubBase}${prPermalinkPath(repo, num)}`;
   const page = (
     <Layout
       title={`looking up — ${displayName}${prefix}${numberStr}`}
@@ -279,7 +280,7 @@ function renderDeferred(args: {
       ogBaseUrl={ogBase}
       publicUrl={permalink}
       ogFallbackTitle={`released — looking up ${displayName}${prefix}${numberStr}`}
-      ogImageOverride={ogImageUrlForPr(repo, Number.parseInt(numberStr, 10), ogBase)}
+      ogImageOverride={ogImageUrlForPr(repo, num, ogBase)}
     >
       <Nav />
       <main>
