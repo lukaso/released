@@ -17,9 +17,10 @@ export default defineConfig({
     },
   },
   test: {
-    // Worker-side TS tests, plus the container relay's plain-Node .mjs tests
-    // (the container is a separate runtime, kept out of the TS build).
-    include: ['test/**/*.test.ts', 'container/**/*.test.mjs'],
+    // Worker-side TS tests, plus plain-Node .mjs tests: the container relay
+    // (a separate runtime) and operator scripts under test/ (e.g. the
+    // cache-warming script) — both kept out of the TS build.
+    include: ['test/**/*.test.ts', 'test/**/*.test.mjs', 'container/**/*.test.mjs'],
     // The first test in each file pays a one-time cost: a dynamic import of the
     // whole Worker (`src/index.js`) plus its esbuild transform. Under a loaded
     // `pnpm -r test` (all packages in parallel) that can exceed vitest's 5s
