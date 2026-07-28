@@ -127,7 +127,7 @@ export default app;
 
 // --- rendering ---------------------------------------------------------------
 
-function renderImage(
+export function renderImage(
   result: LookupResult | null,
   ctx: { owner: string; repo: string; sha?: string; number?: string },
 ): Response {

@@ -7,7 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check:deploy-config": "wrangler deploy --dry-run",
-    "test": "vitest run",
+    "test": "vitest run && vitest run --config vitest.workers.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -16,6 +16,7 @@
     "workers-og": "^0.0.27"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.8",
     "@cloudflare/workers-types": "^4.20260702.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10",

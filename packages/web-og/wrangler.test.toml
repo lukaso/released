@@ -1,0 +1,9 @@
+# Test-only Worker config for the pool-workers render tests. Identical to
+# wrangler.toml EXCEPT no Service Binding to `web` — the render tests call
+# renderImage() directly with canned fixtures and never touch the binding, so we
+# don't want pool-workers trying to wire up released-web. wrangler bundles
+# workers-og's wasm natively for workerd from this config.
+name = "released-og-test"
+main = "src/index.tsx"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
