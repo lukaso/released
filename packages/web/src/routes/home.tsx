@@ -205,7 +205,11 @@ function messageForReason(reason: string, bad: string): string {
       // A known project shortcut (e.g. a homepage chip) with no commit/PR.
       // Name the repo it expands to and show the shorthand, so the front door
       // recovers instead of dead-ending on a generic "couldn't parse" (#125).
-      const alias = bad.trim();
+      // The redirect forwards the RAW query, so a trailing slash or query
+      // (`react/`, `react?x`) arrives untouched. Mirror parse-input.ts'
+      // `stripped` before the exact-match alias lookup, or findProjectByAlias
+      // misses (renders "its repo") and the suggested shorthand re-dead-ends.
+      const alias = bad.trim().replace(/\?.*$/, '').replace(/\/+$/, '');
       const project = findProjectByAlias(alias);
       const repo = project ? project.projectPath : 'its repo';
       return `"${alias}" is a shortcut for ${repo}, but I need a commit or PR too. Try \`${alias} <sha>\` or \`${alias} #<pr>\`. Or paste any GitHub / GitLab URL above.`;

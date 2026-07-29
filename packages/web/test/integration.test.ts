@@ -837,6 +837,42 @@ describe('bare-SHA error banner — recovery chips', () => {
   });
 });
 
+describe('bare-alias error banner — input normalization (#125)', () => {
+  // The redirect forwards the RAW query, so a trailing slash or query (`react/`,
+  // `react?x=1`) arrives at the homepage untouched. core's parse-input.ts strips
+  // those before its alias lookup; this branch must do the same, or it renders
+  // "its repo" and a shorthand that re-dead-ends on InvalidInputError.
+  it('resolves the repo + clean shorthand for a trailing-slash input (?bad=react/)', async () => {
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/?bad=' + encodeURIComponent('react/') + '&reason=bare_alias',
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // Normalized to the alias core matched on → the repo name renders, not the
+    // "its repo" fallback a missed findProjectByAlias('react/') would produce.
+    expect(body).toContain('facebook/react');
+    expect(body).not.toContain('its repo');
+    // The shorthand strips the slash too, so `react <sha>` does not re-dead-end.
+    // (<sha> is HTML-escaped to &lt;sha&gt; by the JSX renderer.)
+    expect(body).toMatch(/`react &lt;sha&gt;`/);
+    expect(body).not.toContain('react/ &lt;sha&gt;');
+  });
+
+  it('strips a trailing query (?bad=react?x=1) the same way core does', async () => {
+    const res = await app.fetch(
+      new Request(
+        'https://released.example/?bad=' + encodeURIComponent('react?x=1') + '&reason=bare_alias',
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('facebook/react');
+    expect(body).toMatch(/`react &lt;sha&gt;`/);
+  });
+});
+
 describe('homepage CSP', () => {
   it('emits a strict CSP with a nonce', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
