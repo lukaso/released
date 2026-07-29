@@ -7,6 +7,7 @@
 // dispatcher (parsers/index.ts) routes URLs to the right table by host.
 
 import {
+  BareAliasError,
   BareShaError,
   InvalidInputError,
   NonGithubUrlError,
@@ -236,6 +237,15 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   // Resolves the alias via opts.aliases (default KNOWN_PROJECTS) to a host+repo.
   const aliasHit = tryAliasParse(stripped, opts);
   if (aliasHit) return aliasHit;
+
+  // Bare known alias with no commit/PR ref (e.g. a homepage chip pasted
+  // `typescript` and the user hit submit). Distinct error kind so the UI can
+  // prompt "add a SHA/PR after it" instead of the generic "couldn't parse"
+  // dead-end (#125). Mirrors the bare-SHA branch below.
+  const bareAlias = findProjectByAlias(trimmed, opts?.aliases);
+  if (bareAlias) {
+    throw new BareAliasError(bareAlias.alias, bareAlias.projectPath);
+  }
 
   // Bare SHA with no repo context — distinct error kind so the UI can prompt
   // for a repo instead of saying "couldn't parse".

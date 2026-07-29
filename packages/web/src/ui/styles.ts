@@ -297,6 +297,7 @@ footer a:visited { color: var(--text-3); }
 .project-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .project-chip--just-clicked { border-color: var(--accent); color: var(--text); }
 .projects-hint { margin-top: 10px; font-size: 12.5px; color: var(--text-3); }
+.projects-hint code { font-family: 'Geist Mono', monospace; color: var(--text-2); }
 .error-chips { margin-top: 12px; }
 .error-chips .projects-label { color: var(--warn); }
 

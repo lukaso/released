@@ -150,6 +150,7 @@ export function statusFor(kind: string): number {
     case 'non_github_url':
     case 'unsupported_host':
     case 'invalid_input':
+    case 'bare_alias':
     case 'bulk_limit':
       return 400;
     case 'pr_not_merged':

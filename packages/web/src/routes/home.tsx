@@ -1,7 +1,7 @@
 // GET / — the homepage. Empty state: input + ONE pre-rendered EXAMPLE result.
 // Same page in resolved state lives at /r/:o/:r/c/:sha (routes/result.tsx).
 
-import { KNOWN_PROJECTS } from '@released/core';
+import { findProjectByAlias, KNOWN_PROJECTS } from '@released/core';
 import type { Context } from 'hono';
 import { ogBaseUrl, publicBaseUrl } from '../env.js';
 import { EXAMPLE_LIVE_URL, EXAMPLE_RESULT } from '../example.js';
@@ -177,7 +177,12 @@ function ProjectChips({ inErrorBanner = false }: { inErrorBanner?: boolean }) {
           </button>
         ))}
       </div>
-      {!inErrorBanner && <p class="projects-hint">…or paste any GitHub / GitLab URL above.</p>}
+      {!inErrorBanner && (
+        <p class="projects-hint">
+          Click a project, then add a commit SHA or PR # (e.g. <code>react abc1234</code>) — or
+          paste any GitHub / GitLab URL above.
+        </p>
+      )}
     </section>
   );
 }
@@ -196,6 +201,15 @@ function messageForReason(reason: string, bad: string): string {
       // The input WAS a valid SHA, just no repo. Be specific and actionable —
       // show the exact shorthand they should paste.
       return `That looks like a SHA, but I need a repo too. Try \`owner/repo ${bad}\` (space-separated) or \`owner/repo@${bad}\` (compact).`;
+    case 'bare_alias': {
+      // A known project shortcut (e.g. a homepage chip) with no commit/PR.
+      // Name the repo it expands to and show the shorthand, so the front door
+      // recovers instead of dead-ending on a generic "couldn't parse" (#125).
+      const alias = bad.trim();
+      const project = findProjectByAlias(alias);
+      const repo = project ? project.projectPath : 'its repo';
+      return `"${alias}" is a shortcut for ${repo}, but I need a commit or PR too. Try \`${alias} <sha>\` or \`${alias} #<pr>\` — or paste any GitHub / GitLab URL above.`;
+    }
     case 'invalid_input':
     case 'invalid':
       if (/^(?:https?:\/\/)?github\.com\//i.test(bad)) {

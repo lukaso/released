@@ -58,6 +58,26 @@ export class BareShaError extends ReleasedError {
   }
 }
 
+/** Thrown when the input is a known project *alias* (e.g. `react`, `gtk`) with
+ *  no commit/PR ref — the homepage "popular projects" chip inserts the alias as
+ *  a prefix, so submitting it bare used to dead-end into a generic "couldn't
+ *  parse" error (#125). Carries the alias and the repo it resolves to so the UI
+ *  can prompt "add a SHA/PR after it" and pre-fill the alias. Mirrors
+ *  {@link BareShaError}. */
+export class BareAliasError extends ReleasedError {
+  readonly kind = 'bare_alias' as const;
+  constructor(
+    public readonly alias: string,
+    public readonly projectPath: string,
+  ) {
+    super(
+      `"${alias}" is a shortcut for ${projectPath}, but I need a commit or PR too. ` +
+        `Try \`${alias} <sha>\` or \`${alias} #<pr>\`.`,
+    );
+    this.name = 'BareAliasError';
+  }
+}
+
 // --- Commit / PR resolution --------------------------------------------------
 
 export class CommitNotFoundError extends ReleasedError {

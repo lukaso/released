@@ -3,6 +3,7 @@
 export { type CacheKind, type CacheStore, cacheKey } from './cache.js';
 export {
   AmbiguousShaError,
+  BareAliasError,
   BareShaError,
   BulkLimitError,
   CommitNotFoundError,

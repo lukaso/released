@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { BareShaError, InvalidInputError, UnsupportedHostError } from '../src/errors.js';
+import {
+  BareAliasError,
+  BareShaError,
+  InvalidInputError,
+  UnsupportedHostError,
+} from '../src/errors.js';
 import { parseInput } from '../src/parse-input.js';
 
 const GH = (projectPath: string) => ({ host: 'github.com', projectPath });
@@ -587,8 +592,31 @@ describe('parseInput — alias shorthand', () => {
       expect(() => parseInput('totallyfake 8c0ef808')).toThrow(InvalidInputError);
     });
 
-    it('alias alone throws InvalidInputError (no SHA/PR context)', () => {
-      expect(() => parseInput('gtk')).toThrow(InvalidInputError);
+    it('bare alias alone throws BareAliasError — UI can prompt for a SHA/PR (#125)', () => {
+      // A known alias with no commit/PR context (e.g. clicking a homepage chip
+      // and submitting) must NOT dead-end into the generic "couldn't parse"
+      // error; it gets its own kind so the UI can tell the user to add a ref.
+      expect(() => parseInput('gtk')).toThrow(BareAliasError);
+      expect(() => parseInput('typescript')).toThrow(BareAliasError);
+    });
+
+    it('BareAliasError carries the alias + resolved repo so the UI can self-describe', () => {
+      try {
+        parseInput('react');
+      } catch (err) {
+        expect(err).toBeInstanceOf(BareAliasError);
+        expect((err as BareAliasError).alias).toBe('react');
+        expect((err as BareAliasError).projectPath).toBe('facebook/react');
+        // Message is actionable: names the repo and shows the shorthand to use.
+        expect((err as BareAliasError).message).toContain('facebook/react');
+        expect((err as BareAliasError).message).toContain('react');
+      }
+    });
+
+    it('unknown bare word (not a known alias) still throws InvalidInputError', () => {
+      // Guard is not over-broad: a random word with no slash/URL/SHA shape is
+      // still a generic invalid input, not a bare-alias prompt.
+      expect(() => parseInput('totallyfake')).toThrow(InvalidInputError);
     });
 
     it('alias + non-classifiable token throws InvalidInputError', () => {
