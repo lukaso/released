@@ -179,8 +179,8 @@ function ProjectChips({ inErrorBanner = false }: { inErrorBanner?: boolean }) {
       </div>
       {!inErrorBanner && (
         <p class="projects-hint">
-          Click a project, then add a commit SHA or PR # (e.g. <code>react abc1234</code>) — or
-          paste any GitHub / GitLab URL above.
+          Click a project, then add a commit SHA or PR # (e.g. <code>react abc1234</code>). Or paste
+          any GitHub / GitLab URL above.
         </p>
       )}
     </section>
@@ -208,7 +208,7 @@ function messageForReason(reason: string, bad: string): string {
       const alias = bad.trim();
       const project = findProjectByAlias(alias);
       const repo = project ? project.projectPath : 'its repo';
-      return `"${alias}" is a shortcut for ${repo}, but I need a commit or PR too. Try \`${alias} <sha>\` or \`${alias} #<pr>\` — or paste any GitHub / GitLab URL above.`;
+      return `"${alias}" is a shortcut for ${repo}, but I need a commit or PR too. Try \`${alias} <sha>\` or \`${alias} #<pr>\`. Or paste any GitHub / GitLab URL above.`;
     }
     case 'invalid_input':
     case 'invalid':

@@ -600,6 +600,16 @@ describe('parseInput — alias shorthand', () => {
       expect(() => parseInput('typescript')).toThrow(BareAliasError);
     });
 
+    it('bare alias with trailing slash or query still resolves to BareAliasError (#126 review)', () => {
+      // The alias shorthand parse above normalizes through `stripped`
+      // (trims trailing / and ?query). The bare-alias branch must share that
+      // normalizer — otherwise `react/` or `react?x=1` misses the exact-match
+      // index and dead-ends into the generic InvalidInputError this feature
+      // exists to kill (#125).
+      expect(() => parseInput('react/')).toThrow(BareAliasError);
+      expect(() => parseInput('react?x=1')).toThrow(BareAliasError);
+    });
+
     it('BareAliasError carries the alias + resolved repo so the UI can self-describe', () => {
       try {
         parseInput('react');

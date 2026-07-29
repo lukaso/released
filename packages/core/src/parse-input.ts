@@ -241,8 +241,11 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
   // Bare known alias with no commit/PR ref (e.g. a homepage chip pasted
   // `typescript` and the user hit submit). Distinct error kind so the UI can
   // prompt "add a SHA/PR after it" instead of the generic "couldn't parse"
-  // dead-end (#125). Mirrors the bare-SHA branch below.
-  const bareAlias = findProjectByAlias(trimmed, opts?.aliases);
+  // dead-end (#125). Mirrors the bare-SHA branch below. Use `stripped`
+  // (not `trimmed`) so a trailing slash or query — `react/`, `react?x` —
+  // still matches the exact-match alias index, sharing one normalizer with
+  // the alias shorthand parse above (#126).
+  const bareAlias = findProjectByAlias(stripped, opts?.aliases);
   if (bareAlias) {
     throw new BareAliasError(bareAlias.alias, bareAlias.projectPath);
   }
