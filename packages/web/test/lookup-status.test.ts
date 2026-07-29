@@ -25,4 +25,12 @@ describe('statusFor', () => {
     expect(statusFor('lookup_timeout')).toBe(503);
     expect(statusFor('something_unexpected')).toBe(500);
   });
+
+  it('maps a bare SHA (no repo) to 400 — a client input error, not a 5xx', () => {
+    // A bare hex SHA with no repo is the input-error family, like invalid_input.
+    // Without this case BareShaError fell through to the 500 default and read as
+    // "the server broke" to JSON-API callers (verified live: prod
+    // POST /api/lookup of a bare SHA returned 500).
+    expect(statusFor('bare_sha')).toBe(400);
+  });
 });

@@ -150,6 +150,9 @@ export function statusFor(kind: string): number {
     case 'non_github_url':
     case 'unsupported_host':
     case 'invalid_input':
+    // A bare SHA with no repo is a client input error, not a server fault —
+    // without this it fell through to the 500 default (verified on prod).
+    case 'bare_sha':
     case 'bulk_limit':
       return 400;
     case 'pr_not_merged':
