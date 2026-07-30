@@ -34,8 +34,7 @@ export {
 } from './find-release.js';
 // Legacy aliases — keep working until consumers migrate to providerFor.
 export { type GithubClient, type GithubClientOpts, makeGithubClient } from './github.js';
-export { findProjectByAlias, KNOWN_PROJECTS, type KnownProject } from './known-projects.js';
-export { type ParseOpts, parseInput } from './parse-input.js';
+export { parseInput } from './parse-input.js';
 export type { Provider, ProviderOpts } from './provider.js';
 // New provider surface.
 export { makeGithubProvider } from './providers/github/client.js';
