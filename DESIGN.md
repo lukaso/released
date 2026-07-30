@@ -143,9 +143,9 @@ fallback during load.
 - **EXAMPLE variant** (`.answer.example`) — same card, dashed bright border,
   `--example-tint` background, gold `EXAMPLE` tag above. Distinguishes the
   homepage demo from a real result.
-- **Chip row** (`.projects-row`, `.alsoin .versions`) — raised chips, 6px
-  radius, hover lifts to `--bg-hover` and bright border. Used for popular
-  projects on the homepage and "also contained in" tags on the result.
+- **"Also contained in" tags** (`.alsoin .versions`) — raised chips, 6px
+  radius, hover lifts to `--bg-hover` and bright border. Listed under a real
+  result.
 - **Buttons** — three classes: `.searchbox button` (primary white CTA),
   `.btn-fmt.primary` (white CTA inside the card), `.btn-fmt` (ghost with
   bright border). No third tier.
@@ -170,8 +170,6 @@ Single `@media (max-width: 600px)` breakpoint in `styles.ts`:
 - Searchbox stacks vertically (input above, full-width button below at 13px
   padding).
 - Hero version drops from 52px to 36px.
-- Project chips grow to ~40px tap targets (10/14 padding, 13.5px font, 8px
-  gap).
 
 The 660px wrap and 24px gutters mean the desktop layout already collapses
 gracefully at most widths; the breakpoint is the small handful of
@@ -189,12 +187,10 @@ sub-component tweaks above.
 ## Accessibility
 
 - Focus rings: `.searchbox:focus-within` gets a 3px translucent blue glow
-  plus a bright border. `.project-chip:focus-visible` gets a 2px solid blue
-  outline with 2px offset.
+  plus a bright border.
 - Link colors on dark surfaces are always explicit. Browser-default
   `#0000EE` / `#551A8B` visited-purple are unreadable on `--bg-raised` — see
   the `.answer-meta a`, `.sec-label a`, and `a.v` rules.
-- Tap targets on mobile are ≥ ~40px (project chips).
 - Color contrast: all text meets **WCAG AA** on its surface. `--text-3`
   (`#8a8a8a`) is the muted floor — still clearly tertiary, but ≥ 4.5:1 on
   `--bg` / `--bg-raised` / the example tint. Keep new muted text at `--text-3`
