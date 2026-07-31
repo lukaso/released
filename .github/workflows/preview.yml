@@ -83,7 +83,7 @@ jobs:
           echo "url=${url}" >> "$GITHUB_OUTPUT"
 
       - name: Comment preview URLs on the PR
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           # Pass deploy output through env (not inline ${{ }}) so a malformed
           # wrangler URL can never inject into the script below.
