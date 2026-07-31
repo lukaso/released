@@ -766,74 +766,35 @@ describe('homepage no longer links to /bulk (issue #3)', () => {
   });
 });
 
-describe('homepage popular-projects chips', () => {
-  it('renders a chip section between the bulk link and the example', async () => {
+describe('homepage popular-projects chips removed', () => {
+  it('does NOT render the popular-projects chip section or its click handler', async () => {
     const res = await app.fetch(new Request('https://released.example/'));
     expect(res.status).toBe(200);
     const body = await res.text();
-    expect(body).toContain('projects-section');
-    expect(body).toContain('aria-labelledby="popular-projects-label"');
-    // Label visible
-    expect(body).toMatch(/<span[^>]*class="projects-label"[^>]*>Popular projects<\/span>/);
-    // Hint line below the row prevents "only these N are supported" misread
-    expect(body).toContain('any GitHub / GitLab URL above');
-  });
-
-  it('renders a <button type="button"> per known project, with data-alias and displayName', async () => {
-    const res = await app.fetch(new Request('https://released.example/'));
-    const body = await res.text();
-    // Spot-check three representative aliases (GitLab, GitHub, dotted)
-    expect(body).toMatch(
-      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="gtk"[^>]*>GTK<\/button>/,
-    );
-    expect(body).toMatch(
-      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="react"[^>]*>React<\/button>/,
-    );
-    expect(body).toMatch(
-      /<button[^>]*type="button"[^>]*class="project-chip"[^>]*data-alias="next\.js"[^>]*>Next\.js<\/button>/,
-    );
-  });
-
-  it('exposes the click handler that wires chip clicks to the search input', async () => {
-    const res = await app.fetch(new Request('https://released.example/'));
-    const body = await res.text();
-    // The inline JS targets .project-chip and writes to the #q input.
-    expect(body).toContain('.project-chip');
-    expect(body).toMatch(/getElementById\(.q.\)/);
-    // Mirror of computeChipClickInputValue is inlined (SHA-shape detection).
-    expect(body).toMatch(/\[0-9a-f\]\{7,40\}/);
+    // The chip section, its label, and the per-project buttons are gone.
+    expect(body).not.toContain('projects-section');
+    expect(body).not.toContain('aria-labelledby="popular-projects-label"');
+    expect(body).not.toContain('class="project-chip"');
+    expect(body).not.toContain('data-alias=');
+    // The delegated chip-click handler is gone too.
+    expect(body).not.toContain('.project-chip');
   });
 });
 
-describe('bare-SHA error banner — recovery chips', () => {
-  it('shows the in-banner project chips when reason=bare_sha', async () => {
+describe('bare-SHA error banner', () => {
+  it('shows the bare-SHA message with no project chips', async () => {
     const res = await app.fetch(
       new Request('https://released.example/?bad=8c0ef808ea&reason=bare_sha'),
     );
     expect(res.status).toBe(200);
     const body = await res.text();
-    // Error banner is present with the bare-SHA copy
+    // The prompt-for-a-repo UX is kept (BareShaError is not part of the
+    // popular-projects feature).
     expect(body).toContain('looks like a SHA, but I need a repo too');
-    // In-banner chips block
-    expect(body).toContain('class="error-chips"');
-    expect(body).toContain('aria-labelledby="popular-projects-label-err"');
-    // Chips themselves render inside the banner — at least one alias survives
-    expect(body).toMatch(/data-alias="gtk"/);
-  });
-
-  it('does NOT show the in-banner chips for non-bare-SHA errors', async () => {
-    const res = await app.fetch(
-      new Request(
-        'https://released.example/?bad=' +
-          encodeURIComponent('https://bitbucket.org/atlassian/jira') +
-          '&reason=unsupported_host',
-      ),
-    );
-    expect(res.status).toBe(200);
-    const body = await res.text();
-    // Top-of-page chip row is still there, but the in-banner one is not.
+    // The removed popular-projects chips do not appear in the banner.
     expect(body).not.toContain('class="error-chips"');
     expect(body).not.toContain('aria-labelledby="popular-projects-label-err"');
+    expect(body).not.toContain('data-alias=');
   });
 });
 

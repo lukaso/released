@@ -1,7 +1,6 @@
 // GET / — the homepage. Empty state: input + ONE pre-rendered EXAMPLE result.
 // Same page in resolved state lives at /r/:o/:r/c/:sha (routes/result.tsx).
 
-import { KNOWN_PROJECTS } from '@released/core';
 import type { Context } from 'hono';
 import { ogBaseUrl, publicBaseUrl } from '../env.js';
 import { EXAMPLE_LIVE_URL, EXAMPLE_RESULT } from '../example.js';
@@ -38,7 +37,7 @@ export async function homeRoute(c: Context): Promise<Response> {
           Paste a commit, SHA, or merged PR — get back the first release that contains it.
         </p>
 
-        {errorMsg && <ErrorBanner message={errorMsg} bad={bad} reason={reason} />}
+        {errorMsg && <ErrorBanner message={errorMsg} bad={bad} />}
 
         <form method="get" action="/lookup" data-loading-form>
           <label class="field-label" for="q">
@@ -64,7 +63,6 @@ export async function homeRoute(c: Context): Promise<Response> {
             </button>
           </div>
         </form>
-        <ProjectChips />
 
         <div class="example-section">
           <div class="example-header">
@@ -124,7 +122,7 @@ function Nav() {
   );
 }
 
-function ErrorBanner({ message, bad, reason }: { message: string; bad: string; reason: string }) {
+function ErrorBanner({ message, bad }: { message: string; bad: string }) {
   return (
     <div
       role="alert"
@@ -146,39 +144,7 @@ function ErrorBanner({ message, bad, reason }: { message: string; bad: string; r
           input: {bad}
         </div>
       )}
-      {reason === 'bare_sha' && (
-        <div class="error-chips">
-          <ProjectChips inErrorBanner />
-        </div>
-      )}
     </div>
-  );
-}
-
-/**
- * Popular projects chip row. Each chip is a <button> carrying the alias in
- * data-alias; the delegated click handler in layout.tsx inserts the alias
- * (and preserves any SHA-shape input) into the search box and refocuses it.
- * Rendered twice: once below the search form as the main discovery surface,
- * and again inside the bare-SHA error banner so the user can recover in one
- * click. The two instances share the same handler via event delegation.
- */
-function ProjectChips({ inErrorBanner = false }: { inErrorBanner?: boolean }) {
-  const labelId = inErrorBanner ? 'popular-projects-label-err' : 'popular-projects-label';
-  return (
-    <section class={inErrorBanner ? '' : 'projects-section'} aria-labelledby={labelId}>
-      <span id={labelId} class="projects-label">
-        Popular projects
-      </span>
-      <div class="projects-row">
-        {KNOWN_PROJECTS.map((p) => (
-          <button key={p.alias} type="button" class="project-chip" data-alias={p.alias}>
-            {p.displayName}
-          </button>
-        ))}
-      </div>
-      {!inErrorBanner && <p class="projects-hint">…or paste any GitHub / GitLab URL above.</p>}
-    </section>
   );
 }
 

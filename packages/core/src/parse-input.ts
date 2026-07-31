@@ -13,18 +13,8 @@ import {
   type ReleasedError,
   UnsupportedHostError,
 } from './errors.js';
-import { findProjectByAlias, type KnownProject } from './known-projects.js';
 import { KNOWN_GITLAB_HOSTS } from './providers/index.js';
 import type { LookupInput, RepoRef } from './types.js';
-
-/**
- * Extension hook for {@link parseInput}. Mirrors the `extraGitlabHosts`
- * shape from `providers/index.ts` — callers (CLI flag, web env var) can
- * override the curated `KNOWN_PROJECTS` catalog without touching core.
- */
-export type ParseOpts = {
-  readonly aliases?: readonly KnownProject[];
-};
 
 /** Pull the first `n` capture groups from a successful regex match, asserting
  *  each is present. Every regex in this file has fixed, known capture arity, so
@@ -131,18 +121,14 @@ const GITHUB_HOST = 'github.com';
  *  - {@link BareShaError} for a SHA pasted without a repo.
  *  - {@link NonGithubUrlError} (legacy alias) for cases the catch-all needs.
  */
-export function parseInput(input: string, ref?: string, opts?: ParseOpts): LookupInput {
+export function parseInput(input: string, ref?: string): LookupInput {
   const trimmed = (input ?? '').trim();
   if (!trimmed) throw new InvalidInputError(input ?? '');
 
   if (ref !== undefined) {
-    // Two-arg form: try alias resolution on either token before falling back
-    // to the GitHub repo path. Lets users say `released gtk <sha>` from the CLI.
+    // Two-arg form: `input` is a GitHub repo identifier (URL or owner/repo),
+    // `ref` is a SHA (7-40 hex) or a PR number (optionally `#`-prefixed).
     const trimmedRef = ref.trim();
-    const lhsAlias = resolveAliasToken(trimmed, opts);
-    if (lhsAlias) return resolveRef(lhsAlias, trimmedRef);
-    const rhsAlias = resolveAliasToken(trimmedRef, opts);
-    if (rhsAlias) return resolveRef(rhsAlias, trimmed);
     const repo = parseGithubRepoRef(trimmed);
     return resolveRef(repo, trimmedRef);
   }
@@ -230,12 +216,6 @@ export function parseInput(input: string, ref?: string, opts?: ParseOpts): Looku
       return resolveRef(githubRef(owner, name), a);
     }
   }
-
-  // Alias shorthand — `<alias> <sha>`, `<sha> <alias>`, `<alias>@<sha>`,
-  // `<alias>#<pr>`, `<alias> #<pr>`, `<alias> <pr>`, plus reverse orders.
-  // Resolves the alias via opts.aliases (default KNOWN_PROJECTS) to a host+repo.
-  const aliasHit = tryAliasParse(stripped, opts);
-  if (aliasHit) return aliasHit;
 
   // Bare SHA with no repo context — distinct error kind so the UI can prompt
   // for a repo instead of saying "couldn't parse".
@@ -345,69 +325,4 @@ function extractHost(s: string): string | null {
 /** Heuristic: looks URL-shaped (has scheme or a dotted host with a path). */
 function looksLikeUrl(s: string): boolean {
   return /^https?:\/\//i.test(s) || /^[a-z][\w-]*\.[a-z][\w.-]*\//i.test(s);
-}
-
-/**
- * Resolve a single token to a RepoRef via the known-projects catalog.
- * Returns null if the token isn't a known alias. Defensive: tokens with a
- * slash are not aliases (avoids any collision with owner/repo shorthand).
- */
-function resolveAliasToken(token: string, opts?: ParseOpts): RepoRef | null {
-  if (!token || token.includes('/')) return null;
-  const project = findProjectByAlias(token, opts?.aliases);
-  if (!project) return null;
-  return { host: project.host, projectPath: project.projectPath };
-}
-
-/**
- * Try every alias-shorthand shape on a stripped single-arg input:
- *   alias@sha, alias#pr, "alias sha", "sha alias",
- *   "alias #pr", "#pr alias", "alias pr", "pr alias".
- * Returns the LookupInput or null if no alias form matches.
- */
-function tryAliasParse(s: string, opts?: ParseOpts): LookupInput | null {
-  // No-space: alias@sha (must have no '/' — owner/repo@sha was already tried)
-  if (!s.includes('/')) {
-    const atIdx = s.indexOf('@');
-    if (atIdx > 0) {
-      const left = s.slice(0, atIdx);
-      const right = s.slice(atIdx + 1);
-      if (SHA_RE.test(right)) {
-        const repo = resolveAliasToken(left, opts);
-        if (repo) return { kind: 'commit', repo, sha: right.toLowerCase() };
-      }
-    }
-    // No-space: alias#pr
-    const hashIdx = s.indexOf('#');
-    if (hashIdx > 0) {
-      const left = s.slice(0, hashIdx);
-      const right = s.slice(hashIdx + 1);
-      if (/^\d+$/.test(right)) {
-        const repo = resolveAliasToken(left, opts);
-        if (repo) return { kind: 'pr', repo, number: Number.parseInt(right, 10) };
-      }
-    }
-  }
-
-  // Whitespace-separated, either ordering
-  const parts = s.split(/\s+/);
-  if (parts.length === 2 && parts[0] && parts[1]) {
-    const [a, b] = parts as [string, string];
-    return tryAliasPair(a, b, opts) ?? tryAliasPair(b, a, opts);
-  }
-
-  return null;
-}
-
-/** Helper for tryAliasParse: treat `alias` as alias side, `ref` as SHA/PR side. */
-function tryAliasPair(alias: string, ref: string, opts?: ParseOpts): LookupInput | null {
-  const repo = resolveAliasToken(alias, opts);
-  if (!repo) return null;
-  if (SHA_RE.test(ref)) {
-    return { kind: 'commit', repo, sha: ref.toLowerCase() };
-  }
-  if (PR_REF_RE.test(ref)) {
-    return { kind: 'pr', repo, number: Number.parseInt(ref.replace(/^#/, ''), 10) };
-  }
-  return null;
 }
