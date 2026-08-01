@@ -101,8 +101,12 @@ jobs:
           url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' /tmp/og.log | head -n1 || true)
           echo "url=${url}" >> "$GITHUB_OUTPUT"
 
+      # workflow_dispatch has no PR (context.issue.number is undefined), so the
+      # listComments/createComment calls below would 422. Skip the comment there —
+      # a manual dispatch is a smoke-deploy of the current branch to preview, not
+      # a PR update. Deploy steps above still run (issue #70).
       - name: Comment preview URLs on the PR
-        if: steps.has_secret.outputs.present == 'true'
+        if: steps.has_secret.outputs.present == 'true' && github.event_name == 'pull_request'
         uses: actions/github-script@v9
         env:
           # Pass deploy output through env (not inline ${{ }}) so a malformed
