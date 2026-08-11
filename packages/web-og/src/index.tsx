@@ -138,13 +138,25 @@ export function renderImage(
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 
-  return new ImageResponse(node, {
+  const res = new ImageResponse(node, {
     ...SIZE,
     headers: {
-      'cache-control': cacheControl,
       'x-og-template': OG_TEMPLATE_VERSION,
     },
   });
+  // Set cache-control on the RESPONSE, not through ImageResponse's `headers`
+  // option. workers-og builds its header object as
+  //   { 'Content-Type': …, 'Cache-Control': <1-year immutable default>, ...opts.headers }
+  // and object spread is case-SENSITIVE, so a lowercase 'cache-control' passed
+  // in above does NOT replace that default — both keys reach `new Response`,
+  // where Headers merges them into one value ("public, immutable, no-transform,
+  // max-age=31536000, public, max-age=60") and caches honor the FIRST max-age.
+  // That pinned every short-cached card (placeholder, cold lookup, the
+  // deploy-window notFound render) as immutable for a year, so a transient
+  // failure's unfurl could never refresh. Headers.set is case-insensitive and
+  // replaces the default outright, whatever casing the library uses.
+  res.headers.set('cache-control', cacheControl);
+  return res;
 }
 
 function ResultCard(r: LookupResult) {

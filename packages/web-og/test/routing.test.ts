@@ -17,7 +17,20 @@ vi.mock('workers-og', () => ({
   ImageResponse: class extends Response {
     constructor(node: unknown, init?: { headers?: Record<string, string> }) {
       lastRenderedNode = node;
-      super('PNG-BYTES', { headers: init?.headers ?? {} });
+      // Mirror workers-og's real header construction, including its own
+      // capitalized 'Cache-Control' default and the case-SENSITIVE spread of
+      // the caller's `headers` after it. The old mock passed `init.headers`
+      // straight through, which made every cache-control assertion below
+      // unfalsifiable: prod merged the library's 1-year immutable default in
+      // front of ours, while these tests read back exactly what the caller
+      // passed and stayed green.
+      super('PNG-BYTES', {
+        headers: {
+          'Content-Type': 'image/png',
+          'Cache-Control': 'public, immutable, no-transform, max-age=31536000',
+          ...(init?.headers ?? {}),
+        },
+      });
     }
   },
 }));
@@ -148,7 +161,7 @@ describe('web-og routing', () => {
     // The service binding was called.
     expect(env.WEB.fetch).toHaveBeenCalled();
     // The cache-control should be the LONG one because we got a real result.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
   });
 
   it('returns a placeholder PNG with SHORT cache when the service binding misses', async () => {
@@ -158,7 +171,7 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
   });
 
   // Federated OG (issue #8): the /h/:host/r/:projectPath path renders unfurls for
@@ -191,7 +204,7 @@ describe('web-og routing', () => {
     const calledUrl = String(calls[0]?.[0]);
     expect(calledUrl).toBe('https://web/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/a1b2c3d');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
   });
 
   it('federated: rejects a non-.png URL with 404', async () => {
@@ -209,7 +222,7 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
   });
 
   // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
@@ -219,7 +232,7 @@ describe('web-og routing', () => {
   it('notFound: an unmatched .png renders a short-cached placeholder PNG, not 404', async () => {
     const res = await app.fetch(new Request('https://og.example/totally/unknown.png'), makeEnv());
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -290,7 +303,7 @@ describe('web-og card content', () => {
     expect(text).not.toContain('SHIPPED');
     expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
     // A long-cache header still applies — we DID get a result, it's just unreleased.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
   });
 
   it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
@@ -377,7 +390,7 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(text).toContain('v0.0.11');
     expect(text).toContain('honojs/hono');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toMatch(/max-age=86400/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
   });
 
   it('pr route: calls /internal/pr/:owner/:repo/:number and renders "PR #N" + title', async () => {
@@ -432,7 +445,7 @@ describe('web-og issue/PR cards (#79)', () => {
     const env = makeEnv(new Response('not found', { status: 404 }));
     const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
     expect(text.join(' ')).toContain('honojs/hono #11');
@@ -521,7 +534,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -537,7 +550,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toMatch(/max-age=60/);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
   });
 
   // A verbose issue/PR title (GitHub allows 256 chars) must not overflow the
