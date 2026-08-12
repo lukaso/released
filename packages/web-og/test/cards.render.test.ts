@@ -139,7 +139,7 @@ it('placeholder card (null result): renders a real non-empty PNG', async () => {
 // substring match passes on the merged value and would not have caught this.
 it('placeholder card: cache-control is EXACTLY the short cache (no 1-year default merged in)', () => {
   const res = renderImage(null, { owner: 'facebook', repo: 'react', sha: 'abc1234' });
-  expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
 });
 
 it('result card: cache-control is EXACTLY the long cache (no 1-year default merged in)', () => {
@@ -151,5 +151,7 @@ it('result card: cache-control is EXACTLY the long cache (no 1-year default merg
     }),
     { owner: 'facebook', repo: 'react', sha: 'abc1234' },
   );
-  expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+  expect(res.headers.get('cache-control')).toBe(
+    'public, no-transform, max-age=86400, s-maxage=86400',
+  );
 });

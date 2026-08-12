@@ -162,7 +162,9 @@ describe('web-og routing', () => {
     // The service binding was called.
     expect(env.WEB.fetch).toHaveBeenCalled();
     // The cache-control should be the LONG one because we got a real result.
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('returns a placeholder PNG with SHORT cache when the service binding misses', async () => {
@@ -172,7 +174,7 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // Federated OG (issue #8): the /h/:host/r/:projectPath path renders unfurls for
@@ -205,7 +207,9 @@ describe('web-og routing', () => {
     const calledUrl = String(calls[0]?.[0]);
     expect(calledUrl).toBe('https://web/internal/h/gitlab.gnome.org/r/GNOME%2Fgimp/a1b2c3d');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('federated: rejects a non-.png URL with 404', async () => {
@@ -223,7 +227,91 @@ describe('web-og routing', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+  });
+
+  // The deploy-window version gate is NOT specific to /placeholder.png: `web`
+  // links EVERY card as `<url>.png?v=${OG_TEMPLATE_VERSION}` (og-meta.tsx), and
+  // release.yml deploys `web` before `web-og`, so during the window this build
+  // is asked for `?v=og.vNEXT` on the dynamic routes too — the ones whose
+  // content actually differs per commit/issue/PR. Long-caching a version-busted
+  // URL rendered from the OLD template pins a stale card for 24h with no second
+  // URL left to bust, so a version this build cannot render forces SHORT_CACHE.
+  const VERSIONED_CARD_ROUTES = [
+    ['github commit', '/r/facebook/react/c/a1b2c3d.png'],
+    ['federated commit', '/h/gitlab.gnome.org/r/GNOME%2Fgimp/c/a1b2c3d.png'],
+    ['github issue', '/i/facebook/react/11.png'],
+    ['github PR', '/p/facebook/react/4834.png'],
+    ['federated issue', '/h/gitlab.com/i/gitlab-org%2Fgitlab-runner/39607.png'],
+    ['federated PR', '/h/gitlab.com/p/gitlab-org%2Fgitlab-runner/6867.png'],
+  ] as const;
+
+  // A real (non-null) result, so the route takes the LONG cache branch — the
+  // only branch the version gate can change.
+  function realResultEnv(): ReturnType<typeof makeEnv> {
+    const sha40 = 'a'.repeat(40);
+    return makeEnv(
+      new Response(
+        JSON.stringify({
+          input: { kind: 'commit', repo: { owner: 'facebook', repo: 'react' }, sha: sha40 },
+          canonicalSha: sha40,
+          firstRelease: { tag: 'v1.0.0', sha: 's', date: '2024-01-01T00:00:00Z', url: '' },
+          alsoIn: [],
+          releaseNotesHtml: null,
+          rateLimit: null,
+        }),
+      ),
+    );
+  }
+
+  for (const [label, path] of VERSIONED_CARD_ROUTES) {
+    it(`${label}: a version this build cannot render falls back to the SHORT cache`, async () => {
+      const res = await app.fetch(
+        new Request(`https://og.example${path}?v=og.vNEXT`),
+        realResultEnv(),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+    });
+
+    it(`${label}: the CURRENT template version still gets the LONG cache`, async () => {
+      const res = await app.fetch(
+        new Request(`https://og.example${path}?v=${OG_TEMPLATE_VERSION}`),
+        realResultEnv(),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe(
+        'public, no-transform, max-age=86400, s-maxage=86400',
+      );
+    });
+  }
+
+  // No `v` at all is not a URL `web` emits, but it is also not evidence of a
+  // template mismatch (a hand-typed or pre-#55 crawler URL) — it keeps the
+  // result-based default rather than being punished into the short cache.
+  it('dynamic card: an unversioned request keeps the LONG cache for a real result', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      realResultEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
+  });
+
+  // `Headers.set` replaces workers-og's whole default value, which silently
+  // dropped the `no-transform` that shipped on every OG response before the
+  // override fix. These PNGs are the byte-exact social card `web` links; a
+  // transforming edge (Polish/Mirage or any proxy) must not recompress them.
+  it('cache-control keeps no-transform on both the long and the short cache', async () => {
+    const long = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/a1b2c3d.png'),
+      realResultEnv(),
+    );
+    const short = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    expect(long.headers.get('cache-control')).toContain('no-transform');
+    expect(short.headers.get('cache-control')).toContain('no-transform');
   });
 
   // The static /placeholder.png is the ONE null-result render that is NOT
@@ -240,7 +328,9 @@ describe('web-og routing', () => {
       makeEnv(),
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
     expect(collectText(lastRenderedNode)).toContain('Looking up…');
   });
 
@@ -257,7 +347,7 @@ describe('web-og routing', () => {
       makeEnv(),
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // An unversioned hit is not a URL `web` ever emits (og-meta.tsx always
@@ -265,7 +355,7 @@ describe('web-og routing', () => {
   it('/placeholder.png: an unversioned request gets the SHORT cache', async () => {
     const res = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
@@ -275,7 +365,7 @@ describe('web-og routing', () => {
   it('notFound: an unmatched .png renders a short-cached placeholder PNG, not 404', async () => {
     const res = await app.fetch(new Request('https://og.example/totally/unknown.png'), makeEnv());
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -346,7 +436,9 @@ describe('web-og card content', () => {
     expect(text).not.toContain('SHIPPED');
     expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
     // A long-cache header still applies — we DID get a result, it's just unreleased.
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
@@ -433,7 +525,9 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(text).toContain('v0.0.11');
     expect(text).toContain('honojs/hono');
     // Real result → long cache.
-    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=86400, s-maxage=86400',
+    );
   });
 
   it('pr route: calls /internal/pr/:owner/:repo/:number and renders "PR #N" + title', async () => {
@@ -488,7 +582,7 @@ describe('web-og issue/PR cards (#79)', () => {
     const env = makeEnv(new Response('not found', { status: 404 }));
     const res = await app.fetch(new Request('https://og.example/i/honojs/hono/11.png'), env);
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
     expect(text.join(' ')).toContain('honojs/hono #11');
@@ -577,7 +671,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
     const text = collectText(lastRenderedNode);
     expect(text).toContain('Looking up…');
   });
@@ -593,7 +687,7 @@ describe('web-og issue/PR cards (#79)', () => {
       env,
     );
     expect(res.status).toBe(200);
-    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   // A verbose issue/PR title (GitHub allows 256 chars) must not overflow the
