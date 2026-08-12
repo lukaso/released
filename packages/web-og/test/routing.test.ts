@@ -225,6 +225,21 @@ describe('web-og routing', () => {
     expect(res.headers.get('cache-control')).toBe('public, max-age=60');
   });
 
+  // The static /placeholder.png is the ONE null-result render that is NOT
+  // transient: it is byte-identical on every request (no owner/repo/sha), and
+  // `web` only ever links it with `?v=${OG_TEMPLATE_VERSION}`
+  // (packages/web/src/ui/og-meta.tsx), so a template change busts the URL
+  // rather than needing the TTL to expire. Short-caching it would re-run a
+  // ~700ms satori+resvg wasm render every 60s for an image that can never
+  // differ. It opts into the long cache explicitly — the null-result default
+  // stays SHORT for the genuinely transient callers (binding miss, notFound).
+  it('/placeholder.png: the static route gets the LONG cache, not the null-result short cache', async () => {
+    const res = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
+    expect(collectText(lastRenderedNode)).toContain('Looking up…');
+  });
+
   // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
   // OG URL hit during the web→web-og deploy window before web-og ships the
   // matching route) renders a placeholder PNG, not a 404 text body — so a social

@@ -108,7 +108,15 @@ app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
   return renderImage(result, { owner, repo, number });
 });
 
-app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '' }));
+// The one null-result render that is NOT transient: no owner/repo/sha, so the
+// PNG is byte-identical on every request, and `web` only ever links it as
+// `/placeholder.png?v=${OG_TEMPLATE_VERSION}` (packages/web/src/ui/og-meta.tsx)
+// — a template change busts the URL instead of waiting out a TTL. Inheriting
+// the null-result SHORT_CACHE would re-run a ~700ms satori+resvg wasm render
+// every 60s for an image that can never differ, so it opts into LONG_CACHE
+// explicitly. The default stays short for the genuinely transient null
+// renders (service-binding miss, the notFound deploy-window path below).
+app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '' }, LONG_CACHE));
 
 app.get('/healthz', (c) => c.text('ok'));
 
@@ -127,14 +135,16 @@ export default app;
 
 // --- rendering ---------------------------------------------------------------
 
+export const LONG_CACHE = `public, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
+export const SHORT_CACHE = 'public, max-age=60';
+
 export function renderImage(
   result: LookupResult | null,
   ctx: { owner: string; repo: string; sha?: string; number?: string },
+  cacheOverride?: string,
 ): Response {
   const SIZE = { width: 1200, height: 630 };
-  const longCache = `public, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
-  const shortCache = 'public, max-age=60';
-  const cacheControl = result ? longCache : shortCache;
+  const cacheControl = cacheOverride ?? (result ? LONG_CACHE : SHORT_CACHE);
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 
