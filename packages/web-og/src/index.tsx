@@ -116,7 +116,20 @@ app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
 // every 60s for an image that can never differ, so it opts into LONG_CACHE
 // explicitly. The default stays short for the genuinely transient null
 // renders (service-binding miss, the notFound deploy-window path below).
-app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '' }, LONG_CACHE));
+//
+// The long cache is gated on the requested version being one THIS build can
+// render, because `release.yml` deploys `web` before `web-og`: on a template
+// bump `web` emits `?v=og.vNEXT` while this Worker is still the old build, and
+// long-caching that URL would pin a stale-template card for 24h with no second
+// URL left to bust. Falling back to SHORT_CACHE self-heals 60s after web-og
+// lands, then the version matches and the 24h cache resumes.
+app.get('/placeholder.png', (c) =>
+  renderImage(
+    null,
+    { owner: '', repo: '' },
+    c.req.query('v') === OG_TEMPLATE_VERSION ? LONG_CACHE : SHORT_CACHE,
+  ),
+);
 
 app.get('/healthz', (c) => c.text('ok'));
 

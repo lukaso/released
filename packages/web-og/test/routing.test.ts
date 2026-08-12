@@ -2,6 +2,7 @@
 // PNG rendering depends on WASM and the Workers runtime, which we verify with
 // `wrangler dev` rather than in vitest.
 
+import { OG_TEMPLATE_VERSION } from '@released/core';
 import { describe, expect, it, vi } from 'vitest';
 
 // The last satori node tree handed to ImageResponse. The real PNG render is
@@ -234,10 +235,37 @@ describe('web-og routing', () => {
   // differ. It opts into the long cache explicitly — the null-result default
   // stays SHORT for the genuinely transient callers (binding miss, notFound).
   it('/placeholder.png: the static route gets the LONG cache, not the null-result short cache', async () => {
-    const res = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    const res = await app.fetch(
+      new Request(`https://og.example/placeholder.png?v=${OG_TEMPLATE_VERSION}`),
+      makeEnv(),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('public, max-age=86400, s-maxage=86400');
     expect(collectText(lastRenderedNode)).toContain('Looking up…');
+  });
+
+  // ...but only for a version THIS build can render. `release.yml` deploys
+  // `web` BEFORE `web-og`, so on a template bump `web` is already emitting
+  // `?v=og.vNEXT` while this Worker is still the OLD build. Long-caching that
+  // URL would pin a stale-template card for 24h at every scraper that unfurled
+  // during the deploy window — and the busting URL is already spent, so there
+  // is no second URL to bump. An unrenderable version falls back to the SHORT
+  // cache and self-heals 60s after web-og lands.
+  it('/placeholder.png: a version this build cannot render falls back to the SHORT cache', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/placeholder.png?v=og.vNEXT'),
+      makeEnv(),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
+  });
+
+  // An unversioned hit is not a URL `web` ever emits (og-meta.tsx always
+  // appends `?v=`), so it gets no long-cache guarantee either.
+  it('/placeholder.png: an unversioned request gets the SHORT cache', async () => {
+    const res = await app.fetch(new Request('https://og.example/placeholder.png'), makeEnv());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('public, max-age=60');
   });
 
   // Deploy-order safety: an unmatched .png (a stale crawler URL, or a permalink
