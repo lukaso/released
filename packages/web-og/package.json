@@ -12,14 +12,14 @@
   },
   "dependencies": {
     "@released/core": "workspace:*",
-    "hono": "^4.12.32",
+    "hono": "^4.13.1",
     "workers-og": "^0.0.27"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@cloudflare/vitest-pool-workers": "0.20.3",
     "@cloudflare/workers-types": "^5.20260708.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.10",
-    "wrangler": "^4.114.0"
+    "wrangler": "^4.120.0"
   }
 }
