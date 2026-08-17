@@ -6,7 +6,7 @@
 
 import { cacheKey, findRelease, type LookupInput, type LookupResult } from '@released/core';
 import type { Context } from 'hono';
-import { makeWorkerCache } from '../cache.js';
+import { makeWorkerCache, type WorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
 import { makeProvider } from '../provider.js';
 import { singleFlight } from '../single-flight.js';
@@ -30,20 +30,54 @@ function isServiceBinding(c: Context): boolean {
   return !!marker && marker === secret;
 }
 
+/** Origin for the result-cache key URL.
+ *
+ *  web-og hardcodes `https://web/internal/...` as the Service-Binding target, so
+ *  keying the cache on the incoming request broke OG renders two ways (#143):
+ *  `web` is not a routable hostname, which the Cache API silently declines to
+ *  store (see cache.ts's header note), and it is a different namespace from the
+ *  public permalink routes'. The OG path could therefore neither reuse a warm
+ *  public entry nor persist its own, so every cold unfurl paid a full lookup,
+ *  blew web-og's deadline, and got the placeholder cached by the crawler.
+ *
+ *  Resolve the canonical public origin instead: an explicit PUBLIC_BASE_URL, else
+ *  the committed PROD_HOST var, else the request's own origin (`wrangler dev`
+ *  and tests, where neither var is set). */
+function cacheOrigin(env: Env, req: Request): string {
+  if (env.PUBLIC_BASE_URL) return env.PUBLIC_BASE_URL.replace(/\/$/, '');
+  if (env.PROD_HOST) return `https://${env.PROD_HOST}`;
+  return new URL(req.url).origin;
+}
+
+/** cache.get that is never fatal. The key URL is deliberately not this request's
+ *  origin (see cacheOrigin), so a Cache API refusal must degrade to a recompute
+ *  rather than a 500 that web-og would render as a placeholder. */
+async function cachedResult(cache: WorkerCache, k: string): Promise<LookupResult | null> {
+  try {
+    return await cache.get<LookupResult>(k);
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve the LookupResult JSON for a lookup input. Cache-first, then compute
- *  via the (relay-aware) provider. Host-aware cache key so OG renders share slots
- *  with the public routes' `${host}/${projectPath}` prefix; the input kind+id
- *  distinguishes the slot (`sha:` / `issue:` / `pr:`), mirroring the commit
- *  endpoint's `sha:${sha}` scheme. */
+ *  via the (relay-aware) provider.
+ *
+ *  The cache key MUST match the public permalink routes' exactly (result.tsx,
+ *  issue.tsx, pr.tsx) or the OG card renders into a namespace no public hit can
+ *  ever warm — that was half of #143. That means all five parts, including the
+ *  `cull`/`nopre` suffixes for the default (non-strict, no-prerelease) options an
+ *  OG card always renders, and the public `issue#`/`pr#` id spelling rather than
+ *  the `issue:`/`pr:` this endpoint used to invent. */
 async function resolveResult(c: Context, input: LookupInput): Promise<Response> {
   const env = c.env as Env;
   const req = c.req.raw;
   const { host, projectPath } = input.repo;
 
-  const idPart = input.kind === 'commit' ? `sha:${input.sha}` : `${input.kind}:${input.number}`;
-  const k = await cacheKey('res', `${host}/${projectPath}`, idPart);
-  const cache = makeWorkerCache(req);
-  let result: LookupResult | null = await cache.get<LookupResult>(k);
+  const idPart = input.kind === 'commit' ? `sha:${input.sha}` : `${input.kind}#${input.number}`;
+  const k = await cacheKey('res', `${host}/${projectPath}`, idPart, 'cull', 'nopre');
+  const cache = makeWorkerCache(new Request(cacheOrigin(env, req)));
+  let result: LookupResult | null = await cachedResult(cache, k);
   if (result) {
     return new Response(JSON.stringify(result), {
       headers: { 'content-type': 'application/json' },
@@ -57,7 +91,10 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     result = await singleFlight(k, async () => {
       const re = await cache.get<LookupResult>(k);
       if (re) return re;
-      const r = await findRelease(input, { client });
+      // Options stated explicitly: they are what the `cull`/`nopre` key parts
+      // above promise, so the slot this writes is the one a default public
+      // permalink hit reads back.
+      const r = await findRelease(input, { client, strict: false, includePrereleases: false });
       await cache.put(k, r, 30 * 60);
       return r;
     });
