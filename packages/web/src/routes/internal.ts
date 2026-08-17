@@ -4,12 +4,13 @@
 // web-og calls these via a Cloudflare Service Binding (env.WEB.fetch(...)) to get
 // the result JSON for rendering the OG PNG. Direct public hits are rejected.
 
-import { cacheKey, findRelease, type LookupInput, type LookupResult } from '@released/core';
+import { cacheKey, findRelease, type LookupInput } from '@released/core';
 import type { Context } from 'hono';
-import { makeWorkerCache, type WorkerCache } from '../cache.js';
+import type { CacheEntry, WorkerCache } from '../cache.js';
+import { makeWorkerCache } from '../cache.js';
 import type { Env } from '../env.js';
 import { makeProvider } from '../provider.js';
-import { singleFlight } from '../single-flight.js';
+import { type Resolved, resolveLookup } from '../resolve.js';
 
 /** Marker header set by the web-og Service Binding to identify itself.
  *  Cloudflare Service Binding requests can also be checked via the routing
@@ -40,24 +41,60 @@ function isServiceBinding(c: Context): boolean {
  *  public entry nor persist its own, so every cold unfurl paid a full lookup,
  *  blew web-og's deadline, and got the placeholder cached by the crawler.
  *
- *  Resolve the canonical public origin instead: an explicit PUBLIC_BASE_URL, else
- *  the committed PROD_HOST var, else the request's own origin (`wrangler dev`
- *  and tests, where neither var is set). */
+ *  Resolve the origin this deployment's own public routes key on: an explicit
+ *  PUBLIC_BASE_URL, else the committed PROD_HOST var, else the request's origin.
+ *
+ *  PUBLIC_BASE_URL is what makes that per-environment. PROD_HOST is committed in
+ *  BOTH [vars] and [env.preview.vars] (it gates analytics, which must stay
+ *  prod-only), so without an explicit override the preview Worker — and
+ *  `wrangler dev`, which loads [vars] — would key on the production origin while
+ *  their public routes key on the origin they actually serve. wrangler.toml sets
+ *  PUBLIC_BASE_URL for preview; for `wrangler dev`, put
+ *  `PUBLIC_BASE_URL=http://localhost:8787` in packages/web/.dev.vars. Only the
+ *  unit tests reach the request-origin fallback. */
 function cacheOrigin(env: Env, req: Request): string {
   if (env.PUBLIC_BASE_URL) return env.PUBLIC_BASE_URL.replace(/\/$/, '');
   if (env.PROD_HOST) return `https://${env.PROD_HOST}`;
   return new URL(req.url).origin;
 }
 
-/** cache.get that is never fatal. The key URL is deliberately not this request's
- *  origin (see cacheOrigin), so a Cache API refusal must degrade to a recompute
- *  rather than a 500 that web-og would render as a placeholder. */
-async function cachedResult(cache: WorkerCache, k: string): Promise<LookupResult | null> {
-  try {
-    return await cache.get<LookupResult>(k);
-  } catch {
-    return null;
-  }
+/** Wrap a cache so no Cache API call can be fatal. The key URL is deliberately
+ *  not this request's own origin (see cacheOrigin) and the Cache API is entitled
+ *  to refuse such a read or write; that must degrade to "served, just not
+ *  cached". A 503 here is what web-og renders as the neutral placeholder — the
+ *  #143 symptom — so a cache fault must never throw away a computed answer. */
+function neverFatal(cache: WorkerCache): WorkerCache {
+  return {
+    async get<T>(key: string): Promise<T | null> {
+      try {
+        return await cache.get<T>(key);
+      } catch {
+        return null;
+      }
+    },
+    async getEntry<T>(key: string): Promise<CacheEntry<T> | null> {
+      try {
+        return await cache.getEntry<T>(key);
+      } catch {
+        return null;
+      }
+    },
+    async put<T>(key: string, value: T, ttlSeconds: number): Promise<void> {
+      try {
+        await cache.put(key, value, ttlSeconds);
+      } catch {
+        // Served, just not cached.
+      }
+    },
+  };
+}
+
+/** Message for the 503 web-og reads as "no result" (it renders the neutral card
+ *  for any non-OK response, so only the body text differs by cause). */
+function failureMessage(resolved: Exclude<Resolved, { status: 'ok' }>): string {
+  if (resolved.status === 'not_yet') return resolved.error.message;
+  if (resolved.status === 'transient') return resolved.kind;
+  return (resolved.error as Error)?.message ?? 'failed';
 }
 
 /** Resolve the LookupResult JSON for a lookup input. Cache-first, then compute
@@ -76,37 +113,36 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
 
   const idPart = input.kind === 'commit' ? `sha:${input.sha}` : `${input.kind}#${input.number}`;
   const k = await cacheKey('res', `${host}/${projectPath}`, idPart, 'cull', 'nopre');
-  const cache = makeWorkerCache(new Request(cacheOrigin(env, req)));
-  let result: LookupResult | null = await cachedResult(cache, k);
-  if (result) {
-    return new Response(JSON.stringify(result), {
-      headers: { 'content-type': 'application/json' },
-    });
-  }
+  const cache = neverFatal(makeWorkerCache(new Request(cacheOrigin(env, req))));
 
-  // Cache miss: compute. The web-og caller chose to wait for this on its side.
-  // Anubis-protected hosts get a relay-backed fetch (see makeProvider/relay.ts).
-  try {
-    const client = makeProvider(env, req, host);
-    result = await singleFlight(k, async () => {
-      const re = await cache.get<LookupResult>(k);
-      if (re) return re;
-      // Options stated explicitly: they are what the `cull`/`nopre` key parts
-      // above promise, so the slot this writes is the one a default public
-      // permalink hit reads back.
-      const r = await findRelease(input, { client, strict: false, includePrereleases: false });
-      await cache.put(k, r, 30 * 60);
-      return r;
-    });
-    return new Response(JSON.stringify(result), {
-      headers: { 'content-type': 'application/json' },
-    });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: (err as Error)?.message ?? 'failed' }), {
-      status: 503,
+  // Same resolver the public routes use, on the same slot — sharing a cache slot
+  // means sharing the policy that governs it: per-state hard TTLs (30 days
+  // terminal / 24h pending / 60s partial), a 5-minute freshness window, and the
+  // negative back-off that keeps a down host from being pounded. A flat TTL here
+  // would downgrade a terminal slot the permalink would have kept for 30 days,
+  // and a bare read would keep serving a 60-second partial for far longer than
+  // the public page does. Options are stated explicitly because they are what the
+  // `cull`/`nopre` key parts promise. Anubis-protected hosts get a relay-backed
+  // fetch (see makeProvider/relay.ts). The web-og caller chose to wait for this.
+  const resolved = await resolveLookup({
+    cache,
+    key: k,
+    load: () =>
+      findRelease(input, {
+        client: makeProvider(env, req, host),
+        strict: false,
+        includePrereleases: false,
+      }),
+  });
+  if (resolved.status === 'ok') {
+    return new Response(JSON.stringify(resolved.result), {
       headers: { 'content-type': 'application/json' },
     });
   }
+  return new Response(JSON.stringify({ error: failureMessage(resolved) }), {
+    status: 503,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 /** Parse a permalink :number param into a positive int, or null if invalid. */

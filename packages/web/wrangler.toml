@@ -122,6 +122,12 @@ ANUBIS_HOSTS = ""
 # the preview never writes the prod released_events dataset. See isProdRequest()
 # in src/analytics.ts. The analytics binding below is isolated regardless.
 PROD_HOST = "released.blabberate.com"
+# Cache origin + canonical URLs for THIS deployment. Without it the /internal/*
+# endpoints web-og calls fall back to PROD_HOST above and key the result cache on
+# a host the preview Worker does not serve — the #143 misalignment, in the one
+# environment OG changes get reviewed in. Must stay the preview Worker's own URL
+# (name above + the account's workers.dev subdomain).
+PUBLIC_BASE_URL = "https://released-web-preview.lukaso.workers.dev"
 
 [env.preview.assets]
 directory = "./public"
