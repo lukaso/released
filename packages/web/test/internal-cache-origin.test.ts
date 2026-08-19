@@ -142,6 +142,33 @@ function cacheControlOf(origin: string, key: string): string | null {
   return cacheStore.get(keyUrl(origin, key))?.headers.get('cache-control') ?? null;
 }
 
+/** Let a background (waitUntil) refresh run to completion. Must flush MACROtasks,
+ *  not just microtasks: the refresh chain awaits several real promises, and
+ *  singleFlight keeps a module-level in-flight entry per key that only clears when
+ *  the load settles — leaving one pending would make the NEXT test join it. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 3; i++) await new Promise((r) => setTimeout(r, 0));
+}
+
+/** The tag currently stored in a cache slot — how a BACKGROUND refresh is proven
+ *  to have landed, since it by definition isn't in the response body. */
+async function tagOfSlot(origin: string, key: string): Promise<string | undefined> {
+  const stored = cacheStore.get(keyUrl(origin, key));
+  if (!stored) return undefined;
+  const body = (await stored.clone().json()) as { firstRelease?: { tag?: string } };
+  return body.firstRelease?.tag;
+}
+
+/** An upstream lookup that hangs until the test releases it — the only way to
+ *  prove a response did NOT wait for it. */
+function deferred(): { promise: Promise<unknown>; resolve: (v: unknown) => void } {
+  let resolve!: (v: unknown) => void;
+  const promise = new Promise<unknown>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   cacheStore.clear();
   cacheFault = 'none';
@@ -283,12 +310,14 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     findReleaseMock.mockResolvedValue(fixture('v4.12.0'));
 
     const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
+    await settle();
 
     expect(res.status).toBe(200);
-    // The public page would already be showing v4.12.0; the OG card must not keep
-    // rendering the pending answer for another 30 minutes.
-    expect(await tagOf(res)).toBe('v4.12.0');
+    // The revalidation still happens — it just no longer sits on the render path
+    // (see the stale-while-revalidate suite below); the slot ends up refreshed so
+    // the OG card can't keep rendering the pending answer for another 30 minutes.
     expect(findReleaseMock).toHaveBeenCalledOnce();
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0');
   });
 
   it('serves the last-known-good answer when the upstream blips, and backs off', async () => {
@@ -299,6 +328,7 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     );
 
     const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
+    await settle();
 
     expect(res.status).toBe(200);
     expect(await subjectOf(res)).toBe('last known good');
@@ -353,5 +383,106 @@ describe('preview keys the result cache on an origin it actually serves', () => 
     const host = new URL(url as string).host;
     expect(host).not.toBe(cfg.vars.PROD_HOST);
     expect(host).toContain(cfg.env.preview.name);
+  });
+});
+
+// A crawler caches whatever the unfurl returns, so anything that makes web-og
+// WAIT is a #143 risk: the shared policy revalidates a pending answer after 5
+// minutes and a partial after 60 seconds, and findRelease's own soft deadline is
+// 24s. Blocking on that revalidation would hand the crawler a placeholder with
+// max-age=60 — the #143 outcome, reached from a merely-stale entry instead of a
+// cold one. So on this path a cached answer is served IMMEDIATELY and the refresh
+// runs in the background. (A genuinely COLD slot still blocks — there is nothing
+// to serve — but it write-backs, so it is cold at most once.)
+describe('/internal/* never blocks the render on a revalidation', () => {
+  it('serves a stale pending answer without waiting for the upstream lookup', async () => {
+    const sha = 'b'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, pendingFixture('stale pending'), 10 * 60);
+    const slow = deferred();
+    findReleaseMock.mockReturnValue(slow.promise);
+
+    // The upstream lookup has NOT resolved at this point. If the render waited on
+    // it, this await never returns and the test times out — which is the whole claim.
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await subjectOf(res)).toBe('stale pending');
+
+    slow.resolve(fixture('v4.12.0'));
+    await settle();
+    // The revalidation was not skipped — it ran behind the render.
+    expect(findReleaseMock).toHaveBeenCalledOnce();
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0');
+  });
+
+  it('serves a stale PARTIAL without waiting, then refreshes the slot behind it', async () => {
+    const sha = 'c'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 5 * 60);
+    const slow = deferred();
+    findReleaseMock.mockReturnValue(slow.promise);
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBeUndefined(); // the partial, served as-is
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBeUndefined(); // not refreshed YET
+
+    slow.resolve(fixture('v4.12.0'));
+    await settle();
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0'); // the background refresh landed
+  });
+
+  it('still blocks (and write-backs) when the slot is genuinely cold', async () => {
+    const sha = 'd'.repeat(40);
+    findReleaseMock.mockResolvedValue(fixture('v4.15.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.15.0');
+  });
+});
+
+// PROD_HOST is shared with isProdRequest() (analytics.ts), which documents itself
+// as tolerant of a value written WITH a scheme ("copied from PUBLIC_BASE_URL").
+// `https://` + that value parses without throwing — to origin `https://https` —
+// so an un-normalised read here would key every /internal entry on a non-routable
+// host the Cache API drops: #143 again, silent, with neverFatal swallowing it.
+describe('/internal/* normalises a configured cache origin', () => {
+  it('keys on the real origin when PROD_HOST is written WITH a scheme', async () => {
+    const sha = 'e'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seed(PUBLIC_ORIGIN, k, fixture('v4.16.0'));
+    // Distinguishable from the seeded slot: if the key lands on `https://https`
+    // the seeded entry is invisible and this recomputed answer is what comes back.
+    findReleaseMock.mockResolvedValue(fixture('MISSED-THE-PUBLIC-SLOT'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), {
+      INTERNAL_SECRET,
+      PROD_HOST: `https://${PROD_HOST}`,
+    });
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.16.0'); // the PUBLIC slot was hit
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('keys on the real origin when PUBLIC_BASE_URL is written WITHOUT one', async () => {
+    const sha = 'f'.repeat(40);
+    findReleaseMock.mockResolvedValue(fixture('v4.17.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), {
+      INTERNAL_SECRET,
+      PUBLIC_BASE_URL: PROD_HOST,
+    });
+
+    // Pre-fix this threw out of `new Request(...)` — outside neverFatal — so the
+    // computed answer became a 503, which web-og renders as the placeholder.
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.17.0');
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.17.0');
   });
 });

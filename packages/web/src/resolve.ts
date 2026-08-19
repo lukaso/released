@@ -90,8 +90,14 @@ export async function resolveLookup(args: {
   key: string;
   load: () => Promise<LookupResult>;
   now?: () => number;
+  /** Opt-in stale-while-revalidate, for callers on a latency-critical path.
+   *  When given, a cached-but-stale answer is returned IMMEDIATELY and the
+   *  revalidation is handed to this callback to run off the response path
+   *  (`executionCtx.waitUntil`). Callers that can afford to wait — the public
+   *  HTML routes — omit it and keep the blocking behaviour. */
+  revalidate?: (task: Promise<unknown>) => void;
 }): Promise<Resolved> {
-  const { cache, key, load } = args;
+  const { cache, key, load, revalidate } = args;
   const now = args.now ?? Date.now;
 
   const prior = await cache.getEntry<LookupResult>(key);
@@ -106,6 +112,15 @@ export async function resolveLookup(args: {
     staleAsOf: now() - (prior as CacheEntry<LookupResult>).ageSeconds * 1000,
     cached: true,
   });
+
+  // Stale-while-revalidate: serve what we have, refresh behind it. The refresh is
+  // a plain recursive call WITHOUT `revalidate`, so it takes the blocking path and
+  // cannot recurse again. Errors are absorbed here — a background failure must not
+  // surface as an unhandled rejection on a response that already succeeded.
+  if (prior && revalidate) {
+    revalidate(resolveLookup({ cache, key, load, now }).catch(() => undefined));
+    return staleHit();
+  }
 
   // Did we try (and fail transiently) very recently? If so, don't pound the
   // upstream again yet — serve the last-known-good if we have one, else a soft

@@ -53,9 +53,43 @@ function isServiceBinding(c: Context): boolean {
  *  `PUBLIC_BASE_URL=http://localhost:8787` in packages/web/.dev.vars. Only the
  *  unit tests reach the request-origin fallback. */
 function cacheOrigin(env: Env, req: Request): string {
-  if (env.PUBLIC_BASE_URL) return env.PUBLIC_BASE_URL.replace(/\/$/, '');
-  if (env.PROD_HOST) return `https://${env.PROD_HOST}`;
-  return new URL(req.url).origin;
+  return originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST) ?? new URL(req.url).origin;
+}
+
+/** Normalise a configured host or base URL to a bare origin, or null if it is
+ *  unset/unparseable.
+ *
+ *  Both spellings have to be tolerated, because both vars are already written
+ *  both ways: PUBLIC_BASE_URL carries a scheme, PROD_HOST does not, and
+ *  isProdRequest() (analytics.ts) documents PROD_HOST as forgiving of a value
+ *  "copied from PUBLIC_BASE_URL". Concatenating a scheme blindly does NOT throw
+ *  on the mixed case — `new URL('https://https://host')` yields origin
+ *  `https://https` — so it would silently key every entry on a non-routable host
+ *  the Cache API drops, which is #143 exactly, with neverFatal swallowing it.
+ *  The reverse slip is worse: a scheme-less PUBLIC_BASE_URL made `new Request()`
+ *  throw OUTSIDE neverFatal, turning a computed answer into a 503 → placeholder.
+ *  Parsing both through URL and taking .origin also drops any path/trailing slash. */
+function originOf(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value.includes('//') ? value : `https://${value}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+/** Run a task off the response path. web-og awaits this endpoint with no timeout
+ *  and the crawler caches whatever it finally gets, so a revalidation that blocks
+ *  here is the #143 mechanism reached from a merely-stale entry: findRelease's own
+ *  soft deadline is 24s, and a blown deadline hands the crawler the neutral
+ *  placeholder at max-age=60. */
+function background(c: Context, task: Promise<unknown>): void {
+  try {
+    c.executionCtx.waitUntil(task);
+  } catch {
+    // No ExecutionContext (unit tests, some dev runners): the refresh still runs,
+    // it just isn't kept alive by the runtime. Already .catch()-guarded upstream.
+  }
 }
 
 /** Wrap a cache so no Cache API call can be fatal. The key URL is deliberately
@@ -121,7 +155,10 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
   // negative back-off that keeps a down host from being pounded. A flat TTL here
   // would downgrade a terminal slot the permalink would have kept for 30 days,
   // and a bare read would keep serving a 60-second partial for far longer than
-  // the public page does. Options are stated explicitly because they are what the
+  // the public page does. Sharing the policy must NOT mean sharing the wait: this
+  // caller is a crawler's critical path, so it opts into stale-while-revalidate
+  // (`revalidate`) and never blocks on a refresh.
+  // Options are stated explicitly because they are what the
   // `cull`/`nopre` key parts promise. Anubis-protected hosts get a relay-backed
   // fetch (see makeProvider/relay.ts). The web-og caller chose to wait for this.
   const resolved = await resolveLookup({
@@ -133,6 +170,8 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
         strict: false,
         includePrereleases: false,
       }),
+    // Serve a cached answer immediately and refresh behind it (see background()).
+    revalidate: (task) => background(c, task),
   });
   if (resolved.status === 'ok') {
     return new Response(JSON.stringify(resolved.result), {
