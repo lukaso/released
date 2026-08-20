@@ -124,9 +124,17 @@ ANUBIS_HOSTS = ""
 PROD_HOST = "released.blabberate.com"
 # Cache origin + canonical URLs for THIS deployment. Without it the /internal/*
 # endpoints web-og calls fall back to PROD_HOST above and key the result cache on
-# a host the preview Worker does not serve — the #143 misalignment, in the one
-# environment OG changes get reviewed in. Must stay the preview Worker's own URL
-# (name above + the account's workers.dev subdomain).
+# a host the preview Worker does not serve. Must stay the preview Worker's own
+# URL (name above + the account's workers.dev subdomain).
+#
+# NOTE: this does NOT make preview a place the #143 cache alignment can be
+# exercised. Cloudflare documents Cache API operations as functional only for
+# Workers on custom domains, so on a *.workers.dev preview neither the public
+# routes nor /internal ever warm a slot, and a second unfurl still pays a full
+# lookup however the origins line up. The alignment is proven by the unit tests
+# (test/internal-cache-origin.test.ts) and only takes effect on the prod custom
+# domain. The var is still correct to set: it keeps preview off the prod key
+# namespace and drives canonical URLs.
 PUBLIC_BASE_URL = "https://released-web-preview.lukaso.workers.dev"
 
 [env.preview.assets]

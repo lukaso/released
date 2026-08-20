@@ -72,7 +72,14 @@ function cacheOrigin(env: Env, req: Request): string {
 function originOf(value: string | undefined): string | null {
   if (!value) return null;
   try {
-    return new URL(value.includes('//') ? value : `https://${value}`).origin;
+    const origin = new URL(value.includes('//') ? value : `https://${value}`).origin;
+    // `URL.origin` is the literal string "null" for any opaque origin (a
+    // non-special scheme: file:, foo:). Such a value contains '//', so it skips
+    // the scheme-prefix branch and parses cleanly — returning a non-null,
+    // non-URL string that satisfies `??` and then throws out of `new Request()`
+    // below, OUTSIDE neverFatal. That is the scheme-less slip again: a 500 where
+    // a computed answer was available, rendered as the neutral placeholder.
+    return origin === 'null' ? null : origin;
   } catch {
     return null;
   }
@@ -177,6 +184,16 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // without ever calling findRelease, and the crawler caches the resulting
     // placeholder for good — #143 all over again, via the alignment that fixes it.
     // With a prior to stale-serve, the back-off still holds.
+    //
+    // The asymmetry is deliberate: this caller opts out of READING the marker on
+    // a cold slot, but resolveLookup still WRITES it, so a failure discovered
+    // here can back off a human permalink for up to 60s. That is the point of
+    // sharing the slot — the marker describes the HOST being down, not who found
+    // it out, and the host is equally down for the human. They get the
+    // "checking…" recovery card (never a wrong "not yet released") and can
+    // reload; the crawler asks once and keeps what it got. Suppressing the write
+    // would instead leave the key with no back-off at all whenever the crawler
+    // touches it first, and every human reload would pound the down host.
     bypassBackOffWhenCold: true,
   });
   if (resolved.status === 'ok') {

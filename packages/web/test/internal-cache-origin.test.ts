@@ -485,6 +485,31 @@ describe('/internal/* normalises a configured cache origin', () => {
     const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.17.0');
   });
+
+  it('ignores a configured value whose origin is OPAQUE, rather than 500ing', async () => {
+    const sha = '9'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seed(PUBLIC_ORIGIN, k, fixture('v4.18.0'));
+    // Distinguishable from the seeded slot, as above.
+    findReleaseMock.mockResolvedValue(fixture('MISSED-THE-PUBLIC-SLOT'));
+
+    // `URL.origin` is the literal string "null" for any opaque (non-special
+    // scheme) origin. `file:///srv/web` contains '//', so it skips the
+    // scheme-prefix branch, parses fine, and yields "null" — a non-null,
+    // non-URL string. Unguarded that satisfies `??` and reaches
+    // `new Request(...)`, which throws OUTSIDE neverFatal: app.onError turns a
+    // computable OG lookup into a 500 and web-og renders the neutral
+    // placeholder. Same failure class as the scheme-less PUBLIC_BASE_URL above.
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), {
+      INTERNAL_SECRET,
+      PUBLIC_BASE_URL: 'file:///srv/web',
+      PROD_HOST,
+    });
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.18.0'); // fell through to PROD_HOST's public slot
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
 });
 
 // Aligning the /internal key with the public one (the fix above) also aligned the
