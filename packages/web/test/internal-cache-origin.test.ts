@@ -486,3 +486,46 @@ describe('/internal/* normalises a configured cache origin', () => {
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.17.0');
   });
 });
+
+// Aligning the /internal key with the public one (the fix above) also aligned the
+// NEGATIVE back-off marker `<key>:neg`, which public page views write. That marker
+// is a good idea for a page a human can reload, and a bad one for a crawler: a
+// crawler unfurls ONCE and keeps what it got. So a 60-second marker left by an
+// unrelated human page view could hand the crawler a permanent placeholder — the
+// exact #143 symptom this PR exists to remove, re-introduced through the shared key.
+// The back-off is therefore honoured only when there is a prior to stale-serve.
+describe('/internal/* does not let a shared back-off marker cause a permanent placeholder', () => {
+  it('computes on a COLD slot even when a public page view left a warm `:neg` marker', async () => {
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
+    // A human loaded the permalink seconds ago, GitHub 502'd, the public route
+    // wrote the shared back-off marker. No result was ever cached.
+    seedAged(PUBLIC_ORIGIN, `${k}:neg`, { transient: true, kind: 'github_server_error' }, 10);
+    // Upstream has since recovered.
+    findReleaseMock.mockResolvedValue(fixture('v4.12.11'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
+    await settle();
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.12.11');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+    // ...and the answer is warm for the next unfurl.
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.11');
+  });
+
+  it('still honours the marker when there IS a prior — a down host is never pounded', async () => {
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
+    seedAged(PUBLIC_ORIGIN, k, pendingFixture('last known good'), 10 * 60);
+    seedAged(PUBLIC_ORIGIN, `${k}:neg`, { transient: true, kind: 'github_server_error' }, 10);
+    findReleaseMock.mockResolvedValue(fixture('v4.12.11'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
+    await settle();
+
+    expect(res.status).toBe(200);
+    expect(await subjectOf(res)).toBe('last known good');
+    // Stale-serve is strictly better than a recompute here, so the back-off holds
+    // and the upstream is left alone — including on the background revalidation.
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+});

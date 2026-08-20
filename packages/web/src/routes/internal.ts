@@ -172,6 +172,12 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
       }),
     // Serve a cached answer immediately and refresh behind it (see background()).
     revalidate: (task) => background(c, task),
+    // The shared key means a public page view's failed lookup also writes the
+    // shared `:neg` back-off marker. Honouring that on a COLD slot would 503 here
+    // without ever calling findRelease, and the crawler caches the resulting
+    // placeholder for good — #143 all over again, via the alignment that fixes it.
+    // With a prior to stale-serve, the back-off still holds.
+    bypassBackOffWhenCold: true,
   });
   if (resolved.status === 'ok') {
     return new Response(JSON.stringify(resolved.result), {

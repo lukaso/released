@@ -13,6 +13,9 @@
 //   3. Don't hammer a down host. A transient failure writes a short-lived
 //      "negative" marker; while it's warm we skip the upstream call entirely
 //      (serving stale if we have it, otherwise a soft "checking…" transient).
+//      A caller whose consumer asks only ONCE can opt out of the cold half of
+//      that (`bypassBackOffWhenCold`) — backing off is cheap for a page a human
+//      can reload and permanent for a crawler that unfurls once.
 //
 // "not yet released" is a thrown NotYetReleasedError (not a cacheable result),
 // so it surfaces as its own status and, during an outage with no prior, degrades
@@ -96,8 +99,15 @@ export async function resolveLookup(args: {
    *  (`executionCtx.waitUntil`). Callers that can afford to wait — the public
    *  HTML routes — omit it and keep the blocking behaviour. */
   revalidate?: (task: Promise<unknown>) => void;
+  /** Opt-in for callers whose consumer only ever asks ONCE, so a soft failure
+   *  becomes permanent for them (the OG crawler). When set, the shared negative
+   *  back-off marker is honoured only if there is a prior to stale-serve —
+   *  with nothing to serve, an attempt beats handing back a placeholder that
+   *  gets cached forever. The marker is still WRITTEN on failure, and callers
+   *  that can retry (the public HTML routes) omit this and keep backing off. */
+  bypassBackOffWhenCold?: boolean;
 }): Promise<Resolved> {
-  const { cache, key, load, revalidate } = args;
+  const { cache, key, load, revalidate, bypassBackOffWhenCold } = args;
   const now = args.now ?? Date.now;
 
   const prior = await cache.getEntry<LookupResult>(key);
@@ -130,12 +140,17 @@ export async function resolveLookup(args: {
     Boolean(neg?.value?.transient) && (neg?.ageSeconds ?? Number.POSITIVE_INFINITY) < NEG_TTL;
   if (backedOff) {
     if (prior) return staleHit();
-    return {
-      status: 'transient',
-      kind: neg?.value.kind ?? 'provider_server_error',
-      upstreamStatus: neg?.value.status,
-      anubis: neg?.value.anubis,
-    };
+    if (!bypassBackOffWhenCold) {
+      return {
+        status: 'transient',
+        kind: neg?.value.kind ?? 'provider_server_error',
+        upstreamStatus: neg?.value.status,
+        anubis: neg?.value.anubis,
+      };
+    }
+    // Cold + opted out: fall through and attempt the load. singleFlight still
+    // collapses concurrent attempts on this key, so this is one extra upstream
+    // call per back-off window, not a stampede.
   }
 
   try {
