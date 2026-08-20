@@ -50,8 +50,10 @@ function isServiceBinding(c: Context): boolean {
  *  `wrangler dev`, which loads [vars] — would key on the production origin while
  *  their public routes key on the origin they actually serve. wrangler.toml sets
  *  PUBLIC_BASE_URL for preview; for `wrangler dev`, put
- *  `PUBLIC_BASE_URL=http://localhost:8787` in packages/web/.dev.vars. Only the
- *  unit tests reach the request-origin fallback. */
+ *  `PUBLIC_BASE_URL=http://localhost:8787` in packages/web/.dev.vars (README,
+ *  "Daily flow", says the same where a dev will actually look). Only the unit
+ *  tests reach the request-origin fallback — never the Service Binding, whose
+ *  request origin is the non-routable `https://web` that #143 was about. */
 function cacheOrigin(env: Env, req: Request): string {
   return originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST) ?? new URL(req.url).origin;
 }
@@ -195,6 +197,13 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // would instead leave the key with no back-off at all whenever the crawler
     // touches it first, and every human reload would pound the down host.
     bypassBackOffWhenCold: true,
+    // web-og renders whatever we return into a PNG it long-caches for 24h, and
+    // nothing here can invalidate that PNG afterwards. So no exit may hand this
+    // caller a prior older than the stale bound — before #143 this route had a
+    // flat 30-minute TTL and could not, and it now shares the public routes'
+    // 24h slot, where a 23h-old answer is representable. Rather than pin one, we
+    // pay a fresh lookup, or 503 into a short-cached placeholder.
+    consumerPinsResult: true,
   });
   if (resolved.status === 'ok') {
     return new Response(JSON.stringify(resolved.result), {

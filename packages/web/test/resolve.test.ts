@@ -383,3 +383,98 @@ describe('resolveLookup — stale-while-revalidate is bounded', () => {
     expect(good).toHaveBeenCalledTimes(1);
   });
 });
+
+// Round-6 review of #144. Rounds 4/5 bounded only the stale-while-revalidate
+// return, so both stale-if-error exits — the back-off short-circuit and the
+// transient catch — could still hand the OG crawler a prior of any age. Sharing
+// the public routes' 24h slot is what made that reachable: before #143 this
+// route had a flat 30-minute TTL, so a 23h-old prior could not exist on it.
+// A pinned consumer renders whatever it gets into a PNG cached for a day.
+describe('resolveLookup — a pinned consumer is never handed a prior past the bound', () => {
+  const aged = () => mkResult({ released: false });
+
+  it('back-off exit: attempts a fresh lookup instead of serving a 23h-old prior', async () => {
+    const f = makeFakeCache();
+    f.seed(KEY, aged(), 23 * 60 * 60); // inside HARD_TTL_PENDING (24h), way past the bound
+    f.seed(negKey, { transient: true, kind: 'github_server_error' }, 10); // a page view just failed
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      bypassBackOffWhenCold: true,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.stale).toBe(false);
+      expect(r.result.firstRelease?.tag).toBe('4.18.0');
+    }
+  });
+
+  it('transient-catch exit: returns transient rather than the 23h-old prior', async () => {
+    const f = makeFakeCache();
+    f.seed(KEY, aged(), 23 * 60 * 60);
+    const load = vi.fn(async () => {
+      throw new ProviderServerError('github.com', 503, 'Service Unavailable');
+    });
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      bypassBackOffWhenCold: true,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('transient');
+  });
+
+  it('a prior INSIDE the bound is still stale-served to a pinned consumer', async () => {
+    const f = makeFakeCache();
+    const pending = mkResult({ released: false, partial: true });
+    f.seed(KEY, pending, 120); // stale (past the 60s partial window), inside the 30-min bound
+    f.seed(negKey, { transient: true, kind: 'github_server_error' }, 10);
+    const load = vi.fn();
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      bypassBackOffWhenCold: true,
+      consumerPinsResult: true,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.stale).toBe(true);
+      expect(r.result).toEqual(pending);
+    }
+  });
+
+  it('public routes keep UNBOUNDED stale-if-error — the bound is opt-in only', async () => {
+    const f = makeFakeCache();
+    const old = aged();
+    f.seed(KEY, old, 23 * 60 * 60);
+    const load = vi.fn(async () => {
+      throw new ProviderServerError('github.com', 503, 'Service Unavailable');
+    });
+
+    // Same 23h prior, same failure — but no consumerPinsResult: a human page is
+    // not pinned anywhere and shows an explicit "stale as of" caveat, so serving
+    // through a long outage stays the right degrade.
+    const r = await resolveLookup({ cache: f.cache, key: KEY, load });
+
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.stale).toBe(true);
+      expect(r.result).toEqual(old);
+    }
+  });
+});

@@ -38,7 +38,7 @@ export async function singleFlight<T>(key: string, loader: Loader<T>): Promise<T
 // later background refreshes for that key join a dead promise. Nobody awaits a
 // background task's result, so the visible consequence is bounded — this isolate
 // stops refreshing that key behind a stale hit, and the foreground blocking path
-// past SWR_MAX_STALE still recovers it.
+// past MAX_STALE_PINNED still recovers it.
 const background = new Map<string, Promise<unknown>>();
 
 /** Collapse concurrent BACKGROUND refreshes for `key` onto one run, in a map

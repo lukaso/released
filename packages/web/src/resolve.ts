@@ -37,15 +37,24 @@ const HARD_TTL_RELEASED = 30 * 24 * 60 * 60; // terminal — keep ~30 days
 const HARD_TTL_PENDING = 24 * 60 * 60; // long enough to stale-serve through an outage
 const HARD_TTL_PARTIAL = 60; // partial is itself a soft state; don't trust it long
 const NEG_TTL = 60; // back off this long when upstream is down
-// Upper bound on what stale-while-revalidate will hand back UNBLOCKED. Past it
-// we block on the refresh instead. web-og long-caches any non-null result for
-// 24h (renderImage: `result ? longCache : shortCache`), so an answer served
-// here is pinned in the crawler's cache for a day and the background refresh
-// cannot invalidate a PNG that has already been rendered from it — a "not yet
-// released" prior that has since shipped would show the wrong card until
-// tomorrow. 30 minutes is what /internal used as its flat TTL before it shared
-// this slot, so bounding here is never worse than the code it replaced.
-const SWR_MAX_STALE = 30 * 60;
+// Upper bound on the age of a prior we will hand to a consumer that PINS what we
+// give it. web-og long-caches any non-null result for 24h (renderImage:
+// `result ? longCache : shortCache`), so an answer served to it is stuck in the
+// crawler's cache for a day and no later refresh can invalidate a PNG already
+// rendered from it — a "not yet released" prior that has since shipped would
+// show the wrong card until tomorrow. 30 minutes is what /internal used as its
+// flat TTL before it shared this 24h slot, so bounding is never worse than the
+// code it replaced.
+//
+// It bounds EVERY exit that hands back a prior, not just the SWR one. Rounds 4/5
+// bounded only the stale-while-revalidate return, which left both stale-if-error
+// exits (back-off below, and the transient catch) free to serve an answer of any
+// age — and sharing the 24h slot is exactly what made a 23h-old prior possible on
+// the /internal path (`consumerPinsResult`, set by the OG route). Public HTML
+// routes leave the flag unset and keep stale-if-error UNBOUNDED: a human sees an
+// explicit "stale as of" caveat and can reload, and their answer is not pinned
+// anywhere, so serving through a long outage is the right degrade for them.
+const MAX_STALE_PINNED = 30 * 60;
 
 // Error kinds a later retry might succeed on → eligible for stale-serve (when we
 // have a prior) or a short negative cache (when we don't). Everything else is a
@@ -127,8 +136,15 @@ export async function resolveLookup(args: {
    *  background one is not. A duplicated refresh is far cheaper than poisoning
    *  the key for the lifetime of the isolate. */
   coalesce?: boolean;
+  /** Opt-in for callers whose consumer CACHES whatever we hand back, for longer
+   *  than we can correct (the OG crawler pins a rendered PNG for 24h). When set,
+   *  no exit returns a prior older than `MAX_STALE_PINNED`: we would rather pay a
+   *  fresh lookup, or hand back a transient the caller renders as a short-cached
+   *  placeholder, than pin a day-old answer that has since changed. */
+  consumerPinsResult?: boolean;
 }): Promise<Resolved> {
-  const { cache, key, load, revalidate, bypassBackOffWhenCold, coalesce } = args;
+  const { cache, key, load, revalidate, bypassBackOffWhenCold, coalesce, consumerPinsResult } =
+    args;
   const now = args.now ?? Date.now;
 
   const prior = await cache.getEntry<LookupResult>(key);
@@ -144,8 +160,15 @@ export async function resolveLookup(args: {
     cached: true,
   });
 
+  /** True when `prior` is too old to hand to a consumer that pins it. Always
+   *  false for callers that did not opt in, so stale-if-error is unchanged for
+   *  the public HTML routes. */
+  const tooStaleToPin = (): boolean =>
+    Boolean(consumerPinsResult) &&
+    (prior as CacheEntry<LookupResult>).ageSeconds >= MAX_STALE_PINNED;
+
   // Stale-while-revalidate: serve what we have, refresh behind it — but only up to
-  // SWR_MAX_STALE, past which we block rather than hand back an answer the crawler
+  // MAX_STALE_PINNED, past which we block rather than hand back an answer a crawler
   // would pin for a day. The refresh is a plain recursive call WITHOUT `revalidate`,
   // so it takes the blocking path and cannot recurse again, and with
   // `coalesce: false` so a task the runtime may kill never owns the foreground
@@ -155,7 +178,7 @@ export async function resolveLookup(args: {
   // otherwise run four full lookups against the same repo on the shared token.
   // Errors are absorbed here — a background failure must not surface as an
   // unhandled rejection on a response that already succeeded.
-  if (prior && revalidate && prior.ageSeconds < SWR_MAX_STALE) {
+  if (prior && revalidate && prior.ageSeconds < MAX_STALE_PINNED) {
     revalidate(
       backgroundFlight(key, () => resolveLookup({ cache, key, load, now, coalesce: false })).catch(
         () => undefined,
@@ -171,7 +194,7 @@ export async function resolveLookup(args: {
   const backedOff =
     Boolean(neg?.value?.transient) && (neg?.ageSeconds ?? Number.POSITIVE_INFINITY) < NEG_TTL;
   if (backedOff) {
-    if (prior) return staleHit();
+    if (prior && !tooStaleToPin()) return staleHit();
     if (!bypassBackOffWhenCold) {
       return {
         status: 'transient',
@@ -213,7 +236,7 @@ export async function resolveLookup(args: {
         { transient: true, kind: err.kind, status: upstreamStatus, anubis },
         NEG_TTL,
       );
-      if (prior) return staleHit();
+      if (prior && !tooStaleToPin()) return staleHit();
       return { status: 'transient', kind: err.kind, upstreamStatus, anubis };
     }
     return { status: 'error', error: err };
