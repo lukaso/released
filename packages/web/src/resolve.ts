@@ -37,6 +37,15 @@ const HARD_TTL_RELEASED = 30 * 24 * 60 * 60; // terminal — keep ~30 days
 const HARD_TTL_PENDING = 24 * 60 * 60; // long enough to stale-serve through an outage
 const HARD_TTL_PARTIAL = 60; // partial is itself a soft state; don't trust it long
 const NEG_TTL = 60; // back off this long when upstream is down
+// Upper bound on what stale-while-revalidate will hand back UNBLOCKED. Past it
+// we block on the refresh instead. web-og long-caches any non-null result for
+// 24h (renderImage: `result ? longCache : shortCache`), so an answer served
+// here is pinned in the crawler's cache for a day and the background refresh
+// cannot invalidate a PNG that has already been rendered from it — a "not yet
+// released" prior that has since shipped would show the wrong card until
+// tomorrow. 30 minutes is what /internal used as its flat TTL before it shared
+// this slot, so bounding here is never worse than the code it replaced.
+const SWR_MAX_STALE = 30 * 60;
 
 // Error kinds a later retry might succeed on → eligible for stale-serve (when we
 // have a prior) or a short negative cache (when we don't). Everything else is a
@@ -106,8 +115,20 @@ export async function resolveLookup(args: {
    *  gets cached forever. The marker is still WRITTEN on failure, and callers
    *  that can retry (the public HTML routes) omit this and keep backing off. */
   bypassBackOffWhenCold?: boolean;
+  /** Internal. Set false for the background refresh on the SWR path: that task
+   *  runs under `executionCtx.waitUntil`, whose IoContext workerd can tear down
+   *  before the subrequest settles. singleFlight only clears its module-level
+   *  entry in the loader's `finally`, so a background owner that never settles
+   *  leaves a dead promise under this key, and every later request in the same
+   *  isolate — a human on the permalink, badge.ts on the same cull/nopre key —
+   *  joins it: a hang, or "Cannot perform I/O on behalf of a different request",
+   *  which resolveLookup classifies as a non-transient error and the page renders
+   *  as a hard failure. A foreground caller is always a live, awaiting request; a
+   *  background one is not. A duplicated refresh is far cheaper than poisoning
+   *  the key for the lifetime of the isolate. */
+  coalesce?: boolean;
 }): Promise<Resolved> {
-  const { cache, key, load, revalidate, bypassBackOffWhenCold } = args;
+  const { cache, key, load, revalidate, bypassBackOffWhenCold, coalesce } = args;
   const now = args.now ?? Date.now;
 
   const prior = await cache.getEntry<LookupResult>(key);
@@ -123,12 +144,15 @@ export async function resolveLookup(args: {
     cached: true,
   });
 
-  // Stale-while-revalidate: serve what we have, refresh behind it. The refresh is
-  // a plain recursive call WITHOUT `revalidate`, so it takes the blocking path and
-  // cannot recurse again. Errors are absorbed here — a background failure must not
-  // surface as an unhandled rejection on a response that already succeeded.
-  if (prior && revalidate) {
-    revalidate(resolveLookup({ cache, key, load, now }).catch(() => undefined));
+  // Stale-while-revalidate: serve what we have, refresh behind it — but only up to
+  // SWR_MAX_STALE, past which we block rather than hand back an answer the crawler
+  // would pin for a day. The refresh is a plain recursive call WITHOUT `revalidate`,
+  // so it takes the blocking path and cannot recurse again, and with
+  // `coalesce: false` so a task the runtime may kill never owns the flight for this
+  // key. Errors are absorbed here — a background failure must not surface as an
+  // unhandled rejection on a response that already succeeded.
+  if (prior && revalidate && prior.ageSeconds < SWR_MAX_STALE) {
+    revalidate(resolveLookup({ cache, key, load, now, coalesce: false }).catch(() => undefined));
     return staleHit();
   }
 
@@ -148,19 +172,27 @@ export async function resolveLookup(args: {
         anubis: neg?.value.anubis,
       };
     }
-    // Cold + opted out: fall through and attempt the load. singleFlight still
-    // collapses concurrent attempts on this key, so this is one extra upstream
-    // call per back-off window, not a stampede.
+    // Cold + opted out: fall through and attempt the load. This is NOT throttled.
+    // singleFlight collapses only CONCURRENT calls, and only inside ONE isolate
+    // (see its header), so during a host outage every cold unfurl — a different
+    // colo, a different social platform, or simply a later one — runs its own
+    // findRelease out to the hard deadline against the down host and re-stamps
+    // the marker. NEG_TTL throttles the human page views on this key, not this
+    // path. That cost is accepted deliberately: the crawler asks ONCE, so the
+    // alternative is a placeholder pinned in its cache long after the host
+    // recovers. Gating the bypass on a fraction of NEG_TTL would only move which
+    // unfurls get the permanent placeholder, not stop them.
   }
 
   try {
-    const result = await singleFlight(key, async () => {
+    const run = async () => {
       const re = await cache.getEntry<LookupResult>(key);
       if (re && isFresh(re)) return re.value;
       const r = await load();
       await cache.put(key, r, hardTtlFor(r));
       return r;
-    });
+    };
+    const result = coalesce === false ? await run() : await singleFlight(key, run);
     return { status: 'ok', result, stale: false, staleAsOf: null, cached: false };
   } catch (err) {
     if (err instanceof NotYetReleasedError) return { status: 'not_yet', error: err };

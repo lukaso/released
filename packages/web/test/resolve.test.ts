@@ -254,3 +254,92 @@ describe('resolveLookup — real answers pass through', () => {
     expect(f.has(negKey)).toBe(false);
   });
 });
+
+// Round-4 review of #144. The stale-while-revalidate path added in 4cdb212 is
+// what lets the OG render return without blocking on a refresh. Both guards
+// below pin a defect in THAT path, not in the cache-key alignment #144 is about.
+describe('resolveLookup — stale-while-revalidate is bounded', () => {
+  it('serves a recently-stale prior immediately and refreshes behind it', async () => {
+    const f = makeFakeCache();
+    // Past the 5-minute pending freshness window, well inside the SWR bound.
+    f.seed(KEY, mkResult({ released: false }), 10 * 60);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+    const tasks: Promise<unknown>[] = [];
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      revalidate: (t) => {
+        tasks.push(t);
+      },
+    });
+
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.stale).toBe(true);
+    expect(tasks).toHaveLength(1);
+    await Promise.all(tasks);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('blocks rather than hand back an answer stale past the bound', async () => {
+    const f = makeFakeCache();
+    // 23h old: still inside HARD_TTL_PENDING (24h), so getEntry returns it.
+    // web-og long-caches ANY non-null result for 24h, so serving this unblocked
+    // pins a day-old "not yet released" card in the crawler's cache for another
+    // day, and the background refresh cannot invalidate the PNG already made.
+    f.seed(KEY, mkResult({ released: false }), 23 * 60 * 60);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+    const tasks: Promise<unknown>[] = [];
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      revalidate: (t) => {
+        tasks.push(t);
+      },
+    });
+
+    expect(tasks).toHaveLength(0);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.stale).toBe(false);
+      expect(r.result.firstRelease?.tag).toBe('4.18.0');
+    }
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a torn-down background refresh poison the key for the isolate', async () => {
+    const f = makeFakeCache();
+    f.seed(KEY, mkResult({ released: false }), 10 * 60);
+
+    // The background refresh never settles — exactly what a waitUntil task looks
+    // like when workerd tears the IoContext down mid-subrequest. singleFlight
+    // only clears its entry in the loader's `finally`, so if the background call
+    // owns the flight, that entry is never cleared.
+    const hung = vi.fn().mockReturnValue(new Promise<LookupResult>(() => {}));
+    const first = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load: hung,
+      revalidate: () => {},
+    });
+    expect(first.status).toBe('ok');
+    // Let the background call reach its load() and register whatever flight it
+    // is going to register, before a second request asks for the same key.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(hung).toHaveBeenCalledTimes(1);
+
+    // A later request in the SAME isolate on the SAME key — a human on the
+    // permalink, or badge.ts, which share this slot — must still get an answer.
+    const good = vi.fn().mockResolvedValue(mkResult({ released: true }));
+    const settled = await Promise.race([
+      resolveLookup({ cache: f.cache, key: KEY, load: good }),
+      new Promise((resolve) => setTimeout(() => resolve('JOINED-A-DEAD-FLIGHT'), 100)),
+    ]);
+
+    expect(settled).not.toBe('JOINED-A-DEAD-FLIGHT');
+    expect(good).toHaveBeenCalledTimes(1);
+  });
+});
