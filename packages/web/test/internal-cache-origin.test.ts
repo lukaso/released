@@ -62,6 +62,11 @@ const PROD_HOST = 'released.blabberate.com';
 const PUBLIC_ORIGIN = `https://${PROD_HOST}`;
 const ENV = { INTERNAL_SECRET, PROD_HOST };
 const SHA = 'a'.repeat(40);
+// What web-og ACTUALLY puts in the internal URL for a commit: ogImageUrlForCommit
+// -> shortSha(sha) -> 7 characters (ui/og-meta.tsx). The rest of this file uses the
+// 40-char form; these two must both work, and #147 tracks the fact that they are
+// two different slots.
+const SHORT_SHA = SHA.slice(0, 7);
 
 /** The cache key the PUBLIC permalink routes write (result.tsx / issue.tsx / pr.tsx):
  *  5 parts, ending in the default `cull` + `nopre` option suffixes. */
@@ -241,6 +246,40 @@ describe('/internal/* WRITES back to the slot the public routes read (#143)', ()
 
     // And nothing may land in the non-routable Service-Binding namespace, which the
     // real Cache API silently drops.
+    expect([...cacheStore.keys()].filter((u) => u.startsWith('https://web/'))).toEqual([]);
+  });
+});
+
+// The commit URL web-og really sends is the 7-char one, so the origin fix has to
+// hold for that shape too — the rest of this file exercises the 40-char form.
+//
+// NOTE the half this PR deliberately does NOT fix: the public permalink route keys
+// on the sha as it appears in the page URL, and /lookup redirects to the FULL 40
+// chars (index.ts, "short prefixes collide in large repos"). So `sha:<7>` and
+// `sha:<40>` are different digests and the first unfurl of a full-sha permalink is
+// still cold. That is #147 — its fix lives in ui/og-meta.tsx / result.tsx, files
+// this PR does not touch, and changes the PUBLIC routes' key namespace.
+describe('/internal/* keys a commit on the sha web-og really sends (7 chars, #147)', () => {
+  it('serves a cached result on the short-sha public key shape', async () => {
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHORT_SHA}`);
+    seed(PUBLIC_ORIGIN, k, fixture('v4.9.9'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHORT_SHA}`), ENV);
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.9.9');
+    // A cache HIT is proven by never consulting the provider.
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('writes a cold short-sha lookup back to the public origin, not `https://web`', async () => {
+    findReleaseMock.mockResolvedValue(fixture('v4.10.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHORT_SHA}`), ENV);
+    expect(res.status).toBe(200);
+    expect(findReleaseMock).toHaveBeenCalledOnce();
+
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHORT_SHA}`);
+    expect([...cacheStore.keys()]).toContain(keyUrl(PUBLIC_ORIGIN, k));
     expect([...cacheStore.keys()].filter((u) => u.startsWith('https://web/'))).toEqual([]);
   });
 });

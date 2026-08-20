@@ -310,6 +310,46 @@ describe('resolveLookup — stale-while-revalidate is bounded', () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  // Round-5 review of #144. `coalesce: false` (round 4) kept the background
+  // refresh from OWNING the singleFlight entry, but it also dropped it out of
+  // coalescing entirely — and the SWR branch fires on EVERY request in the stale
+  // window. One link unfurled by Slack, X, Discord and LinkedIn in the same
+  // second in one colo then ran four full findRelease traversals against the same
+  // repo on the shared GITHUB_TOKEN, none seeing the others.
+  it('collapses concurrent background refreshes for one key onto a single lookup', async () => {
+    const f = makeFakeCache();
+    f.seed(KEY, mkResult({ released: false }), 10 * 60);
+
+    // Slow enough that all four refreshes are genuinely in flight together.
+    const load = vi.fn().mockImplementation(
+      () =>
+        new Promise<LookupResult>((res) => {
+          setTimeout(() => res(mkResult({ released: true })), 10);
+        }),
+    );
+    const tasks: Promise<unknown>[] = [];
+    const revalidate = (t: Promise<unknown>) => {
+      tasks.push(t);
+    };
+
+    const results = await Promise.all(
+      Array.from({ length: 4 }, () =>
+        resolveLookup({ cache: f.cache, key: KEY, load, revalidate }),
+      ),
+    );
+
+    // Every caller still gets its stale answer immediately — collapsing the
+    // refresh must not make anyone wait.
+    for (const r of results) {
+      expect(r.status).toBe('ok');
+      if (r.status === 'ok') expect(r.stale).toBe(true);
+    }
+    expect(tasks).toHaveLength(4);
+
+    await Promise.all(tasks);
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
   it('does not let a torn-down background refresh poison the key for the isolate', async () => {
     const f = makeFakeCache();
     f.seed(KEY, mkResult({ released: false }), 10 * 60);

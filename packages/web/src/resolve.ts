@@ -29,7 +29,7 @@ import {
 } from '@released/core';
 import { upstreamStatusOf } from './analytics.js';
 import type { CacheEntry, WorkerCache } from './cache.js';
-import { singleFlight } from './single-flight.js';
+import { backgroundFlight, singleFlight } from './single-flight.js';
 
 // Freshness windows + hard TTLs (seconds).
 const FRESH_WINDOW_PENDING = 5 * 60; // re-check non-released answers every 5 min
@@ -148,11 +148,19 @@ export async function resolveLookup(args: {
   // SWR_MAX_STALE, past which we block rather than hand back an answer the crawler
   // would pin for a day. The refresh is a plain recursive call WITHOUT `revalidate`,
   // so it takes the blocking path and cannot recurse again, and with
-  // `coalesce: false` so a task the runtime may kill never owns the flight for this
-  // key. Errors are absorbed here — a background failure must not surface as an
+  // `coalesce: false` so a task the runtime may kill never owns the foreground
+  // flight for this key. `backgroundFlight` then restores the collapsing that
+  // dropping out of `singleFlight` cost: this branch fires on EVERY request in the
+  // stale window, so four crawlers unfurling one link in the same second would
+  // otherwise run four full lookups against the same repo on the shared token.
+  // Errors are absorbed here — a background failure must not surface as an
   // unhandled rejection on a response that already succeeded.
   if (prior && revalidate && prior.ageSeconds < SWR_MAX_STALE) {
-    revalidate(resolveLookup({ cache, key, load, now, coalesce: false }).catch(() => undefined));
+    revalidate(
+      backgroundFlight(key, () => resolveLookup({ cache, key, load, now, coalesce: false })).catch(
+        () => undefined,
+      ),
+    );
     return staleHit();
   }
 
