@@ -337,7 +337,11 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     findReleaseMock.mockResolvedValue(partialFixture());
 
     const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
-    expect(res.status).toBe(200);
+    // The RESPONSE is a 503 (a computed partial is never pinned — see the
+    // guardrail suite below); the point here is that the write-back still
+    // happens, and lands on the shared 60-second partial TTL rather than
+    // /internal's old flat 30 minutes, so a public page view can reuse it.
+    expect(res.status).toBe(503);
 
     const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
     expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe('public, max-age=60');
@@ -483,6 +487,39 @@ describe('/internal/* never blocks the render on a revalidation', () => {
 
     expect(res.status).toBe(200);
     expect(await tagOf(res)).toBe('v4.15.0');
+  });
+
+  // Round 7 (#144), the other half of the same guardrail. Refusing to SERVE a
+  // cached partial is only half the job: on a repo that reliably blows the soft
+  // deadline the forced recompute returns a partial too, and returning that as a
+  // 200 pins the same wrong "not yet released" card for 24h that the refusal
+  // exists to prevent (web-og: `firstRelease?.tag ?? 'not yet released'`,
+  // long-cached for any non-null result). A 503 instead renders the neutral
+  // placeholder at max-age=60, which self-heals on the next unfurl.
+  it('503s rather than pin a COMPUTED partial as "not yet released"', async () => {
+    const sha = '1'.repeat(40);
+    findReleaseMock.mockResolvedValue(partialFixture());
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(503);
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The bound is on `partial && !firstRelease`, not on `partial` alone: a
+  // truncated traversal that DID find a containing release carries a real tag,
+  // which web-og renders correctly. 503ing that would throw away a right answer.
+  it('still serves a partial that carries a real firstRelease', async () => {
+    const sha = '2'.repeat(40);
+    findReleaseMock.mockResolvedValue({
+      ...(fixture('v4.19.0') as Record<string, unknown>),
+      partial: { reason: 'soft_deadline', candidatesTried: 3 },
+    });
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.19.0');
   });
 });
 

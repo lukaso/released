@@ -573,3 +573,77 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
     if (r.status === 'ok') expect(r.result).toEqual(truncated);
   });
 });
+
+// A RELEASED answer is terminal: which release first contains a commit cannot
+// change, which is why `isFresh()` treats it as fresh forever and `hardTtlFor()`
+// gives it a 30-day TTL. `MAX_STALE_PINNED` exists for the opposite case — a
+// "not yet released" prior that has since shipped — so applying its 30-minute
+// age bound to a terminal answer discards exactly the warm entries `/internal/*`
+// joined the public key to reuse (#143), and pays a full findRelease on the
+// crawler's critical path for every unfurl more than 30 minutes after the last
+// write.
+describe('resolveLookup — a terminal RELEASED prior stays pinnable at any age', () => {
+  it('fresh exit: serves a 2h-old released prior instead of recomputing', async () => {
+    const f = makeFakeCache();
+    const released = mkResult({ released: true });
+    f.seed(KEY, released, 2 * 60 * 60); // the normal state of a 30-day slot
+    const load = vi.fn();
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.cached).toBe(true);
+      expect(r.result.firstRelease?.tag).toBe('4.18.0');
+    }
+  });
+
+  it('back-off exit: an upstream outage still serves the 2h-old released prior', async () => {
+    const f = makeFakeCache();
+    const released = mkResult({ released: true });
+    f.seed(KEY, released, 2 * 60 * 60);
+    f.seed(negKey, { transient: true, kind: 'github_server_error' }, 10);
+    const load = vi.fn();
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      bypassBackOffWhenUnservable: true,
+      consumerPinsResult: true,
+    });
+
+    // Without the terminal exemption this returns `transient`, which web-og
+    // renders as the neutral placeholder at max-age=60 — and each unfurl during
+    // the outage runs its own lookup out to the soft deadline against the down
+    // host.
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+
+  it('a 2h-old NOT-YET-released prior is still unpinnable — the bound it exists for', async () => {
+    const f = makeFakeCache();
+    const notYet = mkResult({ released: false });
+    f.seed(KEY, notYet, 2 * 60 * 60);
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+});

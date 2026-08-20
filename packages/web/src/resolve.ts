@@ -168,9 +168,19 @@ export async function resolveLookup(args: {
    *  loads THIS key with an 8s soft deadline, so on a large repo it writes the
    *  partial that would otherwise be served here — reachable only since this
    *  route joined the public five-part key. Always false for callers that did
-   *  not opt in, so the public HTML routes are unchanged. */
+   *  not opt in, so the public HTML routes are unchanged.
+   *
+   *  The age bound does NOT apply to a terminal `firstRelease` answer: which
+   *  release first contains a commit cannot change, which is why `isFresh()`
+   *  treats it as fresh forever and `hardTtlFor()` gives it `HARD_TTL_RELEASED`
+   *  (30 days). `MAX_STALE_PINNED` exists for the opposite case — a "not yet
+   *  released" prior that has since shipped. Applying it to a terminal answer
+   *  would discard exactly the warm entries this route joined the public key to
+   *  reuse, paying a full findRelease on the crawler's critical path for every
+   *  unfurl more than 30 minutes after the last write. */
   const unpinnable = (entry: CacheEntry<LookupResult>): boolean =>
     Boolean(consumerPinsResult) &&
+    !entry.value.firstRelease &&
     (entry.ageSeconds >= MAX_STALE_PINNED || Boolean(entry.value.partial));
 
   const prior = await cache.getEntry<LookupResult>(key);

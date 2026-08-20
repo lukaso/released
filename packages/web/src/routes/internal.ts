@@ -209,8 +209,26 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // THIS route's own lookup produced is the remaining half, tracked in #151.
     consumerPinsResult: true,
   });
+  // Refusing to SERVE a cached partial (consumerPinsResult, above) is only half
+  // the guardrail. On a repo that reliably blows findRelease's soft deadline the
+  // recompute it forces returns a partial too, and a 200 here pins exactly the
+  // wrong card the refusal exists to prevent: web-og renders
+  // `firstRelease?.tag ?? 'not yet released'` and long-caches any non-null
+  // result, so a truncated traversal of a RELEASED commit becomes a definite
+  // "not yet released" for 24h — the CLAUDE.md guardrail ("Partial state !=
+  // 'not yet released'"). Falling through to the 503 renders the neutral
+  // placeholder at max-age=60 instead, which self-heals on the next unfurl.
+  // The bound is `partial && !firstRelease`: a truncated traversal that DID find
+  // a containing release carries a real tag web-og renders correctly.
   if (resolved.status === 'ok') {
-    return new Response(JSON.stringify(resolved.result), {
+    const pinsWrongAnswer = Boolean(resolved.result.partial) && !resolved.result.firstRelease;
+    if (!pinsWrongAnswer) {
+      return new Response(JSON.stringify(resolved.result), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: 'partial' }), {
+      status: 503,
       headers: { 'content-type': 'application/json' },
     });
   }
