@@ -455,22 +455,24 @@ describe('/internal/* never blocks the render on a revalidation', () => {
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0');
   });
 
-  it('serves a stale PARTIAL without waiting, then refreshes the slot behind it', async () => {
+  // Round 7 (#144). This used to assert the opposite — that a cached `partial`
+  // was stale-served to web-og while a refresh ran behind it. That is the bug:
+  // web-og renders `firstRelease?.tag ?? 'not yet released'` and long-caches any
+  // non-null result, so a truncated traversal of a RELEASED commit got pinned as
+  // "not yet released" for 24h. `badge.ts` writes those onto this very key (8s
+  // soft deadline), which only this PR's key alignment made visible here.
+  it('does NOT hand back a cached PARTIAL — it blocks and recomputes', async () => {
     const sha = 'c'.repeat(40);
     const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
     seedAged(PUBLIC_ORIGIN, k, partialFixture(), 5 * 60);
-    const slow = deferred();
-    findReleaseMock.mockReturnValue(slow.promise);
+    findReleaseMock.mockResolvedValue(fixture('v4.12.0'));
 
     const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
 
     expect(res.status).toBe(200);
-    expect(await tagOf(res)).toBeUndefined(); // the partial, served as-is
-    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBeUndefined(); // not refreshed YET
-
-    slow.resolve(fixture('v4.12.0'));
-    await settle();
-    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0'); // the background refresh landed
+    expect(await tagOf(res)).toBe('v4.12.0'); // the real answer, not the partial
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0'); // and the slot is corrected
   });
 
   it('still blocks (and write-backs) when the slot is genuinely cold', async () => {

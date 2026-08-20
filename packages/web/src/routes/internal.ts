@@ -196,13 +196,17 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // reload; the crawler asks once and keeps what it got. Suppressing the write
     // would instead leave the key with no back-off at all whenever the crawler
     // touches it first, and every human reload would pound the down host.
-    bypassBackOffWhenCold: true,
+    bypassBackOffWhenUnservable: true,
     // web-og renders whatever we return into a PNG it long-caches for 24h, and
     // nothing here can invalidate that PNG afterwards. So no exit may hand this
-    // caller a prior older than the stale bound — before #143 this route had a
-    // flat 30-minute TTL and could not, and it now shares the public routes'
-    // 24h slot, where a 23h-old answer is representable. Rather than pin one, we
-    // pay a fresh lookup, or 503 into a short-cached placeholder.
+    // caller a CACHED entry that is either older than the stale bound — before
+    // #143 this route had a flat 30-minute TTL and could not, and it now shares
+    // the public routes' 24h slot, where a 23h-old answer is representable — or
+    // a truncated `partial`, whose `firstRelease: null` web-og would render as a
+    // definite "not yet released" (badge.ts writes those onto this same key with
+    // an 8s soft deadline). Rather than pin either, we pay a fresh lookup, or
+    // 503 into a short-cached placeholder. web-og long-caching a partial that
+    // THIS route's own lookup produced is the remaining half, tracked in #151.
     consumerPinsResult: true,
   });
   if (resolved.status === 'ok') {

@@ -404,7 +404,7 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
       cache: f.cache,
       key: KEY,
       load,
-      bypassBackOffWhenCold: true,
+      bypassBackOffWhenUnservable: true,
       consumerPinsResult: true,
     });
 
@@ -427,7 +427,7 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
       cache: f.cache,
       key: KEY,
       load,
-      bypassBackOffWhenCold: true,
+      bypassBackOffWhenUnservable: true,
       consumerPinsResult: true,
     });
 
@@ -437,8 +437,10 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
 
   it('a prior INSIDE the bound is still stale-served to a pinned consumer', async () => {
     const f = makeFakeCache();
-    const pending = mkResult({ released: false, partial: true });
-    f.seed(KEY, pending, 120); // stale (past the 60s partial window), inside the 30-min bound
+    // Deliberately NOT a `partial`: round 7 made those unpinnable at every exit
+    // regardless of age, so a partial would no longer isolate the age bound.
+    const pending = mkResult({ released: false });
+    f.seed(KEY, pending, 10 * 60); // stale (past the 5-min freshness window), inside the 30-min bound
     f.seed(negKey, { transient: true, kind: 'github_server_error' }, 10);
     const load = vi.fn();
 
@@ -446,7 +448,7 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
       cache: f.cache,
       key: KEY,
       load,
-      bypassBackOffWhenCold: true,
+      bypassBackOffWhenUnservable: true,
       consumerPinsResult: true,
     });
 
@@ -476,5 +478,98 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
       expect(r.stale).toBe(true);
       expect(r.result).toEqual(old);
     }
+  });
+});
+
+// Round-7 review of #144. The round-6 bound was consulted only on the three
+// STALE exits. The fresh-hit return above them never asked — and `isFresh()`
+// calls a `partial` fresh for its whole 60s life. Aligning this route onto the
+// public five-part key (this PR) is what made that reachable: `badge.ts` loads
+// the identical key with an 8s soft deadline, so on a large repo it writes a
+// `partial` (firstRelease `null`) that `/internal` then served as a plain 200.
+// web-og renders `firstRelease?.tag ?? 'not yet released'` and long-caches any
+// non-null result, so a RELEASED commit gets a "not yet released" card pinned
+// for a day — the CLAUDE.md guardrail ("Partial state != not yet released")
+// and the exact outcome `consumerPinsResult` exists to prevent.
+describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL', () => {
+  it('fresh exit: recomputes rather than serve a 10s-old partial written by badge.ts', async () => {
+    const f = makeFakeCache();
+    const truncated = mkResult({ released: false, partial: true });
+    f.seed(KEY, truncated, 10); // well inside the 60s partial freshness window
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+
+  it('SWR exit: a fresh partial is not handed back while a refresh runs behind it', async () => {
+    const f = makeFakeCache();
+    const truncated = mkResult({ released: false, partial: true });
+    f.seed(KEY, truncated, 10);
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+    const tasks: Promise<unknown>[] = [];
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      revalidate: (t) => {
+        tasks.push(t);
+      },
+      consumerPinsResult: true,
+    });
+
+    expect(tasks).toHaveLength(0); // blocked instead of stale-serving the partial
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.stale).toBe(false);
+      expect(r.result.firstRelease?.tag).toBe('4.18.0');
+    }
+  });
+
+  it('stale exit: a partial inside the 30-min bound is still not pinnable', async () => {
+    const f = makeFakeCache();
+    const truncated = mkResult({ released: false, partial: true });
+    f.seed(KEY, truncated, 120); // past the 60s partial window, inside the 30-min bound
+    f.seed(negKey, { transient: true, kind: 'github_server_error' }, 10);
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      bypassBackOffWhenUnservable: true,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+
+  it('public routes still get the fresh partial — the guard is opt-in only', async () => {
+    const f = makeFakeCache();
+    const truncated = mkResult({ released: false, partial: true });
+    f.seed(KEY, truncated, 10);
+    const load = vi.fn();
+
+    // No consumerPinsResult: the result card renders `partial` as an explicit
+    // best-effort caveat (CLAUDE.md), so a fresh partial is the right answer.
+    const r = await resolveLookup({ cache: f.cache, key: KEY, load });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result).toEqual(truncated);
   });
 });

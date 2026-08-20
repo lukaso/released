@@ -14,7 +14,7 @@
 //      "negative" marker; while it's warm we skip the upstream call entirely
 //      (serving stale if we have it, otherwise a soft "checking…" transient).
 //      A caller whose consumer asks only ONCE can opt out of the cold half of
-//      that (`bypassBackOffWhenCold`) — backing off is cheap for a page a human
+//      that (`bypassBackOffWhenUnservable`) — backing off is cheap for a page a human
 //      can reload and permanent for a crawler that unfurls once.
 //
 // "not yet released" is a thrown NotYetReleasedError (not a cacheable result),
@@ -119,11 +119,16 @@ export async function resolveLookup(args: {
   revalidate?: (task: Promise<unknown>) => void;
   /** Opt-in for callers whose consumer only ever asks ONCE, so a soft failure
    *  becomes permanent for them (the OG crawler). When set, the shared negative
-   *  back-off marker is honoured only if there is a prior to stale-serve —
-   *  with nothing to serve, an attempt beats handing back a placeholder that
-   *  gets cached forever. The marker is still WRITTEN on failure, and callers
-   *  that can retry (the public HTML routes) omit this and keep backing off. */
-  bypassBackOffWhenCold?: boolean;
+   *  back-off marker is honoured only if there is a prior we can actually SERVE
+   *  — with nothing servable, an attempt beats handing back a placeholder that
+   *  gets cached forever. "Nothing servable" is broader than an empty slot: with
+   *  `consumerPinsResult`, a prior past `MAX_STALE_PINNED` or a truncated
+   *  `partial` is unservable too, so a warm-but-unpinnable key reaches this path
+   *  as well. That is deliberate (the alternative is a permanent placeholder),
+   *  but it is NOT throttled — see the fall-through comment below for the cost.
+   *  The marker is still WRITTEN on failure, and callers that can retry (the
+   *  public HTML routes) omit this and keep backing off. */
+  bypassBackOffWhenUnservable?: boolean;
   /** Internal. Set false for the background refresh on the SWR path: that task
    *  runs under `executionCtx.waitUntil`, whose IoContext workerd can tear down
    *  before the subrequest settles. singleFlight only clears its module-level
@@ -143,12 +148,33 @@ export async function resolveLookup(args: {
    *  placeholder, than pin a day-old answer that has since changed. */
   consumerPinsResult?: boolean;
 }): Promise<Resolved> {
-  const { cache, key, load, revalidate, bypassBackOffWhenCold, coalesce, consumerPinsResult } =
-    args;
+  const {
+    cache,
+    key,
+    load,
+    revalidate,
+    bypassBackOffWhenUnservable,
+    coalesce,
+    consumerPinsResult,
+  } = args;
   const now = args.now ?? Date.now;
 
+  /** True when a cached entry must NOT be handed to a consumer that pins the
+   *  answer — either because it is too old to still be true, or because it is a
+   *  `partial`: a truncated traversal whose `firstRelease: null` means "we
+   *  stopped looking", not "not released". The result card renders that caveat;
+   *  web-og cannot (`firstRelease?.tag ?? 'not yet released'`, long-cached for
+   *  any non-null result), so a partial pins a wrong answer for a day. `badge.ts`
+   *  loads THIS key with an 8s soft deadline, so on a large repo it writes the
+   *  partial that would otherwise be served here — reachable only since this
+   *  route joined the public five-part key. Always false for callers that did
+   *  not opt in, so the public HTML routes are unchanged. */
+  const unpinnable = (entry: CacheEntry<LookupResult>): boolean =>
+    Boolean(consumerPinsResult) &&
+    (entry.ageSeconds >= MAX_STALE_PINNED || Boolean(entry.value.partial));
+
   const prior = await cache.getEntry<LookupResult>(key);
-  if (prior && isFresh(prior)) {
+  if (prior && isFresh(prior) && !unpinnable(prior)) {
     return { status: 'ok', result: prior.value, stale: false, staleAsOf: null, cached: true };
   }
 
@@ -159,13 +185,6 @@ export async function resolveLookup(args: {
     staleAsOf: now() - (prior as CacheEntry<LookupResult>).ageSeconds * 1000,
     cached: true,
   });
-
-  /** True when `prior` is too old to hand to a consumer that pins it. Always
-   *  false for callers that did not opt in, so stale-if-error is unchanged for
-   *  the public HTML routes. */
-  const tooStaleToPin = (): boolean =>
-    Boolean(consumerPinsResult) &&
-    (prior as CacheEntry<LookupResult>).ageSeconds >= MAX_STALE_PINNED;
 
   // Stale-while-revalidate: serve what we have, refresh behind it — but only up to
   // MAX_STALE_PINNED, past which we block rather than hand back an answer a crawler
@@ -178,7 +197,7 @@ export async function resolveLookup(args: {
   // otherwise run four full lookups against the same repo on the shared token.
   // Errors are absorbed here — a background failure must not surface as an
   // unhandled rejection on a response that already succeeded.
-  if (prior && revalidate && prior.ageSeconds < MAX_STALE_PINNED) {
+  if (prior && revalidate && prior.ageSeconds < MAX_STALE_PINNED && !unpinnable(prior)) {
     revalidate(
       backgroundFlight(key, () => resolveLookup({ cache, key, load, now, coalesce: false })).catch(
         () => undefined,
@@ -194,8 +213,8 @@ export async function resolveLookup(args: {
   const backedOff =
     Boolean(neg?.value?.transient) && (neg?.ageSeconds ?? Number.POSITIVE_INFINITY) < NEG_TTL;
   if (backedOff) {
-    if (prior && !tooStaleToPin()) return staleHit();
-    if (!bypassBackOffWhenCold) {
+    if (prior && !unpinnable(prior)) return staleHit();
+    if (!bypassBackOffWhenUnservable) {
       return {
         status: 'transient',
         kind: neg?.value.kind ?? 'provider_server_error',
@@ -218,7 +237,7 @@ export async function resolveLookup(args: {
   try {
     const run = async () => {
       const re = await cache.getEntry<LookupResult>(key);
-      if (re && isFresh(re)) return re.value;
+      if (re && isFresh(re) && !unpinnable(re)) return re.value;
       const r = await load();
       await cache.put(key, r, hardTtlFor(r));
       return r;
@@ -236,7 +255,7 @@ export async function resolveLookup(args: {
         { transient: true, kind: err.kind, status: upstreamStatus, anubis },
         NEG_TTL,
       );
-      if (prior && !tooStaleToPin()) return staleHit();
+      if (prior && !unpinnable(prior)) return staleHit();
       return { status: 'transient', kind: err.kind, upstreamStatus, anubis };
     }
     return { status: 'error', error: err };
