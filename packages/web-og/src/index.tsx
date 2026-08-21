@@ -8,11 +8,36 @@
 //     (never a long-cached error).
 
 import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { ImageResponse } from 'workers-og';
 import type { Env } from './env.js';
 
 const app = new Hono<{ Bindings: Env }>();
+
+/** Render a card for a route that `web` links with `?v=${OG_TEMPLATE_VERSION}`.
+ *
+ *  `release.yml` deploys `web` BEFORE `web-og`, so during the deploy window this
+ *  build can be asked for a template version it cannot render: `web` is already
+ *  emitting `?v=og.vNEXT` while this Worker is still the old build. Serving that
+ *  URL from the old template under the 24h cache would pin a stale card in every
+ *  downstream cache — and the version-busting URL is already spent, so there is
+ *  no second URL left to bump. An unrenderable version falls back to SHORT_CACHE
+ *  and self-heals 60s after web-og lands.
+ *
+ *  No `v` at all is not evidence of a mismatch (a hand-typed or pre-#55 crawler
+ *  URL), so it keeps the result-based default. */
+function renderCard(
+  c: Context,
+  result: LookupResult | null,
+  ctx: { owner: string; repo: string; sha?: string; number?: string },
+): Response {
+  const v = c.req.query('v');
+  return renderImage(
+    result,
+    ctx,
+    v !== undefined && v !== OG_TEMPLATE_VERSION ? SHORT_CACHE : undefined,
+  );
+}
 
 /** Fetch the result JSON from the `web` Worker via Service Binding. Returns null
  *  on any miss/error so the caller renders a short-cached placeholder. */
@@ -36,7 +61,7 @@ app.get('/r/:owner/:repo/c/:shaPng', async (c) => {
 
   const internalUrl = `https://web/internal/result/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(sha)}`;
   const result = await fetchResult(c.env, internalUrl);
-  return renderImage(result, { owner, repo, sha });
+  return renderCard(c, result, { owner, repo, sha });
 });
 
 // Federated permalinks (any non-GitHub provider, #8). projectPath is URL-encoded
@@ -58,7 +83,7 @@ app.get('/h/:host/r/:projectPath/c/:shaPng', async (c) => {
   const slash = projectPath.indexOf('/');
   const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
   const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
-  return renderImage(result, { owner, repo, sha });
+  return renderCard(c, result, { owner, repo, sha });
 });
 
 // GitHub issue/PR permalinks (#79): title-aware OG card. Fetches the result
@@ -70,7 +95,7 @@ app.get('/i/:owner/:repo/:numberPng', async (c) => {
   const number = numberPng.slice(0, -4);
   const internalUrl = `https://web/internal/issue/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(number)}`;
   const result = await fetchResult(c.env, internalUrl);
-  return renderImage(result, { owner, repo, number });
+  return renderCard(c, result, { owner, repo, number });
 });
 
 app.get('/p/:owner/:repo/:numberPng', async (c) => {
@@ -79,7 +104,7 @@ app.get('/p/:owner/:repo/:numberPng', async (c) => {
   const number = numberPng.slice(0, -4);
   const internalUrl = `https://web/internal/pr/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${encodeURIComponent(number)}`;
   const result = await fetchResult(c.env, internalUrl);
-  return renderImage(result, { owner, repo, number });
+  return renderCard(c, result, { owner, repo, number });
 });
 
 // Federated issue/PR permalinks (#79). projectPath URL-encoded into one segment,
@@ -93,7 +118,7 @@ app.get('/h/:host/i/:projectPath/:numberPng', async (c) => {
   const slash = projectPath.indexOf('/');
   const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
   const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
-  return renderImage(result, { owner, repo, number });
+  return renderCard(c, result, { owner, repo, number });
 });
 
 app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
@@ -105,10 +130,31 @@ app.get('/h/:host/p/:projectPath/:numberPng', async (c) => {
   const slash = projectPath.indexOf('/');
   const owner = slash === -1 ? projectPath : projectPath.slice(0, slash);
   const repo = slash === -1 ? '' : projectPath.slice(slash + 1);
-  return renderImage(result, { owner, repo, number });
+  return renderCard(c, result, { owner, repo, number });
 });
 
-app.get('/placeholder.png', () => renderImage(null, { owner: '', repo: '' }));
+// The one null-result render that is NOT transient: no owner/repo/sha, so the
+// PNG is byte-identical on every request, and `web` only ever links it as
+// `/placeholder.png?v=${OG_TEMPLATE_VERSION}` (packages/web/src/ui/og-meta.tsx)
+// — a template change busts the URL instead of waiting out a TTL. Inheriting
+// the null-result SHORT_CACHE would re-run a ~700ms satori+resvg wasm render
+// every 60s for an image that can never differ, so it opts into LONG_CACHE
+// explicitly. The default stays short for the genuinely transient null
+// renders (service-binding miss, the notFound deploy-window path below).
+//
+// The long cache is gated on the requested version being one THIS build can
+// render, because `release.yml` deploys `web` before `web-og`: on a template
+// bump `web` emits `?v=og.vNEXT` while this Worker is still the old build, and
+// long-caching that URL would pin a stale-template card for 24h with no second
+// URL left to bust. Falling back to SHORT_CACHE self-heals 60s after web-og
+// lands, then the version matches and the 24h cache resumes.
+app.get('/placeholder.png', (c) =>
+  renderImage(
+    null,
+    { owner: '', repo: '' },
+    c.req.query('v') === OG_TEMPLATE_VERSION ? LONG_CACHE : SHORT_CACHE,
+  ),
+);
 
 app.get('/healthz', (c) => c.text('ok'));
 
@@ -127,24 +173,43 @@ export default app;
 
 // --- rendering ---------------------------------------------------------------
 
+// `no-transform` is carried deliberately: workers-og's own default included it,
+// and `res.headers.set` below replaces that value outright, so dropping it here
+// would silently let a transforming edge (Polish/Mirage, or any proxy in front
+// of the og.* zone) recompress the PNG that `web` links as the byte-exact social
+// card. Everything after it is the actual freshness policy.
+export const LONG_CACHE = `public, no-transform, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
+export const SHORT_CACHE = 'public, no-transform, max-age=60';
+
 export function renderImage(
   result: LookupResult | null,
   ctx: { owner: string; repo: string; sha?: string; number?: string },
+  cacheOverride?: string,
 ): Response {
   const SIZE = { width: 1200, height: 630 };
-  const longCache = `public, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
-  const shortCache = 'public, max-age=60';
-  const cacheControl = result ? longCache : shortCache;
+  const cacheControl = cacheOverride ?? (result ? LONG_CACHE : SHORT_CACHE);
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 
-  return new ImageResponse(node, {
+  const res = new ImageResponse(node, {
     ...SIZE,
     headers: {
-      'cache-control': cacheControl,
       'x-og-template': OG_TEMPLATE_VERSION,
     },
   });
+  // Set cache-control on the RESPONSE, not through ImageResponse's `headers`
+  // option. workers-og builds its header object as
+  //   { 'Content-Type': …, 'Cache-Control': <1-year immutable default>, ...opts.headers }
+  // and object spread is case-SENSITIVE, so a lowercase 'cache-control' passed
+  // in above does NOT replace that default — both keys reach `new Response`,
+  // where Headers merges them into one value ("public, immutable, no-transform,
+  // max-age=31536000, public, max-age=60") and caches honor the FIRST max-age.
+  // That pinned every short-cached card (placeholder, cold lookup, the
+  // deploy-window notFound render) as immutable for a year, so a transient
+  // failure's unfurl could never refresh. Headers.set is case-insensitive and
+  // replaces the default outright, whatever casing the library uses.
+  res.headers.set('cache-control', cacheControl);
+  return res;
 }
 
 function ResultCard(r: LookupResult) {
