@@ -47,9 +47,9 @@
     "@released/core": "workspace:*",
     "@types/node": "^26.1.2",
     "tsup": "^8.3.5",
-    "tsx": "^4.23.1",
+    "tsx": "^4.23.12",
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "engines": {
     "node": ">=20"
