@@ -492,7 +492,15 @@ describe('resolveLookup — a pinned consumer is never handed a prior past the b
 // for a day — the CLAUDE.md guardrail ("Partial state != not yet released")
 // and the exact outcome `consumerPinsResult` exists to prevent.
 describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL', () => {
-  it('fresh exit: recomputes rather than serve a 10s-old partial written by badge.ts', async () => {
+  // Round 8 narrows this ONE case, and only where it costs nothing: a partial
+  // still inside its own 60s TTL is handed BACK rather than recomputed. It is not
+  // thereby pinnable — the route refuses every `partial` (routes/internal.ts) and
+  // 503s it into a neutral placeholder at max-age=60. Recomputing here instead is
+  // what made the refusal unthrottled: no read path accepted the entry
+  // resolveLookup had just written, so on a repo that reliably blows the 24s soft
+  // deadline every unfurl ran another full traversal on the shared token, where
+  // the flat 30-minute TTL this route replaced made zero upstream calls.
+  it('fresh exit: hands back a 10s-old partial rather than re-run the lookup', async () => {
     const f = makeFakeCache();
     const truncated = mkResult({ released: false, partial: true });
     f.seed(KEY, truncated, 10); // well inside the 60s partial freshness window
@@ -506,12 +514,17 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
       consumerPinsResult: true,
     });
 
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
     expect(r.status).toBe('ok');
-    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+    // Still flagged, so the pinning caller refuses it — the refusal just costs a
+    // cache read now instead of a findRelease.
+    if (r.status === 'ok') {
+      expect(r.result.partial).toBeTruthy();
+      expect(r.result.firstRelease).toBeNull();
+    }
   });
 
-  it('SWR exit: a fresh partial is not handed back while a refresh runs behind it', async () => {
+  it('SWR exit: a fresh partial is never stale-served with a refresh behind it', async () => {
     const f = makeFakeCache();
     const truncated = mkResult({ released: false, partial: true });
     f.seed(KEY, truncated, 10);
@@ -529,12 +542,60 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
       consumerPinsResult: true,
     });
 
-    expect(tasks).toHaveLength(0); // blocked instead of stale-serving the partial
+    // The fresh exit takes it first, so no background refresh is ever fired and
+    // the answer is not marked stale — a crawler must not be told "stale" about a
+    // response the route is going to refuse anyway.
+    expect(tasks).toHaveLength(0);
+    expect(load).not.toHaveBeenCalled();
     expect(r.status).toBe('ok');
     if (r.status === 'ok') {
       expect(r.stale).toBe(false);
-      expect(r.result.firstRelease?.tag).toBe('4.18.0');
+      expect(r.result.partial).toBeTruthy();
     }
+  });
+
+  // find-release.ts returns a SECOND partial shape: a gallop hit the bisect never
+  // confirmed is the earliest containing release (find-release.ts:293-305). Both
+  // `hardTtlFor()` and `isFresh()` test `firstRelease` before `partial`, so that
+  // shape is stored for 30 days and reported fresh forever — a pinning consumer
+  // would get a possibly-wrong tag from an entry of any age, with no caveat and
+  // no revalidation. (The terminal misclassification itself is on `main` and
+  // affects the public routes too; the pin bound rejecting it on the way out is
+  // what this PR owes.)
+  it('a gallop-only partial is not treated as terminal, however old', async () => {
+    const f = makeFakeCache();
+    const gallopOnly = { ...mkResult({ released: true }), partial: { reason: 'soft_deadline' } };
+    f.seed(KEY, gallopOnly, 20 * 24 * 60 * 60); // 20 days — "fresh forever" today
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.partial).toBeUndefined();
+  });
+
+  it('...but a TERMINAL answer of the same age is still served, never recomputed', async () => {
+    // The complement that stops the bound above from swallowing the warm entries
+    // this route joined the public key to reuse.
+    const f = makeFakeCache();
+    f.seed(KEY, mkResult({ released: true }), 20 * 24 * 60 * 60);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
   });
 
   it('stale exit: a partial inside the 30-min bound is still not pinnable', async () => {

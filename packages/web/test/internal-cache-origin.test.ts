@@ -429,6 +429,99 @@ describe('preview keys the result cache on an origin it actually serves', () => 
   });
 });
 
+// The other half of the same failure, and the one that has no fix at runtime:
+// `cacheOrigin` falls back to the REQUEST origin, which for a real Service
+// Binding is web-og's hardcoded `https://web` — a non-routable single-label host
+// the Cache API declines, i.e. #143 exactly, swallowed by neverFatal. PROD_HOST
+// is optional in `Env` and documents itself as the analytics gate ("Unset =>
+// record everything"), so dropping it from a [vars] block — or adding a named env
+// that re-declares vars without it, which [env.preview] already had to do —
+// silently reverts this whole fix with no signal. The config is the only place
+// that can be guarded, so guard it there.
+describe('every deployed environment configures a routable cache origin', () => {
+  const cfg = parseToml(
+    readFileSync(fileURLToPath(new URL('../wrangler.toml', import.meta.url)), 'utf8'),
+  ) as {
+    vars?: Record<string, string>;
+    env?: Record<string, { vars?: Record<string, string> }>;
+  };
+
+  const environments: [string, Record<string, string> | undefined][] = [
+    ['[vars]', cfg.vars],
+    ...Object.entries(cfg.env ?? {}).map(
+      ([name, e]) => [`[env.${name}.vars]`, e.vars] as [string, Record<string, string> | undefined],
+    ),
+  ];
+
+  it('declares at least one env to check, so this suite cannot pass vacuously', () => {
+    expect(environments.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(environments)('%s sets PROD_HOST or PUBLIC_BASE_URL', (_label, vars) => {
+    const configured = vars?.PUBLIC_BASE_URL ?? vars?.PROD_HOST;
+    expect(
+      configured,
+      'without one of these /internal keys the result cache on the Service Binding origin `https://web`, which the Cache API drops (#143)',
+    ).toBeTypeOf('string');
+    const host = new URL(
+      (configured as string).includes('//') ? (configured as string) : `https://${configured}`,
+    ).hostname;
+    expect(host, 'a single-label host is not routable and is not cacheable').toContain('.');
+  });
+});
+
+// Belt to that suspenders: a value that IS set but is not routable must not be
+// used either. `https://web` parses fine and yields a plausible-looking origin,
+// so without this it would sail through and reinstate #143 while looking configured.
+describe('/internal/* refuses a configured cache origin that is not routable', () => {
+  it('ignores a single-label PROD_HOST rather than keying on a host it cannot cache', async () => {
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
+    seed('https://released.example', k, fixture('v4.5.0'));
+
+    const res = await app.fetch(
+      svc(`https://released.example/internal/result/honojs/hono/${SHA}`),
+      { INTERNAL_SECRET, PROD_HOST: 'web' },
+    );
+
+    // Fell through to the request origin, where the warm entry actually is.
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.5.0');
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('still accepts localhost, which `wrangler dev` really serves on', async () => {
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
+    seed('http://localhost:8787', k, fixture('v4.4.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+      PUBLIC_BASE_URL: 'http://localhost:8787',
+    });
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.4.0');
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('documents the unguardable case: unset vars key on the Service Binding origin', async () => {
+    // Nothing at runtime can recover the public origin here, so this pins what
+    // actually happens rather than implying it is safe: the entry is written under
+    // `https://web`, which the real Cache API drops. The wrangler.toml suite above
+    // is what keeps this shape from ever shipping.
+    const sha = '7'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    findReleaseMock.mockResolvedValue(fixture('v4.3.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), {
+      INTERNAL_SECRET,
+    });
+
+    expect(res.status).toBe(200);
+    expect(cacheStore.has(keyUrl(PUBLIC_ORIGIN, k))).toBe(false);
+    expect(cacheStore.has(keyUrl('https://web', k))).toBe(true);
+  });
+});
+
 // A crawler caches whatever the unfurl returns, so anything that makes web-og
 // WAIT is a #143 risk: the shared policy revalidates a pending answer after 5
 // minutes and a partial after 60 seconds, and findRelease's own soft deadline is
@@ -506,10 +599,20 @@ describe('/internal/* never blocks the render on a revalidation', () => {
     expect(findReleaseMock).toHaveBeenCalledTimes(1);
   });
 
-  // The bound is on `partial && !firstRelease`, not on `partial` alone: a
-  // truncated traversal that DID find a containing release carries a real tag,
-  // which web-og renders correctly. 503ing that would throw away a right answer.
-  it('still serves a partial that carries a real firstRelease', async () => {
+  // Round 8 (#144). Earlier rounds bounded this on `partial && !firstRelease`,
+  // reasoning that a truncated traversal which DID find a containing release
+  // carries a tag web-og renders correctly. find-release.ts says otherwise: the
+  // tag in that shape is the GALLOP hit, and the bisect that would confirm no
+  // EARLIER release contains the commit is exactly what the deadline cut short
+  // ("the gallop-found tag is almost always the right answer; bisect just
+  // verifies could there be an earlier one", find-release.ts:288-292). "Almost
+  // always" is a caveat the result card renders and an OG card cannot: web-og
+  // pins the bare tag for 24h. Answering "which release FIRST contains this
+  // commit" with a possibly-later release is the failure this product exists to
+  // avoid, so for a consumer that pins, no partial is servable — the neutral
+  // placeholder claims nothing, and the permalink it links to shows the
+  // best-effort answer WITH its caveat.
+  it('503s rather than pin a partial whose tag the bisect never confirmed', async () => {
     const sha = '2'.repeat(40);
     findReleaseMock.mockResolvedValue({
       ...(fixture('v4.19.0') as Record<string, unknown>),
@@ -518,8 +621,81 @@ describe('/internal/* never blocks the render on a revalidation', () => {
 
     const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
 
+    expect(res.status).toBe(503);
+  });
+
+  // ...and the same shape read back from the SHARED slot. `hardTtlFor()` and
+  // `isFresh()` both test `firstRelease` before `partial`, so a gallop-only
+  // answer is stored for 30 days and reported fresh forever. Joining the public
+  // key is what first exposed the OG path to an entry that old (its own cache was
+  // a flat 30 minutes), so the pin bound has to reject it on the way OUT.
+  // The underlying terminal-classification bug is on `main` and affects the
+  // public routes too — tracked separately, not widened into this PR.
+  it('does not serve a 20-day-old partial the cache classified as terminal', async () => {
+    const sha = '5'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(
+      PUBLIC_ORIGIN,
+      k,
+      { ...(fixture('v4.9.0') as Record<string, unknown>), partial: { reason: 'soft_deadline' } },
+      20 * 24 * 60 * 60,
+    );
+    findReleaseMock.mockResolvedValue(fixture('v4.8.0')); // the real earliest
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
     expect(res.status).toBe(200);
-    expect(await tagOf(res)).toBe('v4.19.0');
+    expect(await tagOf(res)).toBe('v4.8.0');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Refusing to serve a partial must not turn into refusing to CACHE the refusal.
+  // resolveLookup writes the computed partial to the slot at HARD_TTL_PARTIAL, but
+  // every read path rejects it — fresh, SWR and back-off exits alike — so `run()`
+  // falls through to `load()` again. On a repo that reliably blows the 24s soft
+  // deadline that is a full traversal per unfurl on the shared token, forever,
+  // where the flat 30-minute TTL this route replaced made zero upstream calls.
+  it('does not re-run the lookup for every unfurl of a deadline-blowing repo', async () => {
+    const sha = '3'.repeat(40);
+    findReleaseMock.mockResolvedValue(partialFixture());
+
+    const first = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+    const second = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(first.status).toBe(503);
+    expect(second.status).toBe(503);
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The complement, and what stops the throttle above from becoming a permanent
+  // placeholder: the recorded partial is only honoured inside its own 60-second
+  // TTL, the same window the shared policy already trusts a partial for.
+  it('recomputes once the recorded partial ages out of its 60-second window', async () => {
+    const sha = '4'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 61);
+    findReleaseMock.mockResolvedValue(fixture('v4.20.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.20.0');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ...and the throttle must never outrank a REAL answer. A public page view has
+  // no soft-deadline pressure from web-og and can land a terminal result in the
+  // shared slot inside that 60-second window; the next unfurl must serve it.
+  it('serves a real answer that landed in the slot inside the partial window', async () => {
+    const sha = '6'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, fixture('v4.21.0'), 30);
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.21.0');
+    expect(findReleaseMock).not.toHaveBeenCalled();
   });
 });
 

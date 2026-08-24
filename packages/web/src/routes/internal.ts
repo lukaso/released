@@ -81,7 +81,19 @@ function originOf(value: string | undefined): string | null {
     // non-URL string that satisfies `??` and then throws out of `new Request()`
     // below, OUTSIDE neverFatal. That is the scheme-less slip again: a 500 where
     // a computed answer was available, rendered as the neutral placeholder.
-    return origin === 'null' ? null : origin;
+    if (origin === 'null') return null;
+    // A single-label host (`web`, `localhost:8787`'s sibling shapes) is not
+    // routable, and the Cache API silently declines a key URL on one — #143's
+    // mechanism. `https://web` parses cleanly and yields a plausible-looking
+    // origin, so a var accidentally set to the Service-Binding target would
+    // otherwise sail through here looking configured while caching nothing.
+    // Falling through to the next candidate is strictly better: a wrong-but-
+    // routable origin still persists, a non-routable one persists nothing.
+    // `localhost` is the one single-label host that is real — `wrangler dev`
+    // serves on it, and README tells developers to put it in PUBLIC_BASE_URL.
+    const { hostname } = new URL(origin);
+    const routable = hostname.includes('.') || hostname === 'localhost' || hostname.includes(':');
+    return routable ? origin : null;
   } catch {
     return null;
   }
@@ -210,19 +222,30 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     consumerPinsResult: true,
   });
   // Refusing to SERVE a cached partial (consumerPinsResult, above) is only half
-  // the guardrail. On a repo that reliably blows findRelease's soft deadline the
+  // the guardrail: on a repo that reliably blows findRelease's soft deadline the
   // recompute it forces returns a partial too, and a 200 here pins exactly the
-  // wrong card the refusal exists to prevent: web-og renders
-  // `firstRelease?.tag ?? 'not yet released'` and long-caches any non-null
-  // result, so a truncated traversal of a RELEASED commit becomes a definite
-  // "not yet released" for 24h — the CLAUDE.md guardrail ("Partial state !=
-  // 'not yet released'"). Falling through to the 503 renders the neutral
-  // placeholder at max-age=60 instead, which self-heals on the next unfurl.
-  // The bound is `partial && !firstRelease`: a truncated traversal that DID find
-  // a containing release carries a real tag web-og renders correctly.
+  // answer the refusal exists to prevent.
+  //
+  // NO partial is servable to this caller, whichever shape it has. With
+  // `firstRelease: null`, web-og renders `firstRelease?.tag ?? 'not yet released'`
+  // and long-caches it, so a truncated traversal of a RELEASED commit becomes a
+  // definite "not yet released" for 24h — the CLAUDE.md guardrail ("Partial state
+  // != 'not yet released'"). WITH a `firstRelease` it is no safer: that tag is the
+  // gallop hit, and the bisect that would confirm no EARLIER release contains the
+  // commit is precisely what the deadline cut short ("the gallop-found tag is
+  // almost always the right answer; bisect just verifies could there be an earlier
+  // one", find-release.ts:288-292). "Almost always" is a caveat the result card
+  // renders and an OG card cannot. Answering "which release FIRST contains this
+  // commit" with a possibly-later release is the one thing this product must not
+  // do, so both fall through to the 503: web-og caches the neutral placeholder at
+  // max-age=60, which claims nothing and self-heals on the next unfurl, and the
+  // permalink it links to still shows the best-effort answer WITH its caveat.
+  //
+  // resolveLookup hands back a partial it computed less than HARD_TTL_PARTIAL ago
+  // rather than recomputing it (see `unpinnable`), so this 503 is throttled to one
+  // traversal per 60s per key instead of one per unfurl.
   if (resolved.status === 'ok') {
-    const pinsWrongAnswer = Boolean(resolved.result.partial) && !resolved.result.firstRelease;
-    if (!pinsWrongAnswer) {
+    if (!resolved.result.partial) {
       return new Response(JSON.stringify(resolved.result), {
         headers: { 'content-type': 'application/json' },
       });

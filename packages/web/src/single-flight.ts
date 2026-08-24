@@ -34,26 +34,46 @@ export async function singleFlight<T>(key: string, loader: Loader<T>): Promise<T
 // `coalesce`). Keeping the two maps separate gives both properties: background
 // tasks collapse onto each other, and no foreground request can ever join one.
 //
-// Honest failure mode: if a background promise never settles, its entry leaks and
-// later background refreshes for that key join a dead promise. Nobody awaits a
-// background task's result, so the visible consequence is bounded — this isolate
-// stops refreshing that key behind a stale hit, and the foreground blocking path
-// past MAX_STALE_PINNED still recovers it.
-const background = new Map<string, Promise<unknown>>();
+// That separation bounds who can be hurt by an abandoned promise, but not how
+// long. The map is module-level, so an entry registered under request A's
+// IoContext is handed to request B; when workerd cancels A's context the promise
+// never settles, so the loader's `finally` never runs and the entry never clears.
+// Every later refresh for that key joins the dead promise, and background
+// revalidation for it is dead for the isolate's lifetime — recovery only when the
+// prior crosses MAX_STALE_PINNED and the foreground path blocks. So entries carry
+// the time they were registered and expire: past MAX_BACKGROUND_AGE_MS the entry
+// is treated as absent and the next refresh starts a fresh run, which also caps
+// the map at the keys refreshed in the last window.
+const background = new Map<string, { promise: Promise<unknown>; startedAt: number }>();
+
+/** How long a background entry may be joined before it is presumed abandoned.
+ *  findRelease's own HARD deadline is 28s, so a refresh still running past this
+ *  is not slow — it is a promise whose IoContext went away. Erring long is the
+ *  safe direction: the cost of expiring too early is one duplicated traversal,
+ *  while the cost of never expiring is no revalidation at all for that key. */
+const MAX_BACKGROUND_AGE_MS = 30_000;
 
 /** Collapse concurrent BACKGROUND refreshes for `key` onto one run, in a map
  *  foreground callers never join. Registration is synchronous, so two refreshes
  *  fired in the same tick cannot both miss it. */
 export function backgroundFlight<T>(key: string, loader: Loader<T>): Promise<T> {
-  const existing = background.get(key) as Promise<T> | undefined;
-  if (existing) return existing;
-  const p = (async () => {
+  const existing = background.get(key);
+  if (existing && Date.now() - existing.startedAt < MAX_BACKGROUND_AGE_MS) {
+    return existing.promise as Promise<T>;
+  }
+  const entry: { promise: Promise<unknown>; startedAt: number } = {
+    promise: undefined as unknown as Promise<unknown>,
+    startedAt: Date.now(),
+  };
+  entry.promise = (async () => {
     try {
       return await loader();
     } finally {
-      background.delete(key);
+      // Only clear OUR entry. An abandoned promise that settles late (or a run
+      // superseded after expiry) must not evict the live entry that replaced it.
+      if (background.get(key) === entry) background.delete(key);
     }
   })();
-  background.set(key, p);
-  return p;
+  background.set(key, entry);
+  return entry.promise as Promise<T>;
 }

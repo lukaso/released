@@ -160,28 +160,41 @@ export async function resolveLookup(args: {
   const now = args.now ?? Date.now;
 
   /** True when a cached entry must NOT be handed to a consumer that pins the
-   *  answer — either because it is too old to still be true, or because it is a
-   *  `partial`: a truncated traversal whose `firstRelease: null` means "we
-   *  stopped looking", not "not released". The result card renders that caveat;
-   *  web-og cannot (`firstRelease?.tag ?? 'not yet released'`, long-cached for
-   *  any non-null result), so a partial pins a wrong answer for a day. `badge.ts`
-   *  loads THIS key with an 8s soft deadline, so on a large repo it writes the
-   *  partial that would otherwise be served here — reachable only since this
-   *  route joined the public five-part key. Always false for callers that did
-   *  not opt in, so the public HTML routes are unchanged.
+   *  answer. Always false for callers that did not opt in, so the public HTML
+   *  routes are unchanged. Three shapes, three rules:
    *
-   *  The age bound does NOT apply to a terminal `firstRelease` answer: which
-   *  release first contains a commit cannot change, which is why `isFresh()`
-   *  treats it as fresh forever and `hardTtlFor()` gives it `HARD_TTL_RELEASED`
-   *  (30 days). `MAX_STALE_PINNED` exists for the opposite case — a "not yet
-   *  released" prior that has since shipped. Applying it to a terminal answer
-   *  would discard exactly the warm entries this route joined the public key to
-   *  reuse, paying a full findRelease on the crawler's critical path for every
-   *  unfurl more than 30 minutes after the last write. */
-  const unpinnable = (entry: CacheEntry<LookupResult>): boolean =>
-    Boolean(consumerPinsResult) &&
-    !entry.value.firstRelease &&
-    (entry.ageSeconds >= MAX_STALE_PINNED || Boolean(entry.value.partial));
+   *  TERMINAL (`firstRelease`, no `partial`) — always servable. Which release
+   *  first contains a commit cannot change, which is why `isFresh()` treats it as
+   *  fresh forever and `hardTtlFor()` keeps it 30 days. `MAX_STALE_PINNED` exists
+   *  for the opposite case, a "not yet released" prior that has since shipped;
+   *  applying it here would discard exactly the warm entries this route joined the
+   *  public key to reuse, paying a full findRelease per unfurl.
+   *
+   *  PARTIAL (either shape) — never servable to a pinning consumer, but only
+   *  worth recomputing once its own 60-second TTL is up. A partial is a truncated
+   *  traversal: with `firstRelease: null` it means "we stopped looking", which
+   *  web-og renders as a definite "not yet released"; WITH a `firstRelease` it
+   *  carries the gallop hit, and the bisect that would confirm no EARLIER release
+   *  contains the commit is what the deadline cut short (find-release.ts:288-292).
+   *  The result card renders that caveat, web-og cannot — it long-caches the bare
+   *  tag for 24h. So neither shape may be pinned. Inside `HARD_TTL_PARTIAL` the
+   *  entry is still handed BACK (the caller 503s it into a short-cached neutral
+   *  placeholder): that is what throttles a repo which reliably blows the soft
+   *  deadline, where recomputing per unfurl would run a full traversal on the
+   *  shared token for every crawler, forever. Past 60s we recompute instead.
+   *
+   *  PENDING (no `firstRelease`, no `partial`) — bounded by `MAX_STALE_PINNED`:
+   *  an answer older than that may have shipped since, and a PNG already rendered
+   *  from it cannot be invalidated. */
+  const isRecentPartial = (entry: CacheEntry<LookupResult>): boolean =>
+    Boolean(entry.value.partial) && entry.ageSeconds < HARD_TTL_PARTIAL;
+
+  const unpinnable = (entry: CacheEntry<LookupResult>): boolean => {
+    if (!consumerPinsResult) return false;
+    if (entry.value.firstRelease && !entry.value.partial) return false;
+    if (isRecentPartial(entry)) return false;
+    return entry.ageSeconds >= MAX_STALE_PINNED || Boolean(entry.value.partial);
+  };
 
   const prior = await cache.getEntry<LookupResult>(key);
   if (prior && isFresh(prior) && !unpinnable(prior)) {
