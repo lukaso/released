@@ -56,6 +56,9 @@ let cacheFault: 'none' | 'match' | 'put' = 'none';
 };
 
 const { default: app } = await import('../src/index.js');
+// The real in-isolate flight registry the routes use — a test can register a
+// flight the way a concurrent badge request would, and see who runs the loader.
+const { singleFlight } = await import('../src/single-flight.js');
 
 const INTERNAL_SECRET = 'test-shared-secret';
 const PROD_HOST = 'released.blabberate.com';
@@ -471,41 +474,127 @@ describe('preview keys the result cache on an origin it actually serves', () => 
 // The other half of the same failure, and the one that has no fix at runtime:
 // `cacheOrigin` falls back to the REQUEST origin, which for a real Service
 // Binding is web-og's hardcoded `https://web` — a non-routable single-label host
-// the Cache API declines, i.e. #143 exactly, swallowed by neverFatal. PROD_HOST
-// is optional in `Env` and documents itself as the analytics gate ("Unset =>
-// record everything"), so dropping it from a [vars] block — or adding a named env
-// that re-declares vars without it, which [env.preview] already had to do —
-// silently reverts this whole fix with no signal. The config is the only place
-// that can be guarded, so guard it there.
-describe('every deployed environment configures a routable cache origin', () => {
+// the Cache API declines, i.e. #143 exactly, swallowed by neverFatal. The config
+// is the only place that can be guarded, so guard it there.
+//
+// Guard the invariant that actually broke, not a weaker one that survives it.
+// `[env.preview]` DID declare a var — it copied the production `PROD_HOST`, which
+// every env pins because it gates analytics — and keyed /internal on the prod
+// origin while serving `released-web-preview.*.workers.dev`. So "PROD_HOST or
+// PUBLIC_BASE_URL is set and routable" goes GREEN on the exact config this PR is
+// fixing. What a named env must have is a cache origin OF ITS OWN.
+type WranglerCfg = {
+  vars?: Record<string, string>;
+  env?: Record<string, { name?: string; vars?: Record<string, string> }>;
+};
+
+/** The invariant as a pure function, so it can be run against configs that are
+ *  KNOWN BAD as well as the committed one. A checker that has only ever seen the
+ *  good config demonstrates nothing about what it rejects. Returns one string per
+ *  violation; `[]` means the config cannot reintroduce #143's namespace split. */
+function cacheOriginProblems(cfg: WranglerCfg): string[] {
+  const problems: string[] = [];
+  const hostOf = (value: string): string | null => {
+    try {
+      return new URL(value.includes('//') ? value : `https://${value}`).host;
+    } catch {
+      return null;
+    }
+  };
+  // `host` keeps the port, which is what makes a single-label dev origin real.
+  const routable = (host: string): boolean => host.includes('.') || host.startsWith('localhost');
+
+  const topConfigured = cfg.vars?.PUBLIC_BASE_URL ?? cfg.vars?.PROD_HOST;
+  const prodHost = topConfigured ? hostOf(topConfigured) : null;
+  if (!topConfigured) {
+    problems.push('[vars] sets neither PROD_HOST nor PUBLIC_BASE_URL');
+  } else if (!prodHost || !routable(prodHost)) {
+    problems.push(`[vars] cache origin \`${topConfigured}\` is not routable`);
+  }
+
+  for (const [name, e] of Object.entries(cfg.env ?? {})) {
+    const url = e.vars?.PUBLIC_BASE_URL;
+    if (!url) {
+      problems.push(
+        `[env.${name}.vars] does not set its own PUBLIC_BASE_URL — /internal falls back to PROD_HOST and keys the result cache on an origin this Worker does not serve`,
+      );
+      continue;
+    }
+    const host = hostOf(url);
+    if (!host || !routable(host)) {
+      problems.push(`[env.${name}.vars] PUBLIC_BASE_URL \`${url}\` is not routable`);
+      continue;
+    }
+    if (host === prodHost) {
+      problems.push(`[env.${name}.vars] PUBLIC_BASE_URL keys on the PRODUCTION origin \`${host}\``);
+    }
+  }
+  return problems;
+}
+
+describe('every deployed environment configures a routable cache origin of its OWN', () => {
   const cfg = parseToml(
     readFileSync(fileURLToPath(new URL('../wrangler.toml', import.meta.url)), 'utf8'),
-  ) as {
-    vars?: Record<string, string>;
-    env?: Record<string, { vars?: Record<string, string> }>;
-  };
+  ) as WranglerCfg;
 
-  const environments: [string, Record<string, string> | undefined][] = [
-    ['[vars]', cfg.vars],
-    ...Object.entries(cfg.env ?? {}).map(
-      ([name, e]) => [`[env.${name}.vars]`, e.vars] as [string, Record<string, string> | undefined],
-    ),
-  ];
-
-  it('declares at least one env to check, so this suite cannot pass vacuously', () => {
-    expect(environments.length).toBeGreaterThanOrEqual(2);
+  it('holds for the committed wrangler.toml', () => {
+    expect(cacheOriginProblems(cfg)).toEqual([]);
   });
 
-  it.each(environments)('%s sets PROD_HOST or PUBLIC_BASE_URL', (_label, vars) => {
-    const configured = vars?.PUBLIC_BASE_URL ?? vars?.PROD_HOST;
-    expect(
-      configured,
-      'without one of these /internal keys the result cache on the Service Binding origin `https://web`, which the Cache API drops (#143)',
-    ).toBeTypeOf('string');
-    const host = new URL(
-      (configured as string).includes('//') ? (configured as string) : `https://${configured}`,
-    ).hostname;
-    expect(host, 'a single-label host is not routable and is not cacheable').toContain('.');
+  it('runs against the real named environments, so it cannot pass vacuously', () => {
+    expect(Object.keys(cfg.env ?? {})).toContain('preview');
+  });
+
+  it('rejects the pre-fix [env.preview] — the config that actually shipped #143', () => {
+    const preFix: WranglerCfg = {
+      vars: { PROD_HOST },
+      // Exactly what was committed before this PR: the prod PROD_HOST copied in
+      // (it gates analytics, so every env pins it) and no origin of its own.
+      env: { preview: { name: 'released-web-preview', vars: { ANUBIS_HOSTS: '', PROD_HOST } } },
+    };
+    expect(cacheOriginProblems(preFix)).toEqual([
+      expect.stringContaining('[env.preview.vars] does not set its own PUBLIC_BASE_URL'),
+    ]);
+  });
+
+  it('rejects a NEW env that copies PROD_HOST the way [env.preview] once did', () => {
+    const withStaging: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        staging: { name: 'released-web-staging', vars: { ANUBIS_HOSTS: '', PROD_HOST } },
+      },
+    };
+    expect(cacheOriginProblems(withStaging)).toEqual([
+      expect.stringContaining('[env.staging.vars] does not set its own PUBLIC_BASE_URL'),
+    ]);
+  });
+
+  it('rejects an env whose PUBLIC_BASE_URL IS the production origin', () => {
+    const aliased: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        staging: {
+          name: 'released-web-staging',
+          vars: { PUBLIC_BASE_URL: PUBLIC_ORIGIN },
+        },
+      },
+    };
+    expect(cacheOriginProblems(aliased)).toEqual([
+      expect.stringContaining('keys on the PRODUCTION origin'),
+    ]);
+  });
+
+  it('rejects an env whose PUBLIC_BASE_URL is a non-routable single-label host', () => {
+    const bound: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        staging: { name: 'released-web-staging', vars: { PUBLIC_BASE_URL: 'https://web' } },
+      },
+    };
+    expect(cacheOriginProblems(bound)).toEqual([expect.stringContaining('is not routable')]);
   });
 });
 
@@ -540,6 +629,30 @@ describe('/internal/* refuses a configured cache origin that is not routable', (
     expect(res.status).toBe(200);
     expect(await tagOf(res)).toBe('v4.4.0');
     expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts a single-label host WITH a port, which Docker/Codespaces dev serves on', async () => {
+    // `URL.hostname` never carries the port (that is `URL.port`), so a check for a
+    // colon in the hostname matches only a bracketed IPv6 literal — it never sees
+    // `app:8787`. Rejecting this origin is not harmless over-strictness: a rejected
+    // PUBLIC_BASE_URL is indistinguishable from an unset one, so the ?? chain lands
+    // on PROD_HOST and /internal keys on the production origin while the public
+    // routes key on the dev one. That is #143's split, reached with the var set.
+    const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
+    seed('http://app:8787', k, fixture('v4.2.0'));
+    // Only reachable if the origin was rejected and the chain fell to PROD_HOST.
+    findReleaseMock.mockResolvedValue(fixture('v9.9.9'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+      PROD_HOST,
+      PUBLIC_BASE_URL: 'http://app:8787',
+    });
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.2.0');
+    expect(findReleaseMock).not.toHaveBeenCalled();
+    expect(cacheStore.has(keyUrl(PUBLIC_ORIGIN, k))).toBe(false);
   });
 
   it('documents the unguardable case: unset vars key on the Service Binding origin', async () => {
@@ -847,5 +960,34 @@ describe('/internal/* does not let a shared back-off marker cause a permanent pl
     expect(res.status).toBe(200);
     expect(await tagOf(res)).toBe('v4.11.0');
     expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+});
+
+// Aligning the cache key also aligned the in-isolate SINGLE-FLIGHT key, which is a
+// sharing this route did not have on main (it keyed on a three-part key of its
+// own). `singleFlight` hands every joiner the FIRST registrant's promise and runs
+// only that owner's loader, and badge.ts builds a byte-identical key for
+// `issue#N`/`pr#N` (badge.ts:110) with a deliberately tighter 8s/9s deadline. So a
+// badge request landing ~1s earlier in the same isolate would hand this route a
+// truncated `partial`, which it 503s into a pinned neutral placeholder — #143's
+// symptom, on a link where this route's own 24s deadline finds the real answer.
+describe('/internal/* runs its own lookup instead of joining the badge flight', () => {
+  it('does not inherit an 8-second-deadline partial registered by badge.ts', async () => {
+    // The key badge.ts registers its flight under for `/badge/.../issue/11.svg`.
+    const k = await publicKey('github.com/honojs/hono', 'issue#11');
+    let finishBadge: (value: unknown) => void = () => {};
+    const badgeFlight = singleFlight(k, () => new Promise((r) => (finishBadge = r)));
+
+    findReleaseMock.mockResolvedValue(fixture('v4.13.0'));
+    const pending = app.fetch(svc('https://web/internal/issue/honojs/hono/11'), ENV);
+    await settle();
+    // Badge's tighter deadline ran out: a truncated traversal, all it can offer.
+    finishBadge(partialFixture());
+    await badgeFlight;
+
+    const res = await pending;
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.13.0');
+    expect(findReleaseMock).toHaveBeenCalledOnce();
   });
 });

@@ -100,10 +100,21 @@ function originOf(value: string | undefined): string | null {
     // wrangler.toml suite that requires every env to set PROD_HOST or
     // PUBLIC_BASE_URL.
     //
-    // `localhost` is the one single-label host that is real — `wrangler dev`
-    // serves on it, and README tells developers to put it in PUBLIC_BASE_URL.
-    const { hostname } = new URL(origin);
-    const routable = hostname.includes('.') || hostname === 'localhost' || hostname.includes(':');
+    // Single-label hosts are the ones to reject, with two real exceptions.
+    // `localhost` is one — `wrangler dev` serves on it and README tells
+    // developers to put it in PUBLIC_BASE_URL. An explicit PORT is the other: a
+    // dev on Codespaces / Docker / WSL reaches the Worker at a service name like
+    // `http://app:8787`, which is a host this Worker really does serve. Note the
+    // port is NOT in `hostname` (it lives in `URL.port`; `hostname` holds a colon
+    // only for a bracketed IPv6 literal), so it has to be read separately.
+    //
+    // Rejecting one of those would not be a harmless over-strictness: a REJECTED
+    // PUBLIC_BASE_URL is indistinguishable from an unset one, so the ?? chain
+    // falls through to PROD_HOST and every /internal entry keys on the production
+    // origin while the public routes key on the dev one — the two-namespace split
+    // of #143, reached silently despite the var being set correctly.
+    const { hostname, port } = new URL(origin);
+    const routable = hostname.includes('.') || hostname === 'localhost' || port !== '';
     return routable ? origin : null;
   } catch {
     return null;
@@ -226,6 +237,17 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // 503 into a short-cached placeholder. web-og long-caching a partial that
     // THIS route's own lookup produced is the remaining half, tracked in #151.
     consumerPinsResult: true,
+    // Share the SLOT with badge.ts and the permalink pages, but not the in-isolate
+    // FLIGHT. Aligning the cache key also aligned the single-flight key, and
+    // `singleFlight` runs the first registrant's loader for every joiner: a badge
+    // request that registers first (badge.ts:110 builds a byte-identical key for
+    // `issue#N`/`pr#N`) would hand this route its own 8-second-deadline result. On
+    // a repo that needs longer than that, this caller would inherit a `partial` and
+    // 503 into a pinned placeholder — #143's symptom, on a link where this route's
+    // own 24s deadline finds the answer. On main that could not happen, because
+    // /internal keyed on a three-part key of its own. Concurrent OG unfurls of the
+    // same key still collapse into one flight; only the cross-caller join is cut.
+    flightKey: `${k}:og`,
   });
   // Refusing to SERVE a cached partial (consumerPinsResult, above) is only half
   // the guardrail: on a repo that reliably blows findRelease's soft deadline the

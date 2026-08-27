@@ -134,8 +134,21 @@ export async function resolveLookup(args: {
    *  fresh lookup, or hand back a transient the caller renders as a short-cached
    *  placeholder, than pin a day-old answer that has since changed. */
   consumerPinsResult?: boolean;
+  /** Override the in-isolate single-flight key, which otherwise IS `key`.
+   *
+   *  `singleFlight` hands every joiner the FIRST registrant's promise and runs
+   *  only that owner's `load`, so two callers sharing a key also share a loader —
+   *  including its deadlines. Callers on this same cache slot do not agree on
+   *  those: badge.ts runs an 8s/9s findRelease so a slow repo returns a
+   *  short-cached "checking…", while the permalink and /internal callers run the
+   *  24s/28s defaults. Sharing a slot is deliberate (that is the whole point of a
+   *  common key); sharing a TRUNCATION is not, so a caller whose consumer cannot
+   *  caveat a partial passes its own flight key and always runs its own lookup.
+   *  Concurrent calls from that same caller still collapse into one. */
+  flightKey?: string;
 }): Promise<Resolved> {
   const { cache, key, load, bypassBackOffWhenUnservable, consumerPinsResult } = args;
+  const flightKey = args.flightKey ?? key;
   const now = args.now ?? Date.now;
 
   /** True when a cached entry must NOT be handed to a consumer that pins the
@@ -244,7 +257,7 @@ export async function resolveLookup(args: {
       await cache.put(key, r, pinnedPartial ? HARD_TTL_PARTIAL : hardTtlFor(r));
       return r;
     };
-    const result = await singleFlight(key, run);
+    const result = await singleFlight(flightKey, run);
     return { status: 'ok', result, stale: false, staleAsOf: null, cached: false };
   } catch (err) {
     if (err instanceof NotYetReleasedError) return { status: 'not_yet', error: err };
