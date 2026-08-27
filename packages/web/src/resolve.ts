@@ -29,7 +29,7 @@ import {
 } from '@released/core';
 import { upstreamStatusOf } from './analytics.js';
 import type { CacheEntry, WorkerCache } from './cache.js';
-import { backgroundFlight, singleFlight } from './single-flight.js';
+import { singleFlight } from './single-flight.js';
 
 // Freshness windows + hard TTLs (seconds).
 const FRESH_WINDOW_PENDING = 5 * 60; // re-check non-released answers every 5 min
@@ -46,11 +46,10 @@ const NEG_TTL = 60; // back off this long when upstream is down
 // flat TTL before it shared this 24h slot, so bounding is never worse than the
 // code it replaced.
 //
-// It bounds EVERY exit that hands back a prior, not just the SWR one. Rounds 4/5
-// bounded only the stale-while-revalidate return, which left both stale-if-error
-// exits (back-off below, and the transient catch) free to serve an answer of any
-// age — and sharing the 24h slot is exactly what made a 23h-old prior possible on
-// the /internal path (`consumerPinsResult`, set by the OG route). Public HTML
+// It bounds EVERY exit that hands back a prior. Sharing the 24h slot is exactly
+// what made a 23h-old prior possible on the /internal path (`consumerPinsResult`,
+// set by the OG route): before it, that route had a flat 30-minute TTL of its own
+// and an entry that old could not exist. Public HTML
 // routes leave the flag unset and keep stale-if-error UNBOUNDED: a human sees an
 // explicit "stale as of" caveat and can reload, and their answer is not pinned
 // anywhere, so serving through a long outage is the right degrade for them.
@@ -111,36 +110,24 @@ export async function resolveLookup(args: {
   key: string;
   load: () => Promise<LookupResult>;
   now?: () => number;
-  /** Opt-in stale-while-revalidate, for callers on a latency-critical path.
-   *  When given, a cached-but-stale answer is returned IMMEDIATELY and the
-   *  revalidation is handed to this callback to run off the response path
-   *  (`executionCtx.waitUntil`). Callers that can afford to wait — the public
-   *  HTML routes — omit it and keep the blocking behaviour. */
-  revalidate?: (task: Promise<unknown>) => void;
   /** Opt-in for callers whose consumer only ever asks ONCE, so a soft failure
    *  becomes permanent for them (the OG crawler). When set, the shared negative
    *  back-off marker is honoured only if there is a prior we can actually SERVE
    *  — with nothing servable, an attempt beats handing back a placeholder that
-   *  gets cached forever. "Nothing servable" is broader than an empty slot: with
-   *  `consumerPinsResult`, a prior past `MAX_STALE_PINNED` or a truncated
-   *  `partial` is unservable too, so a warm-but-unpinnable key reaches this path
-   *  as well. That is deliberate (the alternative is a permanent placeholder),
-   *  but it is NOT throttled — see the fall-through comment below for the cost.
-   *  The marker is still WRITTEN on failure, and callers that can retry (the
-   *  public HTML routes) omit this and keep backing off. */
+   *  gets cached forever. The marker is still WRITTEN on failure, and callers
+   *  that can retry (the public HTML routes) omit this and keep backing off.
+   *
+   *  Be honest about the reachable behaviour. The only caller that sets this also
+   *  sets `consumerPinsResult`, and `findRelease` emits just two entry shapes:
+   *  TERMINAL (fresh forever, so it returns at the fresh exit above) and PARTIAL
+   *  (fresh for its 60s, unpinnable after). Neither can reach the stale-serve on
+   *  the back-off line below, so on that path the bypass is UNCONDITIONAL, not
+   *  cold-only. That is accepted, not overlooked: a crawler asks once, so the
+   *  alternative is a placeholder pinned long after the host recovers, and the
+   *  cost is the unthrottled load documented at the fall-through. The
+   *  `prior && !unpinnable(prior)` stale-serve is live for the public routes,
+   *  which do not set either flag. */
   bypassBackOffWhenUnservable?: boolean;
-  /** Internal. Set false for the background refresh on the SWR path: that task
-   *  runs under `executionCtx.waitUntil`, whose IoContext workerd can tear down
-   *  before the subrequest settles. singleFlight only clears its module-level
-   *  entry in the loader's `finally`, so a background owner that never settles
-   *  leaves a dead promise under this key, and every later request in the same
-   *  isolate — a human on the permalink, badge.ts on the same cull/nopre key —
-   *  joins it: a hang, or "Cannot perform I/O on behalf of a different request",
-   *  which resolveLookup classifies as a non-transient error and the page renders
-   *  as a hard failure. A foreground caller is always a live, awaiting request; a
-   *  background one is not. A duplicated refresh is far cheaper than poisoning
-   *  the key for the lifetime of the isolate. */
-  coalesce?: boolean;
   /** Opt-in for callers whose consumer CACHES whatever we hand back, for longer
    *  than we can correct (the OG crawler pins a rendered PNG for 24h). When set,
    *  no exit returns a prior older than `MAX_STALE_PINNED`: we would rather pay a
@@ -148,15 +135,7 @@ export async function resolveLookup(args: {
    *  placeholder, than pin a day-old answer that has since changed. */
   consumerPinsResult?: boolean;
 }): Promise<Resolved> {
-  const {
-    cache,
-    key,
-    load,
-    revalidate,
-    bypassBackOffWhenUnservable,
-    coalesce,
-    consumerPinsResult,
-  } = args;
+  const { cache, key, load, bypassBackOffWhenUnservable, consumerPinsResult } = args;
   const now = args.now ?? Date.now;
 
   /** True when a cached entry must NOT be handed to a consumer that pins the
@@ -209,26 +188,6 @@ export async function resolveLookup(args: {
     cached: true,
   });
 
-  // Stale-while-revalidate: serve what we have, refresh behind it — but only up to
-  // MAX_STALE_PINNED, past which we block rather than hand back an answer a crawler
-  // would pin for a day. The refresh is a plain recursive call WITHOUT `revalidate`,
-  // so it takes the blocking path and cannot recurse again, and with
-  // `coalesce: false` so a task the runtime may kill never owns the foreground
-  // flight for this key. `backgroundFlight` then restores the collapsing that
-  // dropping out of `singleFlight` cost: this branch fires on EVERY request in the
-  // stale window, so four crawlers unfurling one link in the same second would
-  // otherwise run four full lookups against the same repo on the shared token.
-  // Errors are absorbed here — a background failure must not surface as an
-  // unhandled rejection on a response that already succeeded.
-  if (prior && revalidate && prior.ageSeconds < MAX_STALE_PINNED && !unpinnable(prior)) {
-    revalidate(
-      backgroundFlight(key, () => resolveLookup({ cache, key, load, now, coalesce: false })).catch(
-        () => undefined,
-      ),
-    );
-    return staleHit();
-  }
-
   // Did we try (and fail transiently) very recently? If so, don't pound the
   // upstream again yet — serve the last-known-good if we have one, else a soft
   // transient.
@@ -262,10 +221,21 @@ export async function resolveLookup(args: {
       const re = await cache.getEntry<LookupResult>(key);
       if (re && isFresh(re) && !unpinnable(re)) return re.value;
       const r = await load();
-      await cache.put(key, r, hardTtlFor(r));
+      // A consumer that PINS what we hand back is also the most deadline-pressured
+      // producer of partials, and `hardTtlFor()` tests `firstRelease` before
+      // `partial` — so a gallop-only partial (find-release.ts ~295: the gallop hit
+      // WITH `partial: soft_deadline`) would take the TERMINAL 30-day branch and
+      // `isFresh()` would report it fresh forever. On the shared slot that pins the
+      // public permalink and badge to a tag the bisect never confirmed, for a month,
+      // with no upstream call able to correct it. `unpinnable` trusts a partial for
+      // HARD_TTL_PARTIAL and no longer, so the long TTL buys this caller nothing.
+      // (The same misclassification on the PUBLIC routes' own writes predates this
+      // PR and is tracked in #155; their semantics are deliberately untouched here.)
+      const pinnedPartial = Boolean(consumerPinsResult && r.partial);
+      await cache.put(key, r, pinnedPartial ? HARD_TTL_PARTIAL : hardTtlFor(r));
       return r;
     };
-    const result = coalesce === false ? await run() : await singleFlight(key, run);
+    const result = await singleFlight(key, run);
     return { status: 'ok', result, stale: false, staleAsOf: null, cached: false };
   } catch (err) {
     if (err instanceof NotYetReleasedError) return { status: 'not_yet', error: err };

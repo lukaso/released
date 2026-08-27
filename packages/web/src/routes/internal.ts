@@ -87,8 +87,19 @@ function originOf(value: string | undefined): string | null {
     // mechanism. `https://web` parses cleanly and yields a plausible-looking
     // origin, so a var accidentally set to the Service-Binding target would
     // otherwise sail through here looking configured while caching nothing.
-    // Falling through to the next candidate is strictly better: a wrong-but-
-    // routable origin still persists, a non-routable one persists nothing.
+    //
+    // Be precise about the reach of this guard, because the ?? chain it falls
+    // through to ends at the REQUEST origin. It fixes the case where the request
+    // origin is routable (a `wrangler dev` or public request to /internal): the
+    // key lands on a host this Worker actually serves and the entry persists. It
+    // does NOT fix the Service-Binding case, where the request origin is that same
+    // `https://web` — there is no routable candidate left, and a synthetic constant
+    // would not help, because cache.ts's rule is that the key URL must be on the
+    // Worker's OWN hostname (a made-up one no-ops exactly like `cache.invalid`).
+    // That case is unguardable at runtime and is guarded in config instead, by the
+    // wrangler.toml suite that requires every env to set PROD_HOST or
+    // PUBLIC_BASE_URL.
+    //
     // `localhost` is the one single-label host that is real — `wrangler dev`
     // serves on it, and README tells developers to put it in PUBLIC_BASE_URL.
     const { hostname } = new URL(origin);
@@ -96,20 +107,6 @@ function originOf(value: string | undefined): string | null {
     return routable ? origin : null;
   } catch {
     return null;
-  }
-}
-
-/** Run a task off the response path. web-og awaits this endpoint with no timeout
- *  and the crawler caches whatever it finally gets, so a revalidation that blocks
- *  here is the #143 mechanism reached from a merely-stale entry: findRelease's own
- *  soft deadline is 24s, and a blown deadline hands the crawler the neutral
- *  placeholder at max-age=60. */
-function background(c: Context, task: Promise<unknown>): void {
-  try {
-    c.executionCtx.waitUntil(task);
-  } catch {
-    // No ExecutionContext (unit tests, some dev runners): the refresh still runs,
-    // it just isn't kept alive by the runtime. Already .catch()-guarded upstream.
   }
 }
 
@@ -176,9 +173,12 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
   // negative back-off that keeps a down host from being pounded. A flat TTL here
   // would downgrade a terminal slot the permalink would have kept for 30 days,
   // and a bare read would keep serving a 60-second partial for far longer than
-  // the public page does. Sharing the policy must NOT mean sharing the wait: this
-  // caller is a crawler's critical path, so it opts into stale-while-revalidate
-  // (`revalidate`) and never blocks on a refresh.
+  // the public page does. This caller BLOCKS on a refresh when the slot is not
+  // servable. An earlier round added a stale-while-revalidate opt-out for it, but
+  // `findRelease` emits only two entry shapes — TERMINAL (fresh forever) and
+  // PARTIAL (fresh for its 60s, then unpinnable to a pinning consumer) — and
+  // neither can be both stale and servable, so nothing could ever reach it (round
+  // 9: dead code, removed). web-og waiting on a cold or unpinnable slot is #152.
   // Options are stated explicitly because they are what the
   // `cull`/`nopre` key parts promise. Anubis-protected hosts get a relay-backed
   // fetch (see makeProvider/relay.ts). The web-og caller chose to wait for this.
@@ -191,13 +191,19 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
         strict: false,
         includePrereleases: false,
       }),
-    // Serve a cached answer immediately and refresh behind it (see background()).
-    revalidate: (task) => background(c, task),
     // The shared key means a public page view's failed lookup also writes the
     // shared `:neg` back-off marker. Honouring that on a COLD slot would 503 here
     // without ever calling findRelease, and the crawler caches the resulting
     // placeholder for good — #143 all over again, via the alignment that fixes it.
-    // With a prior to stale-serve, the back-off still holds.
+    //
+    // On THIS path the opt-out is unconditional, not cold-only, and the flag name
+    // reads more conditional than the code is: of the two entry shapes findRelease
+    // emits, a TERMINAL prior returns at the fresh exit and a PARTIAL one is either
+    // fresh (same exit) or unpinnable, so no prior ever reaches the marker's
+    // stale-serve. The cost is real and accepted — during a
+    // host outage each unfurl runs its own findRelease out to the hard deadline
+    // (see resolveLookup's fall-through comment) — because the alternative for a
+    // consumer that asks ONCE is a placeholder pinned long after the host recovers.
     //
     // The asymmetry is deliberate: this caller opts out of READING the marker on
     // a cold slot, but resolveLookup still WRITES it, so a failure discovered

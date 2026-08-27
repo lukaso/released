@@ -122,7 +122,17 @@ function seedAged(origin: string, key: string, value: unknown, ageSeconds: numbe
 
 /** A non-terminal result — looked up, not in a release yet. The shared policy
  *  (resolve.ts) revalidates these every 5 minutes; `subject` identifies which
- *  copy of the answer a response came from. */
+ *  copy of the answer a response came from.
+ *
+ *  Honest scope (round 9, #144): `findRelease` does not currently EMIT this shape.
+ *  Its three LookupResult return sites are a terminal answer, a gallop-hit
+ *  `partial`, and a soft-deadline `partial` with `firstRelease: null`; a genuine
+ *  "not yet released" is a thrown NotYetReleasedError, never a cached result. So
+ *  the tests below that seed it exercise resolve.ts's GENERIC pending branch
+ *  (HARD_TTL_PENDING / FRESH_WINDOW_PENDING, both pre-dating this PR) through this
+ *  route — they are not evidence about a state production can reach today. Any
+ *  claim about the OG path's reachable behaviour must be pinned on one of the two
+ *  shapes above instead. */
 function pendingFixture(subject: string): unknown {
   return { ...(fixture('unused') as Record<string, unknown>), firstRelease: null, subject };
 }
@@ -162,16 +172,6 @@ async function tagOfSlot(origin: string, key: string): Promise<string | undefine
   if (!stored) return undefined;
   const body = (await stored.clone().json()) as { firstRelease?: { tag?: string } };
   return body.firstRelease?.tag;
-}
-
-/** An upstream lookup that hangs until the test releases it — the only way to
- *  prove a response did NOT wait for it. */
-function deferred(): { promise: Promise<unknown>; resolve: (v: unknown) => void } {
-  let resolve!: (v: unknown) => void;
-  const promise = new Promise<unknown>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
 }
 
 beforeEach(() => {
@@ -347,6 +347,45 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe('public, max-age=60');
   });
 
+  // Round 9 (#144). The partial above has `firstRelease: null`, which `hardTtlFor()`
+  // already routes to its 60-second branch. The OTHER partial shape does not:
+  // find-release.ts (~295) returns the gallop hit WITH `partial`, and `hardTtlFor()`
+  // tests `firstRelease` BEFORE `partial`, so it takes the terminal 30-day branch —
+  // and `isFresh()` reports it fresh forever for the same reason. On `main` that
+  // could not reach the public routes: /internal wrote a flat 30 minutes onto a key
+  // nothing else read. Sharing the slot (this PR) makes the most deadline-pressured
+  // producer of partials a WRITER into it, so one OG-triggered truncated traversal
+  // would pin the permalink and the badge to a tag the bisect never confirmed for a
+  // month, with no upstream call able to correct it. `unpinnable` trusts a partial
+  // for 60 seconds and no longer, so the long TTL buys this route nothing.
+  // (#155 tracks the same misclassification on the public routes' OWN writes.)
+  it('writes a gallop-only partial with the 60-second TTL, not the terminal 30 days', async () => {
+    const sha = '9'.repeat(40);
+    findReleaseMock.mockResolvedValue({
+      ...(fixture('v4.19.0') as Record<string, unknown>),
+      partial: { reason: 'soft_deadline', candidatesTried: 3 },
+    });
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+    expect(res.status).toBe(503); // never pinned to the crawler — the round-8 guard
+
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe('public, max-age=60');
+  });
+
+  // The complement: narrowing the TTL for a pinning consumer must not touch the
+  // answer the route actually exists to reuse. A terminal result still gets 30 days.
+  it('a terminal answer keeps the 30-day TTL when the SAME caller writes it', async () => {
+    const sha = 'a'.repeat(40);
+    findReleaseMock.mockResolvedValue(fixture('v4.18.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+    expect(res.status).toBe(200);
+
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe(`public, max-age=${30 * 24 * 60 * 60}`);
+  });
+
   it('revalidates a pending answer past its 5-minute freshness window', async () => {
     const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
     seedAged(PUBLIC_ORIGIN, k, pendingFixture('stale pending'), 10 * 60);
@@ -356,9 +395,9 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     await settle();
 
     expect(res.status).toBe(200);
-    // The revalidation still happens — it just no longer sits on the render path
-    // (see the stale-while-revalidate suite below); the slot ends up refreshed so
-    // the OG card can't keep rendering the pending answer for another 30 minutes.
+    // The revalidation happens on the render path (this route blocks; #152) and
+    // the slot ends up refreshed, so the OG card can't keep rendering the stale
+    // answer for another 30 minutes.
     expect(findReleaseMock).toHaveBeenCalledOnce();
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0');
   });
@@ -522,36 +561,16 @@ describe('/internal/* refuses a configured cache origin that is not routable', (
   });
 });
 
-// A crawler caches whatever the unfurl returns, so anything that makes web-og
-// WAIT is a #143 risk: the shared policy revalidates a pending answer after 5
-// minutes and a partial after 60 seconds, and findRelease's own soft deadline is
-// 24s. Blocking on that revalidation would hand the crawler a placeholder with
-// max-age=60 — the #143 outcome, reached from a merely-stale entry instead of a
-// cold one. So on this path a cached answer is served IMMEDIATELY and the refresh
-// runs in the background. (A genuinely COLD slot still blocks — there is nothing
-// to serve — but it write-backs, so it is cold at most once.)
-describe('/internal/* never blocks the render on a revalidation', () => {
-  it('serves a stale pending answer without waiting for the upstream lookup', async () => {
-    const sha = 'b'.repeat(40);
-    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
-    seedAged(PUBLIC_ORIGIN, k, pendingFixture('stale pending'), 10 * 60);
-    const slow = deferred();
-    findReleaseMock.mockReturnValue(slow.promise);
-
-    // The upstream lookup has NOT resolved at this point. If the render waited on
-    // it, this await never returns and the test times out — which is the whole claim.
-    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
-
-    expect(res.status).toBe(200);
-    expect(await subjectOf(res)).toBe('stale pending');
-
-    slow.resolve(fixture('v4.12.0'));
-    await settle();
-    // The revalidation was not skipped — it ran behind the render.
-    expect(findReleaseMock).toHaveBeenCalledOnce();
-    expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0');
-  });
-
+// web-og renders `firstRelease?.tag ?? 'not yet released'` and long-caches any
+// non-null result for 24h, and nothing here can invalidate a PNG already made. A
+// `partial` is a truncated traversal, so neither of its shapes may be pinned: with
+// `firstRelease: null` a RELEASED commit becomes a definite "not yet released", and
+// WITH one the tag is the gallop hit the bisect never confirmed is the earliest.
+// Both fall through to a 503, which web-og renders as the neutral placeholder at
+// max-age=60 — it claims nothing and self-heals. The refusal is then throttled by
+// the partial the lookup just recorded, so a repo that reliably blows the soft
+// deadline costs one traversal per 60s per key, not one per unfurl.
+describe('/internal/* refuses to pin a partial, and throttles the refusal', () => {
   // Round 7 (#144). This used to assert the opposite — that a cached `partial`
   // was stale-served to web-og while a refresh ran behind it. That is the bug:
   // web-og renders `firstRelease?.tag ?? 'not yet released'` and long-caches any
@@ -651,7 +670,7 @@ describe('/internal/* never blocks the render on a revalidation', () => {
 
   // Refusing to serve a partial must not turn into refusing to CACHE the refusal.
   // resolveLookup writes the computed partial to the slot at HARD_TTL_PARTIAL, but
-  // every read path rejects it — fresh, SWR and back-off exits alike — so `run()`
+  // every read path rejects it — the fresh exit and the back-off exit alike — so `run()`
   // falls through to `load()` again. On a repo that reliably blows the 24s soft
   // deadline that is a full traversal per unfurl on the shared token, forever,
   // where the flat 30-minute TTL this route replaced made zero upstream calls.
@@ -792,9 +811,18 @@ describe('/internal/* does not let a shared back-off marker cause a permanent pl
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.11');
   });
 
-  it('still honours the marker when there IS a prior — a down host is never pounded', async () => {
+  // Round 9 (#144). This used to claim the opposite — "the marker still holds when
+  // there IS a prior" — on a seeded `firstRelease: null, no partial` entry, a shape
+  // findRelease never emits (see pendingFixture). On the two shapes it DOES emit the
+  // bypass is unconditional, and that is worth pinning honestly rather than papering
+  // over: a TERMINAL prior returns at the fresh exit before the marker is ever read,
+  // and a PARTIAL prior past its 60s is unpinnable, so the marker is skipped and the
+  // lookup runs. The cost (an outage is re-probed by every unfurl) is accepted in
+  // resolveLookup's fall-through comment; the alternative for a consumer that asks
+  // once is a placeholder pinned long after the host recovers.
+  it('skips a warm marker even WITH a stale partial prior — the bypass is not cold-only', async () => {
     const k = await publicKey('github.com/honojs/hono', `sha:${SHA}`);
-    seedAged(PUBLIC_ORIGIN, k, pendingFixture('last known good'), 10 * 60);
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 10 * 60); // past its 60s: unpinnable
     seedAged(PUBLIC_ORIGIN, `${k}:neg`, { transient: true, kind: 'github_server_error' }, 10);
     findReleaseMock.mockResolvedValue(fixture('v4.12.11'));
 
@@ -802,9 +830,22 @@ describe('/internal/* does not let a shared back-off marker cause a permanent pl
     await settle();
 
     expect(res.status).toBe(200);
-    expect(await subjectOf(res)).toBe('last known good');
-    // Stale-serve is strictly better than a recompute here, so the back-off holds
-    // and the upstream is left alone — including on the background revalidation.
+    expect(await tagOf(res)).toBe('v4.12.11');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ...and the complement, so the guard above cannot pass by simply never reading
+  // the marker: a TERMINAL prior is served from the fresh exit, upstream untouched.
+  it('a terminal prior is still served from cache while the marker is warm', async () => {
+    const sha = '8'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, fixture('v4.11.0'), 10 * 60);
+    seedAged(PUBLIC_ORIGIN, `${k}:neg`, { transient: true, kind: 'github_server_error' }, 10);
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.11.0');
     expect(findReleaseMock).not.toHaveBeenCalled();
   });
 });
