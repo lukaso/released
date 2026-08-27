@@ -773,6 +773,56 @@ describe('/internal/* refuses to pin a partial, and throttles the refusal', () =
     expect(findReleaseMock).toHaveBeenCalledTimes(1);
   });
 
+  // Round 13 (#144). The marker above says "a partial THIS caller wrote is in the
+  // slot", but the previous round trusted it on its own age alone — it never
+  // checked that the marker still describes the entry actually sitting there. The
+  // slot is shared, so it can be overwritten between our marker write and the next
+  // read, and the marker is then inherited by a stranger's partial:
+  //
+  //   T=0   an unfurl blows the 24s soft deadline → writes its partial + marker
+  //   T=20  camo fetches badge.svg on the same key; badge's 8s deadline truncates
+  //         harder and OVERWRITES the slot (it writes no marker of its own)
+  //   T=30  the next unfurl reads badge's partial (age 10s) under OUR marker
+  //         (age 30s), calls it ours, and 503s into a pinned placeholder — on a
+  //         link this route's own 24s deadline answers.
+  //
+  // `run()` puts the slot before the marker, so our marker can never be OLDER than
+  // our entry; when it is, the slot moved under us. (Proven: dropping the
+  // `mark.ageSeconds <= prior.ageSeconds` clause reddens this test alone, with
+  // `expected 503 to be 200`.)
+  it('recomputes when the slot was overwritten AFTER our marker, rather than inheriting the marker', async () => {
+    const sha = '8'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    // Ours, written at T=0 and still inside its 60s TTL...
+    seedAged(PUBLIC_ORIGIN, `${k}:pinpartial`, { pinnedPartial: true }, 30);
+    // ...but the partial in the slot is badge.ts's, written at T=20 — NEWER than
+    // the marker, so the marker cannot be describing it.
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 10);
+    findReleaseMock.mockResolvedValue(fixture('v4.14.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.14.0');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The complement, and what keeps the clause above from silently disabling the
+  // throttle altogether: when the marker IS younger than the entry — the ordinary
+  // own-partial pair `run()` writes — the throttle still engages and the route
+  // still 503s without a second traversal.
+  it('still honours the marker for a pair this caller wrote (marker younger than entry)', async () => {
+    const sha = '9'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 30);
+    seedAged(PUBLIC_ORIGIN, `${k}:pinpartial`, { pinnedPartial: true }, 29);
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(503);
+    expect(findReleaseMock).not.toHaveBeenCalled();
+  });
+
   it('still blocks (and write-backs) when the slot is genuinely cold', async () => {
     const sha = 'd'.repeat(40);
     findReleaseMock.mockResolvedValue(fixture('v4.15.0'));

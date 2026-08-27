@@ -192,7 +192,17 @@ export async function resolveLookup(args: {
   let ownRecentPartial = false;
   if (consumerPinsResult && prior?.value.partial) {
     const mark = await cache.getEntry<PinnedPartialMarker>(partialKey(key));
-    ownRecentPartial = mark?.value?.pinnedPartial === true && mark.ageSeconds < HARD_TTL_PARTIAL;
+    ownRecentPartial =
+      mark?.value?.pinnedPartial === true &&
+      mark.ageSeconds < HARD_TTL_PARTIAL &&
+      // ...and the marker has to actually IDENTIFY the entry it vouches for, not
+      // merely be young. `run()` writes the slot first and the marker second, so
+      // for a pair this caller produced the marker can never be OLDER than the
+      // entry. When it is, the slot was overwritten AFTER we marked it — by a
+      // caller on the same key with a different deadline (badge.ts, 8s) — so the
+      // partial sitting there is someone else's truncation wearing our marker.
+      // Recompute it, which is exactly what the marker exists to make possible.
+      mark.ageSeconds <= prior.ageSeconds;
   }
 
   /** True when a cached entry must NOT be served to this caller and the lookup
