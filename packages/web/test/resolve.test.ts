@@ -65,8 +65,15 @@ function makeFakeCache() {
      *  from different `Date.now()` samples, so a test has to be able to express a
      *  pair whose ages disagree with their true write order. Default it to a
      *  stamp consistent with the age, so existing tests are unaffected. */
-    seed(key: string, value: unknown, ageSeconds: number, stampedAt?: number) {
-      store.set(key, { value, ageSeconds, stampedAt: stampedAt ?? Date.now() - ageSeconds * 1000 });
+    seed(key: string, value: unknown, ageSeconds: number, stampedAt?: number | null) {
+      // `null` seeds an UNSTAMPED entry (one written before `x-cached-at`
+      // existed, or whose header an intermediary dropped) — distinct from
+      // omitting the argument, which derives the stamp from the age.
+      store.set(key, {
+        value,
+        ageSeconds,
+        stampedAt: stampedAt === undefined ? Date.now() - ageSeconds * 1000 : stampedAt,
+      });
     },
     has: (key: string) => store.has(key),
     get: (key: string) => store.get(key),
@@ -446,6 +453,55 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
     expect(load).not.toHaveBeenCalled();
     expect(r.status).toBe('ok');
     if (r.status === 'ok') expect(r.result.partial).toBeTruthy();
+  });
+
+  // Round 15 review of #144. The header claims the missing-stamp fallback goes
+  // "the same conservative direction as before — an unprovable ordering
+  // recomputes". It did the opposite: `cache.getEntry` reports `ageSeconds: 0`
+  // for an entry with no `x-cached-at` (cache.ts:65-66), so a pair where BOTH
+  // stamps are absent evaluated `0 <= 0` -> true and the unstamped marker
+  // vouched for the unstamped entry unconditionally.
+  it('recomputes when NEITHER the marker nor the entry carries a stamp', async () => {
+    const f = makeFakeCache();
+    const someoneElses = mkResult({ released: false, partial: true });
+    // Both unstamped, so `ageSeconds` is 0 on both sides — the shape that made
+    // the fallback vouch instead of recompute.
+    f.seed(KEY, someoneElses, 0, null);
+    f.seed(pinPartialKey, { pinnedPartial: true }, 0, null);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+  });
+
+  // ...and one stamp present is just as unprovable as none: there is nothing to
+  // compare the stamped side AGAINST, so this must recompute too.
+  it('recomputes when only ONE side of the pair carries a stamp', async () => {
+    const f = makeFakeCache();
+    const someoneElses = mkResult({ released: false, partial: true });
+    // The entry is unstamped and read as 5s old; the marker IS stamped and read
+    // as 0s old. Ages alone say `0 <= 5` -> vouch, which is the same wrong
+    // answer by a different route.
+    f.seed(KEY, someoneElses, 5, null);
+    f.seed(pinPartialKey, { pinnedPartial: true }, 0, 1000);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
   });
 
   // ...and the ordering test must still REJECT a slot genuinely overwritten after

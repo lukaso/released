@@ -115,12 +115,21 @@ function partialKey(key: string): string {
  *  avoid, on the deadline-blowing repos it exists for. The write-time stamps say
  *  1010 >= 1000, which is the quantity the guard actually reasons about.
  *
- *  Falls back to the age comparison when either stamp is missing (an entry written
- *  by a version that predates the `x-cached-at` header): same conservative
- *  direction as before — an unprovable ordering recomputes. */
+ *  With either stamp missing (an entry written by a version that predates the
+ *  `x-cached-at` header, or one whose header an intermediary dropped) the
+ *  ordering is unprovable, so this says no and the partial is recomputed.
+ *
+ *  It deliberately does NOT fall back to comparing the two `ageSeconds`. That
+ *  reads as the conservative choice and is the opposite of one: `cache.getEntry`
+ *  reports `ageSeconds: 0` for an unstamped entry (cache.ts:65-66), so an
+ *  unstamped pair evaluated `0 <= 0` -> true and the marker vouched for the entry
+ *  unconditionally — someone else's truncation trusted rather than recomputed.
+ *  Unreachable in production, where every write goes through
+ *  `makeWorkerCache.put` and is stamped; reachable from a seeded fixture, which
+ *  is exactly where a claim like this one gets believed. */
 function writtenNoEarlierThan(mark: CacheEntry<unknown>, entry: CacheEntry<unknown>): boolean {
-  if (mark.stampedAt !== null && entry.stampedAt !== null) return mark.stampedAt >= entry.stampedAt;
-  return mark.ageSeconds <= entry.ageSeconds;
+  if (mark.stampedAt === null || entry.stampedAt === null) return false;
+  return mark.stampedAt >= entry.stampedAt;
 }
 
 export type Resolved =
@@ -148,8 +157,11 @@ export async function resolveLookup(args: {
    *  becomes permanent for them (the OG crawler). When set, the shared negative
    *  back-off marker is honoured only if there is a prior we can actually SERVE
    *  — with nothing servable, an attempt beats handing back a placeholder that
-   *  gets cached forever. The marker is still WRITTEN on failure, and callers
-   *  that can retry (the public HTML routes) omit this and keep backing off.
+   *  gets cached forever. A bypassed attempt that then FAILS does not re-stamp
+   *  the marker (`!backedOff`, see the catch below), so opting in never resets
+   *  the clock the public routes read; a failure on the ordinary path still
+   *  writes it. Callers that can retry (the public HTML routes) omit this flag
+   *  and keep backing off.
    *
    *  Be honest about the reachable behaviour. The only caller that sets this also
    *  sets `consumerPinsResult`, and `findRelease` emits just two entry shapes:
@@ -350,8 +362,20 @@ export async function resolveLookup(args: {
       // traversal and issue.tsx/pr.tsx's bot branch (`if (!cached) return
       // renderDeferred(...)`) falls back to the deferred card off a slot that was
       // warm a minute ago. That misclassification is a real defect — it is just not
-      // this caller's to fix on someone else's entry. It is tracked in #155, and
-      // the public routes' semantics are deliberately untouched here.
+      // this caller's to fix on someone else's entry. It is tracked in #155/#159,
+      // and the public routes' semantics are deliberately untouched here.
+      //
+      // Be explicit about what this PR does change, which is not the
+      // misclassification but WHO can trigger it. On `main` /internal keyed on a
+      // key of its own, so only a human page view or a badge fetch could write a
+      // gallop partial into the shared slot. Sharing the key makes an UNFURL a
+      // writer of it: one Slack post of a deadline-blowing repo can now pin
+      // `badge.svg` and the permalink to an unconfirmed gallop tag — rendered
+      // with no caveat, because a badge has nowhere to put one — for the full 30
+      // days, and each further unfurl restarts that clock. Accepting it here is a
+      // scope call, not a claim that it is harmless: the fix belongs in
+      // `hardTtlFor()`/`isFresh()`, on the public routes' side, where #155/#159
+      // can be reviewed as the behaviour change to those routes that it is.
       //
       // What THIS caller needs — never trusting a partial for longer than
       // HARD_TTL_PARTIAL — rides on the companion marker below instead. The marker
