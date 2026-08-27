@@ -99,6 +99,30 @@ function partialKey(key: string): string {
   return `${key}:pinpartial`;
 }
 
+/** True when `mark` was written no earlier than `entry`.
+ *
+ *  Compare the STORED `x-cached-at` stamps, not the two `ageSeconds` values.
+ *  `cache.getEntry` floors each age from a `Date.now()` sample taken when THAT
+ *  entry was read, and the two reads are one Cache API round trip apart, so the
+ *  floors can straddle a second boundary and invert the ordering for a pair that
+ *  really was written entry-then-marker:
+ *
+ *      entry  stamped t=1000ms, read at 2990ms -> floor(1990/1000) = 1
+ *      marker stamped t=1010ms, read at 3015ms -> floor(2005/1000) = 2
+ *
+ *  `2 <= 1` is false, so the caller would disown its own 2-second-old partial and
+ *  run another full traversal — precisely the traversal this throttle exists to
+ *  avoid, on the deadline-blowing repos it exists for. The write-time stamps say
+ *  1010 >= 1000, which is the quantity the guard actually reasons about.
+ *
+ *  Falls back to the age comparison when either stamp is missing (an entry written
+ *  by a version that predates the `x-cached-at` header): same conservative
+ *  direction as before — an unprovable ordering recomputes. */
+function writtenNoEarlierThan(mark: CacheEntry<unknown>, entry: CacheEntry<unknown>): boolean {
+  if (mark.stampedAt !== null && entry.stampedAt !== null) return mark.stampedAt >= entry.stampedAt;
+  return mark.ageSeconds <= entry.ageSeconds;
+}
+
 export type Resolved =
   | {
       status: 'ok';
@@ -139,16 +163,30 @@ export async function resolveLookup(args: {
    *  which do not set either flag. */
   bypassBackOffWhenUnservable?: boolean;
   /** Opt-in for callers whose consumer CACHES whatever we hand back, for longer
-   *  than we can correct (the OG crawler pins a rendered PNG for 24h). When set,
-   *  a PENDING prior older than `MAX_STALE_PINNED` is never returned: we would
-   *  rather pay a fresh lookup, or hand back a transient the caller renders as a
-   *  short-cached placeholder, than pin a day-old "not yet released" that has
-   *  since shipped. Two shapes are deliberately outside that bound, both spelled
-   *  out at `shouldRecompute` below: a TERMINAL answer is servable at any age,
-   *  and a partial this caller itself computed within `HARD_TTL_PARTIAL` is
-   *  handed back so the caller can refuse it without re-running the traversal.
-   *  A partial is therefore still REACHABLE by a pinning caller — refusing to
-   *  PIN one is the caller's own job (internal.ts:285), not this flag's. */
+   *  than we can correct (the OG crawler pins a rendered PNG for 24h).
+   *
+   *  What it does TODAY is entirely the PARTIAL handling at `shouldRecompute`
+   *  below: someone else's truncated traversal is recomputed rather than served,
+   *  and one this caller itself produced within `HARD_TTL_PARTIAL` is handed back
+   *  so the caller can refuse it (internal.ts:285) without paying another
+   *  traversal. A TERMINAL answer is servable at any age and is deliberately
+   *  outside every bound. Refusing to PIN a partial is the caller's own job, not
+   *  this flag's.
+   *
+   *  It ALSO bounds a PENDING prior (no `firstRelease`, no `partial`) at
+   *  `MAX_STALE_PINNED`, so a day-old "not yet released" that has since shipped is
+   *  never handed to a pinning consumer. Be honest about that arm: `findRelease`
+   *  cannot currently emit that shape — its three value returns are the gallop hit
+   *  (`find-release.ts:299`, always `partial`), the soft-deadline miss (`:316`,
+   *  always `partial`) and the terminal answer (`:391`); a genuine "not yet
+   *  released" is THROWN (`:326`) and `resolve.ts` returns it as `status:
+   *  'not_yet'` without ever calling `cache.put`. So no PENDING entry exists to
+   *  bound, and the arm is a defensive guard on a shape the TYPE permits (core
+   *  keeps a matching fallback at `:486`), not a live protection. The failure it
+   *  is named for is real but is fixed elsewhere: the 24h pin of a fresh answer is
+   *  #151, and the `not_yet` 503 is #150. Do not read this bound as covering the
+   *  OG path. (`HARD_TTL_PENDING` and `FRESH_WINDOW_PENDING` are dead for the same
+   *  reason, and predate this PR.) */
   consumerPinsResult?: boolean;
   /** Override the in-isolate single-flight key, which otherwise IS `key`.
    *
@@ -202,7 +240,7 @@ export async function resolveLookup(args: {
       // caller on the same key with a different deadline (badge.ts, 8s) — so the
       // partial sitting there is someone else's truncation wearing our marker.
       // Recompute it, which is exactly what the marker exists to make possible.
-      mark.ageSeconds <= prior.ageSeconds;
+      writtenNoEarlierThan(mark, prior);
   }
 
   /** True when a cached entry must NOT be served to this caller and the lookup
@@ -236,7 +274,12 @@ export async function resolveLookup(args: {
     if (entry.value.partial) return !ownRecentPartial;
     // PENDING (no `firstRelease`, no `partial`) — bounded by `MAX_STALE_PINNED`:
     // an answer older than that may have shipped since, and a PNG already
-    // rendered from it cannot be invalidated.
+    // rendered from it cannot be invalidated. DEFENSIVE ONLY: `findRelease` emits
+    // no such entry today (a real "not yet released" is thrown, never cached — see
+    // the `consumerPinsResult` doc above), so this line does not fire in
+    // production. It stays because the TYPE permits the shape and core keeps a
+    // fallback branch that would return it (`find-release.ts:486`); it must not be
+    // read as the bound that protects the OG path.
     return entry.ageSeconds >= MAX_STALE_PINNED;
   };
   if (prior && isFresh(prior) && !shouldRecompute(prior)) {

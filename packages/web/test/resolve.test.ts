@@ -37,23 +37,28 @@ function mkResult(opts: { released: boolean; partial?: boolean }): LookupResult 
 
 /** In-memory WorkerCache whose entry ages are set explicitly by the test. */
 function makeFakeCache() {
-  const store = new Map<string, { value: unknown; ageSeconds: number }>();
+  const store = new Map<string, { value: unknown; ageSeconds: number; stampedAt: number | null }>();
   const cache: WorkerCache = {
     async get<T>(key: string) {
       return (store.get(key)?.value as T) ?? null;
     },
     async getEntry<T>(key: string): Promise<CacheEntry<T> | null> {
       const e = store.get(key);
-      return e ? { value: e.value as T, ageSeconds: e.ageSeconds } : null;
+      return e ? { value: e.value as T, ageSeconds: e.ageSeconds, stampedAt: e.stampedAt } : null;
     },
     async put<T>(key: string, value: T) {
-      store.set(key, { value, ageSeconds: 0 });
+      store.set(key, { value, ageSeconds: 0, stampedAt: Date.now() });
     },
   };
   return {
     cache,
-    seed(key: string, value: unknown, ageSeconds: number) {
-      store.set(key, { value, ageSeconds });
+    /** `stampedAt` is the write-time `x-cached-at` the real cache stores. It is
+     *  INDEPENDENT of `ageSeconds` here on purpose: production derives the two
+     *  from different `Date.now()` samples, so a test has to be able to express a
+     *  pair whose ages disagree with their true write order. Default it to a
+     *  stamp consistent with the age, so existing tests are unaffected. */
+    seed(key: string, value: unknown, ageSeconds: number, stampedAt?: number) {
+      store.set(key, { value, ageSeconds, stampedAt: stampedAt ?? Date.now() - ageSeconds * 1000 });
     },
     has: (key: string) => store.has(key),
     get: (key: string) => store.get(key),
@@ -405,6 +410,60 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
   // no revalidation. (The terminal misclassification itself is on `main` and
   // affects the public routes too; the pin bound rejecting it on the way out is
   // what this PR owes.)
+  // Round 14 review of #144. Round 13 bound the marker to the entry it vouches
+  // for with `mark.ageSeconds <= prior.ageSeconds` — but those two ages are
+  // floored from two DIFFERENT `Date.now()` samples, one Cache API round trip
+  // apart, so the floors can straddle a second boundary and report the marker as
+  // OLDER than an entry it was in fact written AFTER. The guard then disowns this
+  // caller's own seconds-old partial and runs a full traversal — on exactly the
+  // repos the throttle exists for. The stored `x-cached-at` stamps are the
+  // quantity the ordering actually depends on.
+  it('honours its own marker when the two READ ages straddle a second boundary', async () => {
+    const f = makeFakeCache();
+    const truncated = mkResult({ released: false, partial: true });
+    // The reviewer's arithmetic, seeded directly: entry written at t=1000 and
+    // read back as 1s old; marker written 10ms LATER at t=1010 and read back as
+    // 2s old, because its read happened 25ms further on.
+    f.seed(KEY, truncated, 1, 1000);
+    f.seed(pinPartialKey, { pinnedPartial: true }, 2, 1010);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).not.toHaveBeenCalled();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.partial).toBeTruthy();
+  });
+
+  // ...and the ordering test must still REJECT a slot genuinely overwritten after
+  // the marker was written, or the fix above is just a way of deleting the guard.
+  it('still disowns a partial written AFTER the marker (badge.ts overwrote the slot)', async () => {
+    const f = makeFakeCache();
+    const someoneElses = mkResult({ released: false, partial: true });
+    // Marker at t=1000; the slot then overwritten at t=5000 by an 8s-deadline
+    // caller on the same key. Ages alone would say the marker is the younger one.
+    f.seed(KEY, someoneElses, 1, 5000);
+    f.seed(pinPartialKey, { pinnedPartial: true }, 5, 1000);
+    const fresh = mkResult({ released: true });
+    const load = vi.fn().mockResolvedValue(fresh);
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+
   it('a gallop-only partial is not treated as terminal, however old', async () => {
     const f = makeFakeCache();
     const gallopOnly = { ...mkResult({ released: true }), partial: { reason: 'soft_deadline' } };

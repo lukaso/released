@@ -135,6 +135,15 @@ PROD_HOST = "released.blabberate.com"
 # (test/internal-cache-origin.test.ts) and only takes effect on the prod custom
 # domain. The var is still correct to set: it keeps preview off the prod key
 # namespace and drives canonical URLs.
+#
+# COUPLING: this var has a SECOND effect. `publicBaseUrl()` (src/env.ts) prefers
+# it over the incoming request origin, so preview's canonical links, `og:url` and
+# every `pubBase`-derived href come from this literal rather than being correct by
+# construction. Rename `[env.preview] name` below, or deploy under a different
+# account subdomain, and preview emits URLs for a host that does not exist — the
+# config guard (`cacheOriginProblems`) checks only that the var is set, routable
+# and not the production origin, never that it matches the deployed Worker. Update
+# this line whenever that name changes.
 PUBLIC_BASE_URL = "https://released-web-preview.lukaso.workers.dev"
 
 [env.preview.assets]
