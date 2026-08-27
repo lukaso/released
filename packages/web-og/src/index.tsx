@@ -210,16 +210,29 @@ export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
  *    It has to stay revalidatable rather than be pinned as if it were final.
  *    **This is the arm that changes production behaviour** (24h → 300s).
  *  - `firstRelease: null` renders "not yet released", the one card whose whole
- *    job is to flip once a release contains the commit. Be precise about this
- *    one: core does not currently EMIT that shape. `find-release.ts:316` is its
- *    only `firstRelease: null` return and it always carries
- *    `partial: soft_deadline`; a genuine not-yet-released commit throws
- *    `NotYetReleasedError` (`:326`, and `:478` for the issue/PR aggregation),
- *    which `/internal` turns into a 503 (`web/src/routes/internal.ts:67-72`) —
- *    so `fetchResult` sees `!res.ok`, returns null, and web-og renders the
- *    neutral PLACEHOLDER at `SHORT_CACHE`, never this card. The bare-null arm
- *    below is therefore a defensive guard on a shape the type permits and
- *    core keeps a fallback branch for (`:486`), not a bug that shipped.
+ *    job is to flip once a release contains the commit. Two DIFFERENT shapes
+ *    render it, and only one of them is unreachable:
+ *
+ *      - BARE null (no `partial`): core does not emit it. `find-release.ts:316`
+ *        is its only `firstRelease: null` return and it always carries
+ *        `partial: soft_deadline`, and a genuine not-yet-released commit throws
+ *        `NotYetReleasedError` (`:326`, `:478` for the issue/PR aggregation),
+ *        which `/internal` turns into a 503
+ *        (`web/src/routes/internal.ts:67-72`) — so `fetchResult` sees
+ *        `!res.ok`, returns null, and web-og renders the neutral PLACEHOLDER at
+ *        `SHORT_CACHE`, never this card. The bare-null arm below is a defensive
+ *        guard on a shape the type permits and core keeps a fallback branch for
+ *        (`:486`), not a bug that shipped.
+ *      - null WITH `partial: soft_deadline`: REACHABLE, and it ships the "not
+ *        yet released" card today. `find-release.ts:312-322` returns it as a
+ *        normal value, `/internal` caches it and answers 200, so `ResultCard`
+ *        sets `tag = firstRelease?.tag ?? 'not yet released'`. That is the
+ *        blown-soft-deadline route into this card, not `NotYetReleasedError`.
+ *        PR #144 makes `/internal` 503 every `partial`, which closes this route
+ *        until #156 reopens it with a caveat on the card — but the shape is live
+ *        on `main` right now, so the lifetime rule has to be right for it either
+ *        way. It is: PENDING via the `partial` arm above. `routing.test.ts` has
+ *        a copy guard on it.
  *
  *  What that means for #151's headline case: the not-yet-released unfurl is
  *  still wrong today, but wrong in a different way than "pinned for 24h" — it

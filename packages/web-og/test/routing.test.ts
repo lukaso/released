@@ -787,15 +787,16 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     );
   }
 
-  // Scope this one honestly. `firstRelease: null` with no `partial` is a shape
-  // core does not currently emit: `find-release.ts:316` is its only null return
-  // and always carries `partial: soft_deadline`, and a genuine not-yet-released
-  // commit throws `NotYetReleasedError`, which `/internal` turns into a 503. So
-  // this is a DEFENSIVE unit guard on the lifetime rule for a shape the type
-  // permits (and core keeps a fallback branch for at `:486`) — it is not
-  // evidence about a state production reaches today. The end-to-end test below
-  // is what documents the reachable not-yet path. (The same distinction is
-  // already drawn on `pendingFixture` in web's internal-cache-origin tests.)
+  // Scope this one honestly, and only to the BARE shape. `firstRelease: null`
+  // with NO `partial` is what core does not currently emit: `find-release.ts:316`
+  // is its only null return and always carries `partial: soft_deadline`, and a
+  // genuine not-yet-released commit throws `NotYetReleasedError`, which
+  // `/internal` turns into a 503. So this is a DEFENSIVE unit guard on the
+  // lifetime rule for a shape the type permits (and core keeps a fallback branch
+  // for at `:486`) — it is not evidence about a state production reaches today.
+  // It says nothing about `null` WITH a `partial`, which IS reachable and has its
+  // own copy guard below. (The same distinction is already drawn on
+  // `pendingFixture` in web's internal-cache-origin tests.)
   it('DEFENSIVE: a bare not-yet-released result is PENDING-cached (300s), not pinned', async () => {
     const res = await fetchCard({
       input: baseInput,
@@ -829,6 +830,34 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     expect(collectText(lastRenderedNode)).toContain('Looking up…');
     expect(collectText(lastRenderedNode)).not.toContain('not yet released');
     expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+  });
+
+  // The REACHABLE route into the "not yet released" card, and the one the
+  // docstring on `isTerminal` used to disclaim. A blown soft deadline with no
+  // gallop hit returns `firstRelease: null` + `partial` as a normal VALUE
+  // (`find-release.ts:312-322`); `/internal` caches it and answers 200, so
+  // `fetchResult` hands web-og a real result and `ResultCard` renders
+  // `firstRelease?.tag ?? 'not yet released'`. Asserting the COPY as well as the
+  // lifetime is the point: the shape reaches this card on `main` today, and #144
+  // (503 on every partial) then #156 (render it with a caveat) both move that
+  // route without changing what the lifetime must be. If either lands without
+  // deciding this card's lifetime deliberately, this test is what says so.
+  it('a soft-deadline partial with NO release renders the not-yet copy, PENDING-cached', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      partial: { reason: 'soft_deadline', candidatesTried: 12 },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    expect(collectText(lastRenderedNode)).toContain('not yet released');
+    // Not LONG: an unconfirmed traversal must stay revalidatable. Not the
+    // placeholder's SHORT_CACHE either — this is a rendered answer, not a failed
+    // render.
+    expect(res.headers.get('cache-control')).toBe(PENDING);
   });
 
   it('partial result is PENDING-cached even though it carries a firstRelease', async () => {
