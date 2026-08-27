@@ -59,6 +59,9 @@ const { default: app } = await import('../src/index.js');
 // The real in-isolate flight registry the routes use — a test can register a
 // flight the way a concurrent badge request would, and see who runs the loader.
 const { singleFlight } = await import('../src/single-flight.js');
+// The SHIPPED routability rule, so the wrangler.toml guard below cannot drift
+// from the route it guards.
+const { originOf } = await import('../src/routes/internal.js');
 
 const INTERNAL_SECRET = 'test-shared-secret';
 const PROD_HOST = 'released.blabberate.com';
@@ -494,22 +497,21 @@ type WranglerCfg = {
  *  violation; `[]` means the config cannot reintroduce #143's namespace split. */
 function cacheOriginProblems(cfg: WranglerCfg): string[] {
   const problems: string[] = [];
-  const hostOf = (value: string): string | null => {
-    try {
-      return new URL(value.includes('//') ? value : `https://${value}`).host;
-    } catch {
-      return null;
-    }
-  };
-  // `host` keeps the port, which is what makes a single-label dev origin real.
-  const routable = (host: string): boolean => host.includes('.') || host.startsWith('localhost');
-
-  const topConfigured = cfg.vars?.PUBLIC_BASE_URL ?? cfg.vars?.PROD_HOST;
-  const prodHost = topConfigured ? hostOf(topConfigured) : null;
-  if (!topConfigured) {
+  // Run the SHIPPED normaliser (`originOf`, exported from the route), not a
+  // second copy of its rule. The copy this replaced tested `URL.host` with
+  // `host.includes('.') || host.startsWith('localhost')`, which disagreed with
+  // production on two inputs: it rejected `http://app:8787` — the Docker /
+  // Codespaces shape the route deliberately accepts, so a legitimate config
+  // would have reddened the build — and accepted `localhostx`, which the route
+  // rejects. A guard that can pass or fail differently from the code it guards
+  // is not a guard. `originOf` also returns null for an unparseable value, so
+  // the two cases collapse into one branch here.
+  const prodOrigin = cfg.vars?.PUBLIC_BASE_URL ?? cfg.vars?.PROD_HOST;
+  const prodCacheOrigin = originOf(prodOrigin);
+  if (!prodOrigin) {
     problems.push('[vars] sets neither PROD_HOST nor PUBLIC_BASE_URL');
-  } else if (!prodHost || !routable(prodHost)) {
-    problems.push(`[vars] cache origin \`${topConfigured}\` is not routable`);
+  } else if (!prodCacheOrigin) {
+    problems.push(`[vars] cache origin \`${prodOrigin}\` is not routable`);
   }
 
   for (const [name, e] of Object.entries(cfg.env ?? {})) {
@@ -520,13 +522,15 @@ function cacheOriginProblems(cfg: WranglerCfg): string[] {
       );
       continue;
     }
-    const host = hostOf(url);
-    if (!host || !routable(host)) {
+    const origin = originOf(url);
+    if (!origin) {
       problems.push(`[env.${name}.vars] PUBLIC_BASE_URL \`${url}\` is not routable`);
       continue;
     }
-    if (host === prodHost) {
-      problems.push(`[env.${name}.vars] PUBLIC_BASE_URL keys on the PRODUCTION origin \`${host}\``);
+    if (origin === prodCacheOrigin) {
+      problems.push(
+        `[env.${name}.vars] PUBLIC_BASE_URL keys on the PRODUCTION origin \`${origin}\``,
+      );
     }
   }
   return problems;
@@ -584,6 +588,41 @@ describe('every deployed environment configures a routable cache origin of its O
     expect(cacheOriginProblems(aliased)).toEqual([
       expect.stringContaining('keys on the PRODUCTION origin'),
     ]);
+  });
+
+  // The reason this suite calls `originOf` instead of restating its rule. A
+  // single-label host WITH a port is what a dev on Docker / Codespaces / WSL
+  // reaches the Worker at, and the route accepts it (internal.ts's
+  // `isRoutableOrigin`). The duplicated predicate this replaced tested
+  // `host.includes('.') || host.startsWith('localhost')` on `URL.host`, so
+  // `app:8787` matched neither arm: production accepted the config and the
+  // build failed on it. Proven by restoring that predicate — this test and the
+  // `localhostx` one below are the two that redden (`expected [ Array(1) ] to
+  // deeply equal []`); the four pre-existing cases stay green either way, which
+  // is why they could not catch the drift.
+  it('accepts an env on a single-label host WITH a port, exactly as the route does', () => {
+    const docker: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        dev: { name: 'released-web-dev', vars: { PUBLIC_BASE_URL: 'http://app:8787' } },
+      },
+    };
+    expect(cacheOriginProblems(docker)).toEqual([]);
+  });
+
+  // The other half of the divergence: the old predicate's `startsWith` accepted
+  // any host merely PREFIXED with localhost. `originOf` requires the whole
+  // hostname (or a port, which this has neither of).
+  it('rejects `localhostx`, which only a prefix match would accept', () => {
+    const typo: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        dev: { name: 'released-web-dev', vars: { PUBLIC_BASE_URL: 'http://localhostx' } },
+      },
+    };
+    expect(cacheOriginProblems(typo)).toEqual([expect.stringContaining('is not routable')]);
   });
 
   it('rejects an env whose PUBLIC_BASE_URL is a non-routable single-label host', () => {
@@ -702,6 +741,36 @@ describe('/internal/* refuses to pin a partial, and throttles the refusal', () =
     expect(await tagOf(res)).toBe('v4.12.0'); // the real answer, not the partial
     expect(findReleaseMock).toHaveBeenCalledTimes(1);
     expect(await tagOfSlot(PUBLIC_ORIGIN, k)).toBe('v4.12.0'); // and the slot is corrected
+  });
+
+  // Round 12 (#144). Round 11 stopped badge's 8-second truncation reaching this
+  // route through the in-isolate FLIGHT (`flightKey: `${k}:og``). The same
+  // truncation still reached it one hop later, through the CACHE: the throttle
+  // that hands a <60s partial back rather than recomputing it did not ask WHOSE
+  // deadline produced it. So the README-badge case — camo fetches `badge.svg`,
+  // badge.ts writes a partial to the byte-identical key, Slack unfurls the
+  // permalink ten seconds later — read that partial as "recent", 503'd, and
+  // pinned the neutral placeholder, on a link this route's own 24s deadline
+  // answers. `main` could not do this: /internal keyed on a key of its own.
+  //
+  // The throttle now keys on a companion marker resolveLookup writes ONLY for a
+  // partial IT produced under this caller's deadline, so a foreign one is
+  // recomputed. (Proven: restoring the age-only test — `return
+  // entry.ageSeconds >= HARD_TTL_PARTIAL` in `shouldRecompute` — reddens this
+  // test alone, with `expected 503 to be 200`.)
+  it('recomputes a 10s-old partial ANOTHER caller wrote, rather than 503 into a pinned placeholder', async () => {
+    const sha = 'b'.repeat(40);
+    const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
+    // badge.ts's 8s deadline truncated and wrote this; no `:pinpartial` marker,
+    // because badge does not set consumerPinsResult.
+    seedAged(PUBLIC_ORIGIN, k, partialFixture(), 10);
+    findReleaseMock.mockResolvedValue(fixture('v4.13.0'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${sha}`), ENV);
+
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.13.0');
+    expect(findReleaseMock).toHaveBeenCalledTimes(1);
   });
 
   it('still blocks (and write-backs) when the slot is genuinely cold', async () => {

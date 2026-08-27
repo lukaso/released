@@ -62,6 +62,7 @@ function makeFakeCache() {
 
 const KEY = 'res:gtk:pr#9951';
 const negKey = `${KEY}:neg`;
+const pinPartialKey = `${KEY}:pinpartial`;
 
 describe('isTransientError', () => {
   it('treats 5xx / network / timeout / rate-limit as transient', () => {
@@ -371,10 +372,11 @@ describe('resolveLookup — a pinned consumer is never handed a cached PARTIAL',
   // resolveLookup had just written, so on a repo that reliably blows the 24s soft
   // deadline every unfurl ran another full traversal on the shared token, where
   // the flat 30-minute TTL this route replaced made zero upstream calls.
-  it('fresh exit: hands back a 10s-old partial rather than re-run the lookup', async () => {
+  it('fresh exit: hands back a 10s-old partial THIS caller wrote rather than re-run the lookup', async () => {
     const f = makeFakeCache();
     const truncated = mkResult({ released: false, partial: true });
     f.seed(KEY, truncated, 10); // well inside the 60s partial freshness window
+    f.seed(pinPartialKey, { pinnedPartial: true }, 10); // ...and this caller produced it
     const fresh = mkResult({ released: true });
     const load = vi.fn().mockResolvedValue(fresh);
 

@@ -58,6 +58,20 @@ function cacheOrigin(env: Env, req: Request): string {
   return originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST) ?? new URL(req.url).origin;
 }
 
+/** The routability rule `originOf()` applies, exported so the wrangler.toml
+ *  config guard can run the SHIPPED predicate instead of a lookalike. A
+ *  duplicate drifts: an earlier copy of this rule in the test read `URL.host`
+ *  and `startsWith('localhost')`, so it rejected `http://app:8787` — which
+ *  production accepts — and accepted `localhostx`, which production rejects.
+ *
+ *  Note the port is NOT part of `hostname` (it lives in `URL.port`; `hostname`
+ *  holds a colon only for a bracketed IPv6 literal), so it has to be read
+ *  separately. */
+export function isRoutableOrigin(origin: string): boolean {
+  const { hostname, port } = new URL(origin);
+  return hostname.includes('.') || hostname === 'localhost' || port !== '';
+}
+
 /** Normalise a configured host or base URL to a bare origin, or null if it is
  *  unset/unparseable.
  *
@@ -71,7 +85,7 @@ function cacheOrigin(env: Env, req: Request): string {
  *  The reverse slip is worse: a scheme-less PUBLIC_BASE_URL made `new Request()`
  *  throw OUTSIDE neverFatal, turning a computed answer into a 503 → placeholder.
  *  Parsing both through URL and taking .origin also drops any path/trailing slash. */
-function originOf(value: string | undefined): string | null {
+export function originOf(value: string | undefined): string | null {
   if (!value) return null;
   try {
     const origin = new URL(value.includes('//') ? value : `https://${value}`).origin;
@@ -113,9 +127,7 @@ function originOf(value: string | undefined): string | null {
     // falls through to PROD_HOST and every /internal entry keys on the production
     // origin while the public routes key on the dev one — the two-namespace split
     // of #143, reached silently despite the var being set correctly.
-    const { hostname, port } = new URL(origin);
-    const routable = hostname.includes('.') || hostname === 'localhost' || port !== '';
-    return routable ? origin : null;
+    return isRoutableOrigin(origin) ? origin : null;
   } catch {
     return null;
   }
@@ -270,8 +282,9 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
   // permalink it links to still shows the best-effort answer WITH its caveat.
   //
   // resolveLookup hands back a partial it computed less than HARD_TTL_PARTIAL ago
-  // rather than recomputing it (see `unpinnable`), so this 503 is throttled to one
-  // traversal per 60s per key. Do NOT read that as "the cost is bounded": web-og
+  // rather than recomputing it (see `shouldRecompute`), so this 503 is throttled to
+  // one traversal per 60s per key, and ONLY for a partial this route itself computed
+  // (a badge-truncated one in the shared slot is recomputed, not inherited). Do NOT read that as "the cost is bounded": web-og
   // short-caches the neutral placeholder at max-age=60 and HARD_TTL_PARTIAL is
   // also 60, so for a URL under active unfurling the two cadences COINCIDE and the
   // throttle buys close to nothing. On a repo that reliably blows the soft deadline

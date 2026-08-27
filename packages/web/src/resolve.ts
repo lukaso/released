@@ -84,9 +84,19 @@ function isFresh(entry: CacheEntry<LookupResult>): boolean {
   return entry.ageSeconds < FRESH_WINDOW_PENDING;
 }
 
+type PinnedPartialMarker = { pinnedPartial: true };
 type NegMarker = { transient: true; kind: string; status?: number; anubis?: boolean };
 function negKey(key: string): string {
   return `${key}:neg`;
+}
+
+/** Companion marker for `${key}`, written ONLY when a `consumerPinsResult`
+ *  caller computed a partial itself. The result slot is shared across callers
+ *  that do not agree on a soft deadline, so the entry alone cannot say whose
+ *  truncation produced it; this marker can, and it expires on its own after
+ *  `HARD_TTL_PARTIAL`. */
+function partialKey(key: string): string {
+  return `${key}:pinpartial`;
 }
 
 export type Resolved =
@@ -120,19 +130,25 @@ export async function resolveLookup(args: {
    *  Be honest about the reachable behaviour. The only caller that sets this also
    *  sets `consumerPinsResult`, and `findRelease` emits just two entry shapes:
    *  TERMINAL (fresh forever, so it returns at the fresh exit above) and PARTIAL
-   *  (fresh for its 60s, unpinnable after). Neither can reach the stale-serve on
+   *  (handed back inside its own 60s throttle, recomputed after). Neither can reach the stale-serve on
    *  the back-off line below, so on that path the bypass is UNCONDITIONAL, not
    *  cold-only. That is accepted, not overlooked: a crawler asks once, so the
    *  alternative is a placeholder pinned long after the host recovers, and the
    *  cost is the unthrottled load documented at the fall-through. The
-   *  `prior && !unpinnable(prior)` stale-serve is live for the public routes,
+   *  `prior && !shouldRecompute(prior)` stale-serve is live for the public routes,
    *  which do not set either flag. */
   bypassBackOffWhenUnservable?: boolean;
   /** Opt-in for callers whose consumer CACHES whatever we hand back, for longer
    *  than we can correct (the OG crawler pins a rendered PNG for 24h). When set,
-   *  no exit returns a prior older than `MAX_STALE_PINNED`: we would rather pay a
-   *  fresh lookup, or hand back a transient the caller renders as a short-cached
-   *  placeholder, than pin a day-old answer that has since changed. */
+   *  a PENDING prior older than `MAX_STALE_PINNED` is never returned: we would
+   *  rather pay a fresh lookup, or hand back a transient the caller renders as a
+   *  short-cached placeholder, than pin a day-old "not yet released" that has
+   *  since shipped. Two shapes are deliberately outside that bound, both spelled
+   *  out at `shouldRecompute` below: a TERMINAL answer is servable at any age,
+   *  and a partial this caller itself computed within `HARD_TTL_PARTIAL` is
+   *  handed back so the caller can refuse it without re-running the traversal.
+   *  A partial is therefore still REACHABLE by a pinning caller — refusing to
+   *  PIN one is the caller's own job (internal.ts:285), not this flag's. */
   consumerPinsResult?: boolean;
   /** Override the in-isolate single-flight key, which otherwise IS `key`.
    *
@@ -151,45 +167,69 @@ export async function resolveLookup(args: {
   const flightKey = args.flightKey ?? key;
   const now = args.now ?? Date.now;
 
-  /** True when a cached entry must NOT be handed to a consumer that pins the
-   *  answer. Always false for callers that did not opt in, so the public HTML
-   *  routes are unchanged. Three shapes, three rules:
-   *
-   *  TERMINAL (`firstRelease`, no `partial`) — always servable. Which release
-   *  first contains a commit cannot change, which is why `isFresh()` treats it as
-   *  fresh forever and `hardTtlFor()` keeps it 30 days. `MAX_STALE_PINNED` exists
-   *  for the opposite case, a "not yet released" prior that has since shipped;
-   *  applying it here would discard exactly the warm entries this route joined the
-   *  public key to reuse, paying a full findRelease per unfurl.
-   *
-   *  PARTIAL (either shape) — never servable to a pinning consumer, but only
-   *  worth recomputing once its own 60-second TTL is up. A partial is a truncated
-   *  traversal: with `firstRelease: null` it means "we stopped looking", which
-   *  web-og renders as a definite "not yet released"; WITH a `firstRelease` it
-   *  carries the gallop hit, and the bisect that would confirm no EARLIER release
-   *  contains the commit is what the deadline cut short (find-release.ts:288-292).
-   *  The result card renders that caveat, web-og cannot — it long-caches the bare
-   *  tag for 24h. So neither shape may be pinned. Inside `HARD_TTL_PARTIAL` the
-   *  entry is still handed BACK (the caller 503s it into a short-cached neutral
-   *  placeholder): that is what throttles a repo which reliably blows the soft
-   *  deadline, where recomputing per unfurl would run a full traversal on the
-   *  shared token for every crawler, forever. Past 60s we recompute instead.
-   *
-   *  PENDING (no `firstRelease`, no `partial`) — bounded by `MAX_STALE_PINNED`:
-   *  an answer older than that may have shipped since, and a PNG already rendered
-   *  from it cannot be invalidated. */
-  const isRecentPartial = (entry: CacheEntry<LookupResult>): boolean =>
-    Boolean(entry.value.partial) && entry.ageSeconds < HARD_TTL_PARTIAL;
-
-  const unpinnable = (entry: CacheEntry<LookupResult>): boolean => {
-    if (!consumerPinsResult) return false;
-    if (entry.value.firstRelease && !entry.value.partial) return false;
-    if (isRecentPartial(entry)) return false;
-    return entry.ageSeconds >= MAX_STALE_PINNED || Boolean(entry.value.partial);
-  };
-
   const prior = await cache.getEntry<LookupResult>(key);
-  if (prior && isFresh(prior) && !unpinnable(prior)) {
+
+  /** True when the partial in the slot is one THIS caller computed less than
+   *  `HARD_TTL_PARTIAL` ago — the only case the throttle below is allowed to
+   *  honour.
+   *
+   *  Aligning the key put `/internal` on the same slot as badge.ts and the
+   *  permalink pages, and those callers do not agree on a soft deadline
+   *  (badge.ts runs 8s/9s, everyone else 24s/28s). Round 11 stopped the
+   *  truncation travelling through the in-isolate FLIGHT (`flightKey`); this
+   *  stops it travelling through the CACHE, which is the same hole one hop
+   *  later. Without it: a README badge on `/i/kubernetes/kubernetes/12345`
+   *  makes camo fetch `badge.svg`, badge.ts's 8s deadline truncates and writes
+   *  a partial to the byte-identical key, and an unfurl ten seconds later reads
+   *  that partial as "recent", 503s it, and Slack pins the neutral placeholder
+   *  — on a link where this route's own 24s deadline finds the answer. On
+   *  `main` that could not happen, because /internal keyed on a key of its own.
+   *
+   *  Read once, here, and only when there IS a prior partial to throttle, so
+   *  the common paths pay no extra cache read. `run()`'s re-read uses the same
+   *  value: a partial that appeared in between is by definition not one this
+   *  call throttled, and recomputing it is the safe direction. */
+  let ownRecentPartial = false;
+  if (consumerPinsResult && prior?.value.partial) {
+    const mark = await cache.getEntry<PinnedPartialMarker>(partialKey(key));
+    ownRecentPartial = mark?.value?.pinnedPartial === true && mark.ageSeconds < HARD_TTL_PARTIAL;
+  }
+
+  /** True when a cached entry must NOT be served to this caller and the lookup
+   *  has to run again. Named for what it decides, not for pinning-safety: it is
+   *  NOT the invariant "this entry may be pinned". A pinning caller still has to
+   *  make its own call on what it does with a partial it is handed — see the
+   *  refusal at internal.ts:285 — because inside the throttle window below this
+   *  predicate deliberately returns false for one. Always false for callers that
+   *  did not opt in, so the public HTML routes are unchanged. */
+  const shouldRecompute = (entry: CacheEntry<LookupResult>): boolean => {
+    if (!consumerPinsResult) return false;
+    // TERMINAL (`firstRelease`, no `partial`) — always servable, at any age.
+    // Which release first contains a commit cannot change, which is why
+    // `isFresh()` treats it as fresh forever and `hardTtlFor()` keeps it 30
+    // days. `MAX_STALE_PINNED` exists for the opposite case, a "not yet
+    // released" prior that has since shipped; applying it here would discard
+    // exactly the warm entries this route joined the public key to reuse,
+    // paying a full findRelease per unfurl.
+    if (entry.value.firstRelease && !entry.value.partial) return false;
+    // PARTIAL (either shape) — a truncated traversal. With `firstRelease: null`
+    // it means "we stopped looking", which web-og renders as a definite "not yet
+    // released"; WITH a `firstRelease` it carries the gallop hit, and the bisect
+    // that would confirm no EARLIER release contains the commit is what the
+    // deadline cut short (find-release.ts:288-292). The result card renders that
+    // caveat, web-og cannot. So the caller must refuse to PIN either shape — but
+    // recomputing one this caller itself produced under its OWN deadline, within
+    // its 60s TTL, would only reproduce it, so inside that window we hand it back
+    // (the caller 503s it into a short-cached placeholder) instead of running a
+    // full traversal on the shared token for every crawler. Someone ELSE's
+    // partial earns no such trust: recompute it.
+    if (entry.value.partial) return !ownRecentPartial;
+    // PENDING (no `firstRelease`, no `partial`) — bounded by `MAX_STALE_PINNED`:
+    // an answer older than that may have shipped since, and a PNG already
+    // rendered from it cannot be invalidated.
+    return entry.ageSeconds >= MAX_STALE_PINNED;
+  };
+  if (prior && isFresh(prior) && !shouldRecompute(prior)) {
     return { status: 'ok', result: prior.value, stale: false, staleAsOf: null, cached: true };
   }
 
@@ -208,7 +248,7 @@ export async function resolveLookup(args: {
   const backedOff =
     Boolean(neg?.value?.transient) && (neg?.ageSeconds ?? Number.POSITIVE_INFINITY) < NEG_TTL;
   if (backedOff) {
-    if (prior && !unpinnable(prior)) return staleHit();
+    if (prior && !shouldRecompute(prior)) return staleHit();
     if (!bypassBackOffWhenUnservable) {
       return {
         status: 'transient',
@@ -241,7 +281,7 @@ export async function resolveLookup(args: {
   try {
     const run = async () => {
       const re = await cache.getEntry<LookupResult>(key);
-      if (re && isFresh(re) && !unpinnable(re)) return re.value;
+      if (re && isFresh(re) && !shouldRecompute(re)) return re.value;
       const r = await load();
       // A consumer that PINS what we hand back is also the most deadline-pressured
       // producer of partials, and `hardTtlFor()` tests `firstRelease` before
@@ -249,12 +289,17 @@ export async function resolveLookup(args: {
       // WITH `partial: soft_deadline`) would take the TERMINAL 30-day branch and
       // `isFresh()` would report it fresh forever. On the shared slot that pins the
       // public permalink and badge to a tag the bisect never confirmed, for a month,
-      // with no upstream call able to correct it. `unpinnable` trusts a partial for
+      // with no upstream call able to correct it. `shouldRecompute` trusts a partial for
       // HARD_TTL_PARTIAL and no longer, so the long TTL buys this caller nothing.
       // (The same misclassification on the PUBLIC routes' own writes predates this
       // PR and is tracked in #155; their semantics are deliberately untouched here.)
       const pinnedPartial = Boolean(consumerPinsResult && r.partial);
       await cache.put(key, r, pinnedPartial ? HARD_TTL_PARTIAL : hardTtlFor(r));
+      // Record WHOSE truncation this was, so the throttle above honours it only
+      // for this caller. Same TTL as the entry, so it can never outlive it.
+      if (pinnedPartial) {
+        await cache.put(partialKey(key), { pinnedPartial: true }, HARD_TTL_PARTIAL);
+      }
       return r;
     };
     const result = await singleFlight(flightKey, run);
@@ -270,7 +315,7 @@ export async function resolveLookup(args: {
         { transient: true, kind: err.kind, status: upstreamStatus, anubis },
         NEG_TTL,
       );
-      if (prior && !unpinnable(prior)) return staleHit();
+      if (prior && !shouldRecompute(prior)) return staleHit();
       return { status: 'transient', kind: err.kind, upstreamStatus, anubis };
     }
     return { status: 'error', error: err };
