@@ -180,7 +180,15 @@ function failureMessage(resolved: Exclude<Resolved, { status: 'ok' }>): string {
  *  ever warm — that was half of #143. That means all five parts, including the
  *  `cull`/`nopre` suffixes for the default (non-strict, no-prerelease) options an
  *  OG card always renders, and the public `issue#`/`pr#` id spelling rather than
- *  the `issue:`/`pr:` this endpoint used to invent. */
+ *  the `issue:`/`pr:` this endpoint used to invent.
+ *
+ *  CAVEAT — this alignment is complete for the issue and PR routes only. On the
+ *  COMMIT route `input.sha` is whatever web-og was handed, and `ui/og-meta.tsx`
+ *  builds the `og:image` URL from `shortSha()` (7 chars) while `result.tsx` keys
+ *  the permalink on the full 40. The two digests differ, so a commit unfurl still
+ *  misses the slot the permalink warmed and still pays a full `findRelease`.
+ *  Closing that needs a change to the PUBLIC routes' key namespace and is tracked
+ *  as #147 — do not read this function as having fixed #143 for commit links. */
 async function resolveResult(c: Context, input: LookupInput): Promise<Response> {
   const env = c.env as Env;
   const req = c.req.raw;

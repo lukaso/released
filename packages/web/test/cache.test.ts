@@ -132,7 +132,9 @@ describe('makeWorkerCache', () => {
     const entry = await cache.getEntry('k');
     expect(entry?.ageSeconds).toBe(0);
     // ...and reports the stamp as absent rather than inventing one, so an
-    // ordering test falls back to ages instead of comparing against a fake 0.
+    // ordering test refuses the pair instead of comparing against a fake 0:
+    // `writtenNoEarlierThan` (resolve.ts) returns false when either stamp is
+    // null, so an unstamped marker/entry pair is always recomputed, never served.
     expect(entry?.stampedAt).toBeNull();
   });
 });
