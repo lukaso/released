@@ -4,8 +4,9 @@
 // GET /h/:host/r/:projectPath/c/:sha.png     — federated (any host, #8)
 //   → Fetch the result data from `web` via Service Binding (D23).
 //   → Render PNG via @cloudflare/workers-og (Satori + resvg-wasm).
-//   → Cache 24h. On data miss, render a neutral placeholder with short TTL
-//     (never a long-cached error).
+//   → Cache 24h, but only for a SETTLED answer (a released commit). A
+//     not-yet-released or partial result, and a data miss (neutral
+//     placeholder), get a short TTL so the card can still flip (#151).
 
 import { type LookupResult, OG_TEMPLATE_VERSION } from '@released/core';
 import { type Context, Hono } from 'hono';
@@ -181,13 +182,34 @@ export default app;
 export const LONG_CACHE = `public, no-transform, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
 export const SHORT_CACHE = 'public, no-transform, max-age=60';
 
+/** True only when the answer the card renders can never change again: a
+ *  completed traversal that found a release.
+ *
+ *  The lifetime used to key on whether a result came back AT ALL, which
+ *  long-cached two shapes that are still in motion (#151):
+ *
+ *  - `firstRelease: null` renders "not yet released" — the one card whose
+ *    whole job is to flip once a release contains the commit. Pinned for 24h,
+ *    a commit shared an hour before its release unfurls as unreleased and
+ *    Slack/X keep that PNG for a day after the release ships.
+ *  - a `partial` is a best-effort answer from a traversal the soft deadline
+ *    truncated, so its `firstRelease` is not confirmed to be the earliest one.
+ *    It has to stay revalidatable rather than be pinned as if it were final.
+ *
+ *  This is the same test `resolve.ts`'s `hardTtlFor()` applies on the web
+ *  side, and the OG analogue of the badge invariant the project already
+ *  states: released → long cache, not-yet/checking → short cache. */
+function isTerminal(result: LookupResult | null): boolean {
+  return result != null && result.firstRelease != null && !result.partial;
+}
+
 export function renderImage(
   result: LookupResult | null,
   ctx: { owner: string; repo: string; sha?: string; number?: string },
   cacheOverride?: string,
 ): Response {
   const SIZE = { width: 1200, height: 630 };
-  const cacheControl = cacheOverride ?? (result ? LONG_CACHE : SHORT_CACHE);
+  const cacheControl = cacheOverride ?? (isTerminal(result) ? LONG_CACHE : SHORT_CACHE);
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 

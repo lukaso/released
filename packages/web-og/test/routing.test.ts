@@ -435,10 +435,10 @@ describe('web-og card content', () => {
     // The SHIPPED badge and the date are gated on `firstRelease` — both gone.
     expect(text).not.toContain('SHIPPED');
     expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
-    // A long-cache header still applies — we DID get a result, it's just unreleased.
-    expect(res.headers.get('cache-control')).toBe(
-      'public, no-transform, max-age=86400, s-maxage=86400',
-    );
+    // Short-cached: "not yet released" is a pending state that has to flip
+    // when the release lands, so it is NOT long-cacheable just because a
+    // result came back (#151). Lifetime coverage lives in its own describe.
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
@@ -743,5 +743,81 @@ describe('web-og issue/PR cards (#79)', () => {
     expect(joined).toContain('…');
     // No lone surrogate (U+D800–U+DFFF) leaks into the rendered text.
     expect(/[\u{D800}-\u{DFFF}]/u.test(joined)).toBe(false);
+  });
+});
+
+// #151: the cache lifetime keys on whether a result was RECEIVED, not on
+// whether the answer it renders can still change. Both non-terminal shapes —
+// "not yet released" (firstRelease null) and a soft-deadline `partial` — are
+// real LookupResults, so both took the 24h cache. The not-yet card is the one
+// card whose whole job is to flip when the release lands; a partial is an
+// unconfirmed answer from a truncated traversal. Pinning either for a day in
+// every crawler's cache is the OG analogue of the badge invariant the project
+// already states (released → long, not-yet/checking → short).
+describe('web-og cache lifetime keys on terminality, not presence (#151)', () => {
+  const LONG = 'public, no-transform, max-age=86400, s-maxage=86400';
+  const SHORT = 'public, no-transform, max-age=60';
+
+  const baseInput = {
+    kind: 'commit',
+    repo: { owner: 'facebook', repo: 'react', projectPath: 'facebook/react' },
+    sha: 'a'.repeat(40),
+  };
+  const released = { tag: 'v18.2.0', sha: 's', date: '2024-03-15T09:00:00Z', url: '' };
+
+  async function fetchCard(result: Record<string, unknown>): Promise<Response> {
+    return await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      makeEnv(new Response(JSON.stringify(result))),
+    );
+  }
+
+  it('not-yet-released result is SHORT-cached so the card flips when the release lands', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: null,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    // The card really does render the flippable copy — so this is the card
+    // whose lifetime matters, not an unrelated shape.
+    expect(collectText(lastRenderedNode)).toContain('not yet released');
+    expect(res.headers.get('cache-control')).toBe(SHORT);
+  });
+
+  it('partial result is SHORT-cached even though it carries a firstRelease', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: released,
+      partial: { reason: 'soft_deadline', candidatesTried: 12 },
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    // A galloped answer under a blown soft deadline is not confirmed earliest,
+    // so it must stay revalidatable rather than pinned for a day.
+    expect(res.headers.get('cache-control')).toBe(SHORT);
+  });
+
+  // Complement. Without it, "short-cache everything" passes the two above and
+  // silently re-renders every settled card once a minute. (Proven: forcing
+  // isTerminal to false reddens this and 10 pre-existing long-cache tests.)
+  it('terminal released result keeps the LONG cache', async () => {
+    const res = await fetchCard({
+      input: baseInput,
+      canonicalSha: 'abc1234def5678',
+      firstRelease: released,
+      alsoIn: [],
+      releaseNotesHtml: null,
+      rateLimit: null,
+    });
+    expect(res.status).toBe(200);
+    expect(collectText(lastRenderedNode)).toContain('SHIPPED');
+    expect(res.headers.get('cache-control')).toBe(LONG);
   });
 });
