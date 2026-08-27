@@ -787,7 +787,16 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     );
   }
 
-  it('not-yet-released result is PENDING-cached (300s) so the card flips when the release lands', async () => {
+  // Scope this one honestly. `firstRelease: null` with no `partial` is a shape
+  // core does not currently emit: `find-release.ts:316` is its only null return
+  // and always carries `partial: soft_deadline`, and a genuine not-yet-released
+  // commit throws `NotYetReleasedError`, which `/internal` turns into a 503. So
+  // this is a DEFENSIVE unit guard on the lifetime rule for a shape the type
+  // permits (and core keeps a fallback branch for at `:486`) — it is not
+  // evidence about a state production reaches today. The end-to-end test below
+  // is what documents the reachable not-yet path. (The same distinction is
+  // already drawn on `pendingFixture` in web's internal-cache-origin tests.)
+  it('DEFENSIVE: a bare not-yet-released result is PENDING-cached (300s), not pinned', async () => {
     const res = await fetchCard({
       input: baseInput,
       canonicalSha: 'abc1234def5678',
@@ -801,6 +810,25 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     // whose lifetime matters, not an unrelated shape.
     expect(collectText(lastRenderedNode)).toContain('not yet released');
     expect(res.headers.get('cache-control')).toBe(PENDING);
+  });
+
+  // The REACHABLE not-yet-released path, end to end, and the one #151 actually
+  // asked to be pinned down: `/internal` 503s `NotYetReleasedError`, `fetchResult`
+  // returns null, and web-og renders the neutral placeholder at SHORT_CACHE. This
+  // documents what production does today — including that the card does NOT say
+  // the commit is unreleased, which is #150 and out of scope here. If #150 is
+  // fixed by making `/internal` return a result instead of a 503, this test goes
+  // red and points at the lifetime decision that has to be made with it.
+  it('a not-yet-released commit reaches web-og as a 503 → placeholder, short-cached (#150)', async () => {
+    const res = await app.fetch(
+      new Request('https://og.example/r/facebook/react/c/abc1234.png'),
+      makeEnv(new Response('{"error":"not yet released"}', { status: 503 })),
+    );
+    expect(res.status).toBe(200);
+    // Not the "not yet released" card — the neutral placeholder.
+    expect(collectText(lastRenderedNode)).toContain('Looking up…');
+    expect(collectText(lastRenderedNode)).not.toContain('not yet released');
+    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
   });
 
   it('partial result is PENDING-cached even though it carries a firstRelease', async () => {

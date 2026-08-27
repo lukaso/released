@@ -205,13 +205,28 @@ export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
  *  The lifetime used to key on whether a result came back AT ALL, which
  *  long-cached two shapes that are still in motion (#151):
  *
- *  - `firstRelease: null` renders "not yet released" — the one card whose
- *    whole job is to flip once a release contains the commit. Pinned for 24h,
- *    a commit shared an hour before its release unfurls as unreleased and
- *    Slack/X keep that PNG for a day after the release ships.
  *  - a `partial` is a best-effort answer from a traversal the soft deadline
  *    truncated, so its `firstRelease` is not confirmed to be the earliest one.
  *    It has to stay revalidatable rather than be pinned as if it were final.
+ *    **This is the arm that changes production behaviour** (24h → 300s).
+ *  - `firstRelease: null` renders "not yet released", the one card whose whole
+ *    job is to flip once a release contains the commit. Be precise about this
+ *    one: core does not currently EMIT that shape. `find-release.ts:316` is its
+ *    only `firstRelease: null` return and it always carries
+ *    `partial: soft_deadline`; a genuine not-yet-released commit throws
+ *    `NotYetReleasedError` (`:326`, and `:478` for the issue/PR aggregation),
+ *    which `/internal` turns into a 503 (`web/src/routes/internal.ts:67-72`) —
+ *    so `fetchResult` sees `!res.ok`, returns null, and web-og renders the
+ *    neutral PLACEHOLDER at `SHORT_CACHE`, never this card. The bare-null arm
+ *    below is therefore a defensive guard on a shape the type permits and
+ *    core keeps a fallback branch for (`:486`), not a bug that shipped.
+ *
+ *  What that means for #151's headline case: the not-yet-released unfurl is
+ *  still wrong today, but wrong in a different way than "pinned for 24h" — it
+ *  is the neutral "Looking up…" placeholder rather than a card saying the
+ *  commit is unreleased. That is #150, and it is deliberately NOT fixed here:
+ *  it needs `/internal` to stop 503-ing `NotYetReleasedError`, which is a
+ *  change to the web package's error mapping, not to this lifetime rule.
  *
  *  This is STRICTER than the web side, deliberately. `hardTtlFor()`
  *  (packages/web/src/resolve.ts) tests `firstRelease` first, so a partial
@@ -223,8 +238,8 @@ export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
  *
  *  It is the OG analogue of the badge invariant the project already states:
  *  released → long cache, not-yet/checking → short cache. */
-function isTerminal(result: LookupResult | null): boolean {
-  return result != null && result.firstRelease != null && !result.partial;
+function isTerminal(result: LookupResult): boolean {
+  return result.firstRelease != null && !result.partial;
 }
 
 export function renderImage(
