@@ -213,9 +213,16 @@ export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
  *    truncated, so its `firstRelease` is not confirmed to be the earliest one.
  *    It has to stay revalidatable rather than be pinned as if it were final.
  *
- *  This is the same test `resolve.ts`'s `hardTtlFor()` applies on the web
- *  side, and the OG analogue of the badge invariant the project already
- *  states: released → long cache, not-yet/checking → short cache. */
+ *  This is STRICTER than the web side, deliberately. `hardTtlFor()`
+ *  (packages/web/src/resolve.ts) tests `firstRelease` first, so a partial
+ *  that carries a `firstRelease` gets the 30-day terminal TTL there, and
+ *  `badge.ts` long-caches the same shape for 24h. A truncated traversal that
+ *  reported v2.0.0 when v1.9.0 was the true earliest is therefore still
+ *  pinned on those two surfaces — the partial half of #151, tracked
+ *  separately in #159. Here it revalidates.
+ *
+ *  It is the OG analogue of the badge invariant the project already states:
+ *  released → long cache, not-yet/checking → short cache. */
 function isTerminal(result: LookupResult | null): boolean {
   return result != null && result.firstRelease != null && !result.partial;
 }

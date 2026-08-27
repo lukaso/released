@@ -787,7 +787,7 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     );
   }
 
-  it('not-yet-released result is SHORT-cached so the card flips when the release lands', async () => {
+  it('not-yet-released result is PENDING-cached (300s) so the card flips when the release lands', async () => {
     const res = await fetchCard({
       input: baseInput,
       canonicalSha: 'abc1234def5678',
@@ -803,7 +803,7 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     expect(res.headers.get('cache-control')).toBe(PENDING);
   });
 
-  it('partial result is SHORT-cached even though it carries a firstRelease', async () => {
+  it('partial result is PENDING-cached even though it carries a firstRelease', async () => {
     const res = await fetchCard({
       input: baseInput,
       canonicalSha: 'abc1234def5678',
