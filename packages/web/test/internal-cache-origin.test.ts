@@ -353,19 +353,29 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe('public, max-age=60');
   });
 
-  // Round 9 (#144). The partial above has `firstRelease: null`, which `hardTtlFor()`
-  // already routes to its 60-second branch. The OTHER partial shape does not:
-  // find-release.ts (~295) returns the gallop hit WITH `partial`, and `hardTtlFor()`
-  // tests `firstRelease` BEFORE `partial`, so it takes the terminal 30-day branch —
-  // and `isFresh()` reports it fresh forever for the same reason. On `main` that
-  // could not reach the public routes: /internal wrote a flat 30 minutes onto a key
-  // nothing else read. Sharing the slot (this PR) makes the most deadline-pressured
-  // producer of partials a WRITER into it, so one OG-triggered truncated traversal
-  // would pin the permalink and the badge to a tag the bisect never confirmed for a
-  // month, with no upstream call able to correct it. `unpinnable` trusts a partial
-  // for 60 seconds and no longer, so the long TTL buys this route nothing.
-  // (#155 tracks the same misclassification on the public routes' OWN writes.)
-  it('writes a gallop-only partial with the 60-second TTL, not the terminal 30 days', async () => {
+  // Rounds 9 and 15 (#144). The partial above has `firstRelease: null`, which
+  // `hardTtlFor()` already routes to its 60-second branch. The OTHER partial shape
+  // does not: find-release.ts (~295) returns the gallop hit WITH `partial`, and
+  // `hardTtlFor()` tests `firstRelease` BEFORE `partial`, so it takes the terminal
+  // 30-day branch — and `isFresh()` reports it fresh forever for the same reason.
+  // That IS a real defect, and #155 tracks it.
+  //
+  // Round 9 tried to contain it by writing 60s from THIS caller. Round 15 showed
+  // why that is the wrong lever: the whole point of this PR is that the slot is
+  // SHARED, so a TTL chosen here is imposed on badge.ts and the permalink pages
+  // too. A public page view writes the gallop answer at 30 days; one OG unfurl a
+  // moment later replaced it with a 60-second entry, and 61 seconds on every later
+  // human page view paid a fresh traversal while issue.tsx/pr.tsx's bot branch
+  // rendered the deferred card off a slot that had been warm. Narrowing the public
+  // routes' TTL is #155's call to make, on the public routes' own writes — not a
+  // side effect of an unfurl.
+  //
+  // So the ENTRY carries the caller-independent TTL, and this caller's refusal to
+  // trust a partial for more than 60 seconds rides on its own `:pinpartial` marker.
+  // The route still 503s the partial rather than pinning it (round 8), and
+  // `shouldRecompute` still recomputes it after 60s (resolve.test.ts) — what
+  // changed is that nobody else's entry is shortened to buy that.
+  it('writes a gallop partial on the caller-independent TTL, throttling via its own marker', async () => {
     const sha = '9'.repeat(40);
     findReleaseMock.mockResolvedValue({
       ...(fixture('v4.19.0') as Record<string, unknown>),
@@ -376,7 +386,12 @@ describe('/internal/* follows the cache policy that governs the shared slot', ()
     expect(res.status).toBe(503); // never pinned to the crawler — the round-8 guard
 
     const k = await publicKey('github.com/honojs/hono', `sha:${sha}`);
-    expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe('public, max-age=60');
+    // Same value a public caller writes for this shape: the unfurl did not
+    // shorten anyone's entry. Restoring the round-9 `HARD_TTL_PARTIAL` write
+    // reddens this with `max-age=60`.
+    expect(cacheControlOf(PUBLIC_ORIGIN, k)).toBe(`public, max-age=${30 * 24 * 60 * 60}`);
+    // ...and the 60-second distrust lives on the caller-private marker instead.
+    expect(cacheControlOf(PUBLIC_ORIGIN, `${k}:pinpartial`)).toBe('public, max-age=60');
   });
 
   // The complement: narrowing the TTL for a pinning consumer must not touch the
@@ -531,6 +546,25 @@ function cacheOriginProblems(cfg: WranglerCfg): string[] {
       problems.push(
         `[env.${name}.vars] PUBLIC_BASE_URL keys on the PRODUCTION origin \`${origin}\``,
       );
+      continue;
+    }
+    // ...and on a `*.workers.dev` host the origin is DERIVED from the Worker name:
+    // the first label IS `[env.<name>] name`. So the literal can be checked against
+    // the deployment it claims to describe, and a rename that leaves the URL behind
+    // fails the build instead of shipping an env whose canonical links, `og:url` and
+    // sitemap point at a host that no longer exists (`publicBaseUrl()` prefers this
+    // var over the request origin, so those are no longer correct by construction).
+    // Only for workers.dev: an env on a custom domain has no such relationship, and
+    // asserting one there would reject a legitimate config. The account subdomain
+    // (`.<account>.workers.dev`) is NOT in this file at all, so no config guard can
+    // check it — a deploy under a different account is caught by the preview
+    // liveness check, not here.
+    const host = new URL(origin).host;
+    const workerName = e.name;
+    if (workerName && host.endsWith('.workers.dev') && host.split('.')[0] !== workerName) {
+      problems.push(
+        `[env.${name}.vars] PUBLIC_BASE_URL \`${origin}\` does not match [env.${name}] name \`${workerName}\``,
+      );
     }
   }
   return problems;
@@ -588,6 +622,44 @@ describe('every deployed environment configures a routable cache origin of its O
     expect(cacheOriginProblems(aliased)).toEqual([
       expect.stringContaining('keys on the PRODUCTION origin'),
     ]);
+  });
+
+  // The rename this guard exists for. `PUBLIC_BASE_URL` is a literal, but on
+  // workers.dev the host it must equal is generated from `name` — so the two can
+  // drift with a one-line edit and nothing at runtime would notice: the origin
+  // stays set, routable and non-prod, and `publicBaseUrl()` goes on serving
+  // canonical/`og:url`/sitemap URLs for a Worker that no longer answers.
+  it('rejects an env whose PUBLIC_BASE_URL was left behind by a `name` rename', () => {
+    const renamed: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        preview: {
+          name: 'released-web-pr-preview',
+          vars: { PUBLIC_BASE_URL: 'https://released-web-preview.lukaso.workers.dev' },
+        },
+      },
+    };
+    expect(cacheOriginProblems(renamed)).toEqual([
+      expect.stringContaining('does not match [env.preview] name'),
+    ]);
+  });
+
+  // ...and the same check must not fire on an env served from a custom domain,
+  // where the host bears no relation to the Worker name. Without the
+  // `.workers.dev` condition this config would be rejected outright.
+  it('accepts an env on a custom domain, whose host cannot match the Worker name', () => {
+    const custom: WranglerCfg = {
+      ...cfg,
+      env: {
+        ...cfg.env,
+        staging: {
+          name: 'released-web-staging',
+          vars: { PUBLIC_BASE_URL: 'https://staging.blabberate.com' },
+        },
+      },
+    };
+    expect(cacheOriginProblems(custom)).toEqual([]);
   });
 
   // The reason this suite calls `originOf` instead of restating its rule. A

@@ -38,6 +38,7 @@ function mkResult(opts: { released: boolean; partial?: boolean }): LookupResult 
 /** In-memory WorkerCache whose entry ages are set explicitly by the test. */
 function makeFakeCache() {
   const store = new Map<string, { value: unknown; ageSeconds: number; stampedAt: number | null }>();
+  const puts: { key: string; ttlSeconds?: number }[] = [];
   const cache: WorkerCache = {
     async get<T>(key: string) {
       return (store.get(key)?.value as T) ?? null;
@@ -46,12 +47,19 @@ function makeFakeCache() {
       const e = store.get(key);
       return e ? { value: e.value as T, ageSeconds: e.ageSeconds, stampedAt: e.stampedAt } : null;
     },
-    async put<T>(key: string, value: T) {
+    async put<T>(key: string, value: T, ttlSeconds?: number) {
+      puts.push({ key, ttlSeconds });
       store.set(key, { value, ageSeconds: 0, stampedAt: Date.now() });
     },
   };
   return {
     cache,
+    /** Every `cache.put` in call order, with the TTL the caller asked for. The
+     *  slot is shared across callers that do not agree on a deadline, so the TTL
+     *  a write imposes on it is observable behaviour, not an implementation
+     *  detail — asserting only the stored VALUE cannot see a caller shortening
+     *  someone else's entry. */
+    puts,
     /** `stampedAt` is the write-time `x-cached-at` the real cache stores. It is
      *  INDEPENDENT of `ageSeconds` here on purpose: production derives the two
      *  from different `Date.now()` samples, so a test has to be able to express a
@@ -608,5 +616,121 @@ describe('resolveLookup — a terminal RELEASED prior stays pinnable at any age'
     expect(load).toHaveBeenCalledTimes(1);
     expect(r.status).toBe('ok');
     if (r.status === 'ok') expect(r.result.firstRelease?.tag).toBe('4.18.0');
+  });
+});
+
+// Round 15. Two defects the SHARED key introduced, both invisible to a test that
+// looks only at what a single caller is handed back: the key is shared with
+// badge.ts and the permalink pages, so what /internal writes to it — the entry's
+// TTL, and the negative marker's age — is imposed on THEM.
+describe('resolveLookup — a pinning caller does not rewrite the SHARED slot for everyone else', () => {
+  const HARD_TTL_RELEASED = 30 * 24 * 60 * 60;
+  const HARD_TTL_PARTIAL = 60;
+
+  const galloped = () => mkResult({ released: true, partial: true });
+
+  it('writes a gallop partial on the caller-independent TTL, not its own 60s throttle', async () => {
+    const f = makeFakeCache();
+    const load = vi.fn().mockResolvedValue(galloped());
+
+    await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+      bypassBackOffWhenUnservable: true,
+    });
+
+    // The ENTRY keeps hardTtlFor()'s terminal branch — the same value a public
+    // page view writes — so an unfurl cannot shorten the permalink's month-long
+    // slot to a minute. Writing HARD_TTL_PARTIAL here reddens this.
+    expect(f.puts.find((p) => p.key === KEY)?.ttlSeconds).toBe(HARD_TTL_RELEASED);
+    // The caller's own distrust of the partial rides on the marker instead.
+    expect(f.puts.find((p) => p.key === pinPartialKey)?.ttlSeconds).toBe(HARD_TTL_PARTIAL);
+  });
+
+  it('a public caller and a pinning caller write the IDENTICAL entry TTL', async () => {
+    const pub = makeFakeCache();
+    const pin = makeFakeCache();
+    const load = vi.fn().mockResolvedValue(galloped());
+
+    await resolveLookup({ cache: pub.cache, key: KEY, load });
+    await resolveLookup({
+      cache: pin.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+      bypassBackOffWhenUnservable: true,
+    });
+
+    const ttlOf = (f: ReturnType<typeof makeFakeCache>) =>
+      f.puts.find((p) => p.key === KEY)?.ttlSeconds;
+    expect(ttlOf(pin)).toBe(ttlOf(pub));
+  });
+
+  it('still recomputes its OWN partial once the marker has expired', async () => {
+    const f = makeFakeCache();
+    // A 30-day entry sitting in the slot, and a marker that has aged out.
+    f.seed(KEY, galloped(), 5 * 60);
+    f.seed(pinPartialKey, { pinnedPartial: true }, HARD_TTL_PARTIAL + 1);
+    const load = vi.fn().mockResolvedValue(mkResult({ released: true }));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+      bypassBackOffWhenUnservable: true,
+    });
+
+    // The longer entry TTL must not make a stale partial servable: the throttle
+    // reads the MARKER. Making shouldRecompute trust the entry reddens this.
+    expect(load).toHaveBeenCalledOnce();
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.result.partial).toBeUndefined();
+  });
+
+  it('does NOT re-stamp a negative marker it bypassed — the humans keep their clock', async () => {
+    const f = makeFakeCache();
+    // An outage: a page view failed 55s ago, so the shared marker is 5s from
+    // expiring and a human is 5s from their next real attempt.
+    f.seed(negKey, { transient: true, kind: 'github_server_error' }, 55);
+    const load = vi.fn().mockRejectedValue(new ProviderServerError('gitlab.gnome.org', 503, 'x'));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+      bypassBackOffWhenUnservable: true,
+    });
+
+    // The bypass still ran the load (that is its whole point)...
+    expect(load).toHaveBeenCalledOnce();
+    expect(r.status).toBe('transient');
+    // ...but left the marker's age alone. Removing the `!backedOff` guard reddens
+    // this: the marker is rewritten at age 0 and the human's window restarts,
+    // which under a once-a-minute unfurl cadence never lets it expire at all.
+    expect(f.puts.some((p) => p.key === negKey)).toBe(false);
+    expect(f.get(negKey)?.ageSeconds).toBe(55);
+  });
+
+  it('DOES stamp the marker when the slot was cold — the back-off still exists', async () => {
+    const f = makeFakeCache();
+    const load = vi.fn().mockRejectedValue(new ProviderServerError('gitlab.gnome.org', 503, 'x'));
+
+    const r = await resolveLookup({
+      cache: f.cache,
+      key: KEY,
+      load,
+      consumerPinsResult: true,
+      bypassBackOffWhenUnservable: true,
+    });
+
+    expect(r.status).toBe('transient');
+    // Suppressing the write unconditionally would leave the key with NO back-off
+    // whenever the crawler touches it first, and every human reload would pound
+    // the down host. Guarding on `backedOff` keeps this arm live.
+    expect(f.puts.some((p) => p.key === negKey)).toBe(true);
   });
 });

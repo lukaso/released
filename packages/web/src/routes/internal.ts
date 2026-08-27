@@ -229,14 +229,21 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
     // consumer that asks ONCE is a placeholder pinned long after the host recovers.
     //
     // The asymmetry is deliberate: this caller opts out of READING the marker on
-    // a cold slot, but resolveLookup still WRITES it, so a failure discovered
-    // here can back off a human permalink for up to 60s. That is the point of
-    // sharing the slot — the marker describes the HOST being down, not who found
-    // it out, and the host is equally down for the human. They get the
-    // "checking…" recovery card (never a wrong "not yet released") and can
+    // a cold slot, but resolveLookup still WRITES it when the slot was cold, so a
+    // failure discovered here can back off a human permalink for up to 60s. That
+    // is the point of sharing the slot — the marker describes the HOST being down,
+    // not who found it out, and the host is equally down for the human. They get
+    // the "checking…" recovery card (never a wrong "not yet released") and can
     // reload; the crawler asks once and keeps what it got. Suppressing the write
     // would instead leave the key with no back-off at all whenever the crawler
     // touches it first, and every human reload would pound the down host.
+    //
+    // What it does NOT do is re-stamp a marker it bypassed. Writing on every
+    // bypassed failure would keep the shared marker permanently younger than
+    // NEG_TTL under a once-a-minute unfurl cadence, and the humans on this key —
+    // who do not bypass — would never see it expire, i.e. never get the retry
+    // window the back-off exists to give them. resolveLookup writes the marker
+    // only when it was cold (`!backedOff`), so their clock runs uninterrupted.
     bypassBackOffWhenUnservable: true,
     // web-og renders whatever we return into a PNG it long-caches for 24h, and
     // nothing here can invalidate that PNG afterwards. So no exit may hand this

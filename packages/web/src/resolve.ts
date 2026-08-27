@@ -321,14 +321,17 @@ export async function resolveLookup(args: {
     // recovers. Gating the bypass on a fraction of NEG_TTL would only move which
     // unfurls get the permanent placeholder, not stop them.
     //
-    // What that argument does NOT cover, and what #157 tracks: every bypassed load
-    // RE-STAMPS the marker, so under a steady crawler cadence the marker is almost
-    // never older than NEG_TTL. Human page views on this key do not bypass, so they
-    // hit a warm marker on nearly every request and sit on the "checking..." card
-    // for the whole outage instead of getting a retry window each minute. The
-    // crawler's unthrottled probing starves the humans' back-off of its recovery
-    // window; fixing that means changing the marker's semantics (a `bypassed` flag,
-    // or not re-stamping on a bypassed load), not the bypass condition.
+    // What it must NOT also cost is the humans' recovery window. A bypassed load
+    // that fails does NOT re-stamp the marker (see the catch below): re-stamping
+    // would reset the age that the callers who DO honour the marker — the public
+    // HTML routes, on this same shared key — read, so under a steady crawler
+    // cadence (a link circulating on Slack unfurls roughly once a minute) the
+    // marker would never reach NEG_TTL and a human would sit on the "checking..."
+    // card for the whole outage rather than getting a fresh attempt each minute.
+    // The marker now ages out on its own clock, as it does on `main`, where
+    // /internal kept a negative marker of its own. #157 tracks the wider question
+    // of what the unthrottled bypass should cost; this is the half the shared key
+    // introduced.
   }
 
   try {
@@ -336,20 +339,32 @@ export async function resolveLookup(args: {
       const re = await cache.getEntry<LookupResult>(key);
       if (re && isFresh(re) && !shouldRecompute(re)) return re.value;
       const r = await load();
-      // A consumer that PINS what we hand back is also the most deadline-pressured
-      // producer of partials, and `hardTtlFor()` tests `firstRelease` before
-      // `partial` — so a gallop-only partial (find-release.ts ~295: the gallop hit
-      // WITH `partial: soft_deadline`) would take the TERMINAL 30-day branch and
-      // `isFresh()` would report it fresh forever. On the shared slot that pins the
-      // public permalink and badge to a tag the bisect never confirmed, for a month,
-      // with no upstream call able to correct it. `shouldRecompute` trusts a partial for
-      // HARD_TTL_PARTIAL and no longer, so the long TTL buys this caller nothing.
-      // (The same misclassification on the PUBLIC routes' own writes predates this
-      // PR and is tracked in #155; their semantics are deliberately untouched here.)
+      // The ENTRY's TTL is the caller-independent one, always. This slot is SHARED
+      // with badge.ts and the permalink pages, so a TTL picked to suit this caller
+      // is silently imposed on theirs. `hardTtlFor()` puts a gallop partial
+      // (`firstRelease` set + `partial: soft_deadline`) on the terminal 30-day
+      // branch; writing HARD_TTL_PARTIAL here instead would drop the PUBLIC routes'
+      // effective TTL on that shape from 30 days to 60 seconds for as long as a
+      // link is being unfurled — one OG unfurl replacing the month-long entry a
+      // human page view just wrote, so the next page view pays another full
+      // traversal and issue.tsx/pr.tsx's bot branch (`if (!cached) return
+      // renderDeferred(...)`) falls back to the deferred card off a slot that was
+      // warm a minute ago. That misclassification is a real defect — it is just not
+      // this caller's to fix on someone else's entry. It is tracked in #155, and
+      // the public routes' semantics are deliberately untouched here.
+      //
+      // What THIS caller needs — never trusting a partial for longer than
+      // HARD_TTL_PARTIAL — rides on the companion marker below instead. The marker
+      // is caller-private and expires on its own clock, and `shouldRecompute` reads
+      // the MARKER, never the entry's TTL, so the 60s throttle window is exactly
+      // what it was.
       const pinnedPartial = Boolean(consumerPinsResult && r.partial);
-      await cache.put(key, r, pinnedPartial ? HARD_TTL_PARTIAL : hardTtlFor(r));
-      // Record WHOSE truncation this was, so the throttle above honours it only
-      // for this caller. Same TTL as the entry, so it can never outlive it.
+      await cache.put(key, r, hardTtlFor(r));
+      // Record WHOSE truncation this was, so the throttle above honours it only for
+      // this caller, and for no longer than HARD_TTL_PARTIAL. The entry may now
+      // outlive the marker (a gallop partial keeps hardTtlFor's 30 days); that is
+      // the safe direction — no marker means `ownRecentPartial` is false and the
+      // partial is recomputed rather than served to a pinning consumer.
       if (pinnedPartial) {
         await cache.put(partialKey(key), { pinnedPartial: true }, HARD_TTL_PARTIAL);
       }
@@ -363,11 +378,20 @@ export async function resolveLookup(args: {
       // Throttle the next retry, then serve last-known-good if we have it.
       const upstreamStatus = upstreamStatusOf(err);
       const anubis = err instanceof ProviderJsonError && err.looksLikeAnubis;
-      await cache.put(
-        negKey(key),
-        { transient: true, kind: err.kind, status: upstreamStatus, anubis },
-        NEG_TTL,
-      );
+      // ...but never re-stamp a marker this call walked straight past. `backedOff`
+      // is still true here only on the bypass fall-through above, which means the
+      // marker was already warm and this caller ignored it. Writing it again resets
+      // its age for everyone reading the shared key, which is what would starve the
+      // public routes' retry window (see the fall-through comment). Skipping the
+      // write costs this caller nothing — it does not read the marker on this path,
+      // and the warm marker it bypassed already records the host as down.
+      if (!backedOff) {
+        await cache.put(
+          negKey(key),
+          { transient: true, kind: err.kind, status: upstreamStatus, anubis },
+          NEG_TTL,
+        );
+      }
       if (prior && !shouldRecompute(prior)) return staleHit();
       return { status: 'transient', kind: err.kind, upstreamStatus, anubis };
     }

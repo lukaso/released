@@ -139,11 +139,12 @@ PROD_HOST = "released.blabberate.com"
 # COUPLING: this var has a SECOND effect. `publicBaseUrl()` (src/env.ts) prefers
 # it over the incoming request origin, so preview's canonical links, `og:url` and
 # every `pubBase`-derived href come from this literal rather than being correct by
-# construction. Rename `[env.preview] name` below, or deploy under a different
-# account subdomain, and preview emits URLs for a host that does not exist — the
-# config guard (`cacheOriginProblems`) checks only that the var is set, routable
-# and not the production origin, never that it matches the deployed Worker. Update
-# this line whenever that name changes.
+# construction. The `[env.preview] name` half of that is guarded: on a workers.dev
+# host the first label IS the Worker name, and `cacheOriginProblems`
+# (test/internal-cache-origin.test.ts) fails the build when the two drift, so a
+# rename cannot silently leave this line behind. The ACCOUNT subdomain half is not
+# guardable from this file — `.lukaso.workers.dev` appears nowhere else in it — so
+# deploying under a different account still needs this line updated by hand.
 PUBLIC_BASE_URL = "https://released-web-preview.lukaso.workers.dev"
 
 [env.preview.assets]
