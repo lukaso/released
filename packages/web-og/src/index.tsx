@@ -180,7 +180,24 @@ export default app;
 // of the og.* zone) recompress the PNG that `web` links as the byte-exact social
 // card. Everything after it is the actual freshness policy.
 export const LONG_CACHE = `public, no-transform, max-age=${24 * 60 * 60}, s-maxage=${24 * 60 * 60}`;
+
+/** A card we could NOT render from a result: the placeholder. Either `/internal`
+ *  missed/failed (transient — retry soon), or the URL carries a template version
+ *  this build cannot render (self-heals once web-og lands). Both want the
+ *  shortest honest retry window, so this stays at 60s. */
 export const SHORT_CACHE = 'public, no-transform, max-age=60';
+
+/** A card we DID render, from an answer that is still in motion: not-yet-released
+ *  or a soft-deadline `partial`. Distinct from SHORT_CACHE because the question is
+ *  different — not "how fast should a failure retry" but "how fast can this answer
+ *  actually change". It cannot change faster than the data behind it, and
+ *  `/internal` stores every computed result for 30 minutes
+ *  (`cache.put(k, r, 30 * 60)`, packages/web/src/routes/internal.ts). A 60s TTL
+ *  therefore bought no freshness the upstream has: it re-ran the ~700ms
+ *  satori+resvg wasm render up to 60x/hour per URL for byte-identical JSON. 300s
+ *  matches the TTL `badge.ts` already uses for the same pending state, and is
+ *  still 6x fresher than the upstream cache it reads through. */
+export const PENDING_CACHE = 'public, no-transform, max-age=300, s-maxage=300';
 
 /** True only when the answer the card renders can never change again: a
  *  completed traversal that found a release.
@@ -209,7 +226,9 @@ export function renderImage(
   cacheOverride?: string,
 ): Response {
   const SIZE = { width: 1200, height: 630 };
-  const cacheControl = cacheOverride ?? (isTerminal(result) ? LONG_CACHE : SHORT_CACHE);
+  const cacheControl =
+    cacheOverride ??
+    (result == null ? SHORT_CACHE : isTerminal(result) ? LONG_CACHE : PENDING_CACHE);
 
   const node = result ? ResultCard(result) : PlaceholderCard(ctx);
 

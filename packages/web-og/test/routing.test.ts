@@ -435,10 +435,12 @@ describe('web-og card content', () => {
     // The SHIPPED badge and the date are gated on `firstRelease` — both gone.
     expect(text).not.toContain('SHIPPED');
     expect(text.some((t) => /^\d{4}-\d{2}-\d{2}$/.test(t))).toBe(false);
-    // Short-cached: "not yet released" is a pending state that has to flip
+    // Pending-cached: "not yet released" is a pending state that has to flip
     // when the release lands, so it is NOT long-cacheable just because a
     // result came back (#151). Lifetime coverage lives in its own describe.
-    expect(res.headers.get('cache-control')).toBe('public, no-transform, max-age=60');
+    expect(res.headers.get('cache-control')).toBe(
+      'public, no-transform, max-age=300, s-maxage=300',
+    );
   });
 
   it('placeholder card (binding miss): shows "Looking up…" and the owner/repo label', async () => {
@@ -756,7 +758,20 @@ describe('web-og issue/PR cards (#79)', () => {
 // already states (released → long, not-yet/checking → short).
 describe('web-og cache lifetime keys on terminality, not presence (#151)', () => {
   const LONG = 'public, no-transform, max-age=86400, s-maxage=86400';
-  const SHORT = 'public, no-transform, max-age=60';
+  // A pending answer is backed by `/internal`'s own 30-minute result cache
+  // (`cache.put(k, r, 30 * 60)` in packages/web/src/routes/internal.ts), so a
+  // 60s edge TTL cannot buy freshness the upstream does not have — it just
+  // re-runs the ~700ms satori+resvg render up to 60x/hour per URL while
+  // `/internal` hands back byte-identical JSON. 300s matches what badge.ts
+  // already uses for the same pending state and is still 6x fresher than the
+  // data behind it.
+  const PENDING = 'public, no-transform, max-age=300, s-maxage=300';
+  // PENDING stays separate from the placeholder's 60s SHORT_CACHE because the
+  // two answer different questions: SHORT_CACHE is "how fast should a FAILED
+  // render retry" (binding miss, unrenderable template version), PENDING is
+  // "how fast can this ANSWER change". Collapsing them by bumping SHORT_CACHE
+  // to 300 reddens the 14 existing placeholder-lifetime tests above, which is
+  // the guard for that direction.
 
   const baseInput = {
     kind: 'commit',
@@ -785,7 +800,7 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     // The card really does render the flippable copy — so this is the card
     // whose lifetime matters, not an unrelated shape.
     expect(collectText(lastRenderedNode)).toContain('not yet released');
-    expect(res.headers.get('cache-control')).toBe(SHORT);
+    expect(res.headers.get('cache-control')).toBe(PENDING);
   });
 
   it('partial result is SHORT-cached even though it carries a firstRelease', async () => {
@@ -801,7 +816,7 @@ describe('web-og cache lifetime keys on terminality, not presence (#151)', () =>
     expect(res.status).toBe(200);
     // A galloped answer under a blown soft deadline is not confirmed earliest,
     // so it must stay revalidatable rather than pinned for a day.
-    expect(res.headers.get('cache-control')).toBe(SHORT);
+    expect(res.headers.get('cache-control')).toBe(PENDING);
   });
 
   // Complement. Without it, "short-cache everything" passes the two above and
