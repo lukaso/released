@@ -214,6 +214,15 @@ export async function resolveLookup(args: {
     // alternative is a placeholder pinned in its cache long after the host
     // recovers. Gating the bypass on a fraction of NEG_TTL would only move which
     // unfurls get the permanent placeholder, not stop them.
+    //
+    // What that argument does NOT cover, and what #157 tracks: every bypassed load
+    // RE-STAMPS the marker, so under a steady crawler cadence the marker is almost
+    // never older than NEG_TTL. Human page views on this key do not bypass, so they
+    // hit a warm marker on nearly every request and sit on the "checking..." card
+    // for the whole outage instead of getting a retry window each minute. The
+    // crawler's unthrottled probing starves the humans' back-off of its recovery
+    // window; fixing that means changing the marker's semantics (a `bypassed` flag,
+    // or not re-stamping on a bypassed load), not the bypass condition.
   }
 
   try {

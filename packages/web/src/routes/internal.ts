@@ -249,7 +249,16 @@ async function resolveResult(c: Context, input: LookupInput): Promise<Response> 
   //
   // resolveLookup hands back a partial it computed less than HARD_TTL_PARTIAL ago
   // rather than recomputing it (see `unpinnable`), so this 503 is throttled to one
-  // traversal per 60s per key instead of one per unfurl.
+  // traversal per 60s per key. Do NOT read that as "the cost is bounded": web-og
+  // short-caches the neutral placeholder at max-age=60 and HARD_TTL_PARTIAL is
+  // also 60, so for a URL under active unfurling the two cadences COINCIDE and the
+  // throttle buys close to nothing. On a repo that reliably blows the soft deadline
+  // (GNOME/gimp: large tag set, single-instance relay) the card never converges —
+  // it is the placeholder forever — and upstream load for that key goes from ~0 to
+  // a full traversal per minute for as long as the link is being unfurled. That is
+  // the accepted price of not pinning an unconfirmed answer for 24h; making the
+  // card render the gallop hit while keeping it revalidatable needs web-og to
+  // short-cache it, which is #156 (adjacent to #151).
   if (resolved.status === 'ok') {
     if (!resolved.result.partial) {
       return new Response(JSON.stringify(resolved.result), {
