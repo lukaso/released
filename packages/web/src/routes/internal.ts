@@ -65,6 +65,26 @@ function isServiceBinding(c: Context): boolean {
  *  so say it out loud: the wrangler.toml guard in internal-cache-origin.test.ts
  *  covers the committed file, and this covers the config it cannot see. */
 function cacheOrigin(env: Env, req: Request): string {
+  // A var that is SET but rejected by `originOf` is otherwise indistinguishable
+  // from unset — the `??` chain falls through, `configured` comes back truthy from
+  // the next arm, and the fallback warning below is never reached. That silence
+  // matters most on preview: PUBLIC_BASE_URL exists to stop preview keying on
+  // production, but PROD_HOST is committed in [env.preview.vars] too, so a
+  // dashboard-set PUBLIC_BASE_URL typo is caught by neither the `??` chain nor the
+  // wrangler.toml guard, and preview writes onto the PRODUCTION origin silently.
+  for (const [name, raw] of [
+    ['PUBLIC_BASE_URL', env.PUBLIC_BASE_URL],
+    ['PROD_HOST', env.PROD_HOST],
+  ] as const) {
+    if (raw && !originOf(raw)) {
+      console.warn(
+        `released: ${name} \`${raw}\` is not a routable cache origin — ignored. ` +
+          'Its /internal cache entries key on whatever origin resolves next, which ' +
+          "may be another environment's (#143).",
+      );
+    }
+  }
+
   const configured = originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST);
   if (configured) return configured;
 

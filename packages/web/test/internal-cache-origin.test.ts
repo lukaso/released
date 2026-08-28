@@ -382,6 +382,60 @@ describe('/internal/* makes a non-routable cache origin observable (#143 relapse
     warn.mockRestore();
     expect(calls).toBe(0);
   });
+
+  // The fallback warning above only fires when NEITHER var is set. A var that IS
+  // set but rejected by `originOf` is indistinguishable from unset: the `??` chain
+  // falls straight through to the next arm, `configured` is truthy, and the operator
+  // never learns their override was discarded.
+  //
+  // That is not cosmetic on THIS app, because PUBLIC_BASE_URL exists precisely to
+  // stop preview keying on production: wrangler.toml sets it for [env.preview], and
+  // PROD_HOST is committed in [env.preview.vars] too (it gates analytics, which must
+  // stay prod-only). Mistype PUBLIC_BASE_URL in the dashboard — where the
+  // wrangler.toml guard below cannot see it — and preview writes every /internal
+  // entry onto the PRODUCTION origin, silently, with a perfectly routable origin
+  // hiding the fault.
+  it('warns when PUBLIC_BASE_URL is set but rejected, even though PROD_HOST saves it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    findReleaseMock.mockResolvedValue(fixture('v4.9.2'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+      PROD_HOST,
+      // Single-label host: `originOf` rejects it for the same reason it rejects
+      // `web` — the Cache API declines a key URL on a non-routable hostname.
+      PUBLIC_BASE_URL: 'web-preview',
+    });
+
+    // Observability only: the answer still serves off the PROD_HOST origin.
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.9.2');
+
+    const said = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    warn.mockRestore();
+    expect(said).toContain('PUBLIC_BASE_URL');
+    expect(said).toContain('web-preview');
+  });
+
+  // The mirror case, and NOT a duplicate: it fails if the check only ever looks at
+  // PUBLIC_BASE_URL. Here the override is valid and the committed var is the broken
+  // one, so nothing about the served origin is wrong — only the operator's belief
+  // about which var is doing the work.
+  it('warns when PROD_HOST is set but rejected, even though PUBLIC_BASE_URL saves it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    findReleaseMock.mockResolvedValue(fixture('v4.9.3'));
+
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+      PROD_HOST: 'https:released.example.com',
+      PUBLIC_BASE_URL: PUBLIC_ORIGIN,
+    });
+
+    expect(res.status).toBe(200);
+    const said = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    warn.mockRestore();
+    expect(said).toContain('PROD_HOST');
+  });
 });
 
 // Sharing the slot with the public routes means sharing the POLICY that governs
