@@ -51,11 +51,32 @@ function isServiceBinding(c: Context): boolean {
  *  their public routes key on the origin they actually serve. wrangler.toml sets
  *  PUBLIC_BASE_URL for preview; for `wrangler dev`, put
  *  `PUBLIC_BASE_URL=http://localhost:8787` in packages/web/.dev.vars (README,
- *  "Daily flow", says the same where a dev will actually look). Only the unit
- *  tests reach the request-origin fallback — never the Service Binding, whose
- *  request origin is the non-routable `https://web` that #143 was about. */
+ *  "Daily flow", says the same where a dev will actually look).
+ *
+ *  The fallback is NOT passed through `originOf`, because a request origin has no
+ *  configured spelling to normalise — but it is the one input `originOf` exists to
+ *  reject: a real Service Binding arrives as the non-routable `https://web` that
+ *  #143 was about. Today only the unit tests reach it, and only with a routable
+ *  origin; that holds because BOTH deployed envs set a var. If one ever stops —
+ *  PROD_HOST dropped from [vars], blanked in the dashboard, or a new [env.*]
+ *  deployed that the committed wrangler.toml does not describe — every read here
+ *  misses and every write no-ops, and `neverFatal` renders that as "served, just
+ *  not cached". Silence of exactly that kind is why #143 looked green for weeks,
+ *  so say it out loud: the wrangler.toml guard in internal-cache-origin.test.ts
+ *  covers the committed file, and this covers the config it cannot see. */
 function cacheOrigin(env: Env, req: Request): string {
-  return originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST) ?? new URL(req.url).origin;
+  const configured = originOf(env.PUBLIC_BASE_URL) ?? originOf(env.PROD_HOST);
+  if (configured) return configured;
+
+  const fallback = new URL(req.url).origin;
+  if (!isRoutableOrigin(fallback)) {
+    console.warn(
+      `released: /internal has no routable cache origin (${fallback}) — ` +
+        'the result cache is disabled and every OG unfurl pays a full lookup (#143). ' +
+        'Set PUBLIC_BASE_URL or PROD_HOST for this environment.',
+    );
+  }
+  return fallback;
 }
 
 /** The routability rule `originOf()` applies, exported so the wrangler.toml

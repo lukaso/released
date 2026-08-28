@@ -323,6 +323,67 @@ describe('/internal/* cache origin falls back to the request origin', () => {
   });
 });
 
+// The fallback arm of `cacheOrigin` is the ONE input `originOf` exists to reject:
+// a real Service Binding arrives as `https://web`, the non-routable origin the
+// Cache API silently declines. `originOf` guards the two CONFIGURED arms, but the
+// request-origin fallback is not passed through it — so if PROD_HOST is dropped
+// from [vars], blanked in the dashboard, or a new [env.*] ships without one, every
+// /internal read misses and every write no-ops, `neverFatal` reports "served, just
+// not cached", and #143 is back with no error, no log and no metric. That silence
+// is what made #143 look green for weeks. The wrangler.toml guard further down
+// cannot see a dashboard-set var or an env added outside the committed file, so
+// the relapse has to be observable at RUNTIME too.
+describe('/internal/* makes a non-routable cache origin observable (#143 relapse)', () => {
+  it('warns when it falls back to a request origin the Cache API will decline', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    findReleaseMock.mockResolvedValue(fixture('v4.9.0'));
+
+    // Production's exact shape with PROD_HOST lost: the Service Binding's own
+    // non-routable `https://web` origin is all that is left to key on.
+    const res = await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+    });
+
+    // The warning is observability, never a behaviour change: the answer still serves.
+    expect(res.status).toBe(200);
+    expect(await tagOf(res)).toBe('v4.9.0');
+
+    const said = warn.mock.calls.map((c) => String(c[0])).join('\n');
+    warn.mockRestore();
+    expect(said).toContain('https://web');
+    expect(said).toMatch(/cache/i);
+  });
+
+  it('stays silent when a routable origin IS configured', async () => {
+    // Fails if the warning is unconditional rather than gated on routability —
+    // production would then log this on every single OG unfurl.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    findReleaseMock.mockResolvedValue(fixture('v4.9.1'));
+
+    await app.fetch(svc(`https://web/internal/result/honojs/hono/${SHA}`), ENV);
+
+    const calls = warn.mock.calls.length;
+    warn.mockRestore();
+    expect(calls).toBe(0);
+  });
+
+  it('stays silent when the request-origin fallback is itself routable', async () => {
+    // `wrangler dev` and the unit tests: neither var set, but the request origin is
+    // a real hostname, so the cache works and there is nothing to report. Fails if
+    // the warning keys on "took the fallback arm" instead of "origin is unusable".
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    findReleaseMock.mockResolvedValue(fixture('v4.9.2'));
+
+    await app.fetch(svc(`https://released.example/internal/result/honojs/hono/${SHA}`), {
+      INTERNAL_SECRET,
+    });
+
+    const calls = warn.mock.calls.length;
+    warn.mockRestore();
+    expect(calls).toBe(0);
+  });
+});
+
 // Sharing the slot with the public routes means sharing the POLICY that governs
 // it (resolve.ts): 30-day terminal / 24h pending / 60s partial hard TTLs, a
 // 5-minute freshness window, and a negative back-off. /internal used to invent a
