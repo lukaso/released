@@ -24,10 +24,10 @@
   },
   "devDependencies": {
     "typescript": "^7.0.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "dependencies": {
-    "micromark": "^4.0.1"
+    "micromark": "^4.0.3"
   },
   "engines": {
     "node": ">=20"
